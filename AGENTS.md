@@ -10,4 +10,5 @@ desktop on Wayfire. In planning; nothing to install yet.
   defaults, also installed on Omarchy through Scottland's adapter) → Gooarchy (the distro: installer,
   packages, update channel, machine lifecycle). Put each change in the layer it belongs to.
 - **No silent overrides:** anything that replaces a user's existing setting is reported with its reason.
-- **Testing** never on osanwe (Mike's daily machine). The distro's test base is racter.
+- **Testing** happens only on the designated test machines (see the private environment docs), never on
+  anyone's daily machine.
