@@ -26,6 +26,8 @@ pipewire
 pipewire-alsa
 pipewire-pulse
 wireplumber
+# Realtime scheduling for PipeWire (without it, audio can drop out under load)
+rtkit
 
 # Keys Scottland's shipped config binds: Print (grim, slurp), brightness (brightnessctl).
 # Volume keys use wpctl from wireplumber.

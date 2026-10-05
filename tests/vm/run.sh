@@ -103,6 +103,17 @@ EOF
   echo "$seed_port"
 }
 
+ensure_seed() {
+  # cloud-init asks for its seed at every boot; without it, it re-initializes the instance (new
+  # host keys, no SSH key). Keep serving it on the port the guest was booted with.
+  [[ -f $run/seed-http.pid ]] && kill -0 "$(cat "$run/seed-http.pid")" 2>/dev/null && return 0
+  local seed_port
+  seed_port=$(tr '\0' '\n' <"/proc/$(cat "$run/qemu.pid")/cmdline" | sed -n 's|.*10\.0\.2\.2:\([0-9]*\)/.*|\1|p')
+  setsid python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
+    >"$run/seed-http.log" 2>&1 </dev/null &
+  echo $! >"$run/seed-http.pid"
+}
+
 stop_seed() {
   [[ -f $run/seed-http.pid ]] && kill "$(cat "$run/seed-http.pid")" 2>/dev/null || true
   rm -f "$run/seed-http.pid"
@@ -164,7 +175,6 @@ cmd_boot() {
   sleep 2
   running || die "QEMU didn't start: $(cat "$run/qemu.log")"
   wait_ssh 300
-  stop_seed
   log "guest is up: $(guest 'uname -r; . /etc/os-release; echo $PRETTY_NAME' | tr '\n' ' ')"
   if [[ -n $proxy ]]; then
     # Test-only: let sudo (pacman, makepkg -s) keep the proxy variables.
@@ -187,8 +197,8 @@ cmd_boot() {
 cmd_install() {
   running || die "the guest isn't running (tests/vm/run.sh boot)"
   local out; out=$(artifacts)
-  log "copying the checkout (tracked and untracked files) into the guest"
-  (cd "$repo" && git ls-files -co --exclude-standard -z | tar --null -T - -cf -) |
+  log "copying the checkout (tracked and untracked files, and its history) into the guest"
+  (cd "$repo" && { git ls-files -co --exclude-standard -z; printf '.git\0'; } | tar --null -T - -cf -) |
     guest 'rm -rf ~/gooarchy && mkdir ~/gooarchy && tar -C ~/gooarchy -xf -'
   log "running ./install.sh --yes --autologin (log: $out/install.log)"
   local status=0
@@ -201,6 +211,7 @@ cmd_install() {
 
 cmd_reboot() {
   running || die "the guest isn't running"
+  ensure_seed
   guest 'sudo systemctl reboot' || true
   sleep 10
   wait_ssh 300

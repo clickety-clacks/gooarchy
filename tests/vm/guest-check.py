@@ -22,6 +22,7 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gooarchy-check/out"
 os.makedirs(OUT, exist_ok=True)
 RUNTIME = f"/run/user/{os.getuid()}"
 results = []
+observations = []
 failures = 0
 
 
@@ -35,6 +36,20 @@ def check(name, ok, detail=""):
     failures += 0 if ok else 1
     log(f"{'PASS' if ok else 'FAIL'} {name}{': ' + str(detail) if detail else ''}")
     return ok
+
+
+def observe(name, value):
+    """A fact about the built system recorded for DEFICIT.md; never fails the run."""
+    observations.append({"observation": name, "value": value})
+    log(f"OBSERVED {name}: {value}")
+
+
+def run(*command, timeout=20):
+    try:
+        r = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        return (r.stdout + r.stderr).strip()
+    except Exception as error:
+        return f"({error})"
 
 
 def wait_for(predicate, timeout=30, interval=0.25):
@@ -110,10 +125,22 @@ def key(name, down):
 def press(*names):
     for n in names:
         key(n, True)
-        time.sleep(0.05)
+        time.sleep(0.1)
     for n in reversed(names):
         key(n, False)
-        time.sleep(0.05)
+        time.sleep(0.1)
+
+
+def open_with(keys, app_id, timeout):
+    """Press a shortcut and wait for the app's window; press it once more if nothing came (the
+    retry is recorded in the check's detail)."""
+    press(*keys)
+    view = wait_for(lambda: find(app_id), timeout=timeout)
+    if view:
+        return view, ""
+    press(*keys)
+    view = wait_for(lambda: find(app_id), timeout=timeout)
+    return view, " (needed a second press)" if view else ""
 
 
 def toplevel_bbox(view_id):
@@ -179,23 +206,35 @@ def main():
     check("the wallpaper (swaybg) is drawn", subprocess.run(["pgrep", "-x", "swaybg"]).returncode == 0)
 
     # A terminal: Super+Enter (Scottland's shipped binding, Ghostty).
-    press("KEY_LEFTMETA", "KEY_ENTER")
-    term = wait_for(lambda: find("ghostty"), timeout=30)
-    check("Super+Enter opens a terminal (Ghostty)", term, term and term.get("title"))
+    term, note = open_with(("KEY_LEFTMETA", "KEY_ENTER"), "ghostty", 20)
+    check("Super+Enter opens a terminal (Ghostty)", term, term and f"{term.get('app_id')}{note}")
     time.sleep(2)
     shot("02-terminal.png")
 
     # Strata: Super+Shift+F (flavorings).
-    press("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_F")
-    strata = wait_for(lambda: find("strata"), timeout=40)
-    check("Super+Shift+F opens Strata", strata, strata and strata.get("app_id"))
+    strata, note = open_with(("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_F"), "strata", 20)
+    check("Super+Shift+F opens Strata", strata, strata and f"{strata.get('app_id')}{note}")
     time.sleep(2)
     shot("03-strata.png")
 
     # Chromium: Super+Shift+B (flavorings).
+    # Arch's Chromium opens a placeholder "Additional Terms of Service" dialog (no app-id) on its
+    # first run; accept it with Enter as a user would.
+    def chromium_or_terms():
+        return find("chromium") or next((v for v in views() if "Terms of Service" in (v.get("title") or "")), None)
     press("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_B")
-    chromium = wait_for(lambda: find("chromium"), timeout=60)
-    check("Super+Shift+B opens Chromium", chromium, chromium and chromium.get("app_id"))
+    first = wait_for(chromium_or_terms, timeout=30)
+    note = ""
+    if not first:
+        press("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_B")
+        first, note = wait_for(chromium_or_terms, timeout=30), " (needed a second press)"
+    if first and "Terms of Service" in (first.get("title") or ""):
+        time.sleep(2)
+        shot("04a-chromium-first-run-terms.png")
+        press("KEY_ENTER")
+        note += "; accepted the first-run terms dialog"
+    chromium = wait_for(lambda: find("chromium"), timeout=30)
+    check("Super+Shift+B opens Chromium", chromium, chromium and f"{chromium.get('app_id')}: {chromium.get('title')}{note}")
     time.sleep(5)
     shot("04-chromium.png")
     prefs = os.path.expanduser("~/.config/chromium/Default/Preferences")
@@ -251,17 +290,77 @@ def main():
     check("Claude Code rings the terminal bell", claude == "terminal_bell", claude)
     codex = open(os.path.expanduser("~/.codex/config.toml")).read()
     check("Codex rings the terminal bell", 'notification_method = "bel"' in codex)
-    for unit in ("pipewire", "wireplumber", "pipewire-pulse"):
+    for unit in ("pipewire", "wireplumber", "pipewire-pulse.socket", "rtkit-daemon"):
         active = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True).stdout.strip()
         check(f"{unit} running", active == "active", active)
     sinks = subprocess.run(["wpctl", "status"], capture_output=True, text=True).stdout
     check("PipeWire sees an audio sink", "Sinks:" in sinks and "Audio" in sinks)
+
+    # Keys Scottland's shipped config binds.
+    before = run("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@")
+    press("KEY_VOLUMEUP")
+    time.sleep(1)
+    after = run("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@")
+    check("the volume-up key raises the volume", before != after, f"{before} -> {after}")
+    pictures = os.path.expanduser("~/Pictures")
+    shots_before = set(os.listdir(pictures)) if os.path.isdir(pictures) else set()
+    press("KEY_PRINT")
+    new = wait_for(lambda: set(os.listdir(pictures)) - shots_before, timeout=10)
+    check("Print saves a screenshot in ~/Pictures", new, sorted(new or []))
+    press("KEY_LEFTMETA", "KEY_COMMA")
+    settings = wait_for(lambda: [v for v in views() if "Settings" in (v.get("title") or "")], timeout=20)
+    check("Super+comma opens Scottland Settings", settings, settings and settings[0].get("title"))
+    time.sleep(2)
+    shot("07-scottland-settings.png")
+    press("KEY_ESC")
+
+    # A terminal bell in a window you're not using becomes Scottland attention (what coding agents
+    # ring when they need you).
+    subprocess.Popen(["ghostty", "--gtk-single-instance=false", "--title=bell-check", "-e", "sh", "-c",
+                      "sleep 6; printf '\\a'; sleep 120"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    bell = wait_for(lambda: next((v for v in views() if "bell-check" in (v.get("title") or "")), None), timeout=20)
+    other = find("chromium")
+    if bell and other:
+        ipc("scottland/present", {"window": other["id"]})
+    lit = wait_for(lambda: next((v for v in views() if "bell-check" in (v.get("title") or "") and v.get("attention")),
+                                None), timeout=20)
+    check("a bell in an unfocused terminal lights it up (Scottland attention)", lit, lit and lit.get("title"))
+    time.sleep(1)
+    shot("08-bell-attention.png")
+
+    # What isn't there (DEFICIT.md), recorded from the running system.
+    observe("desktop notifications", run("gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+                                         "--object-path", "/org/freedesktop/Notifications", "--method",
+                                         "org.freedesktop.Notifications.GetServerInformation"))
+    observe("status tray (StatusNotifierWatcher)", "present" if "StatusNotifierWatcher" in run(
+        "busctl", "--user", "list") else "absent")
+    observe("secret service (keyring)", "present" if "org.freedesktop.secrets" in run("busctl", "--user", "list")
+            else "absent")
+    observe("polkit authentication agent", "present" if run("pgrep", "-f", "polkit.*agent") else "absent")
+    observe("lock screen client", run("sh", "-c", "command -v swaylock hyprlock gtklock waylock || echo none"))
+    observe("idle settings (Wayfire idle plugin)", {o: ipc("wayfire/get-config-option", {"option": f"idle/{o}"}).get("value")
+                                                   for o in ("screensaver_timeout", "dpms_timeout")})
+    observe("portal interfaces", sorted(set(
+        w for w in run("busctl", "--user", "introspect", "org.freedesktop.portal.Desktop",
+                       "/org/freedesktop/portal/desktop").split() if w.startswith("org.freedesktop.portal."))))
+    observe("Xwayland", run("sh", "-c", "command -v Xwayland || echo 'not installed (X11-only apps cannot run)'"))
+    observe("network stack", run("sh", "-c", "for s in NetworkManager iwd systemd-networkd; do "
+                                              "printf '%s=%s ' $s $(systemctl is-enabled $s 2>/dev/null || echo absent); done"))
+    observe("packages not installed", [p for p in ("bluez", "upower", "power-profiles-daemon", "cups", "networkmanager",
+                                                   "iwd", "xdg-desktop-portal-wlr", "xorg-xwayland", "linux-firmware",
+                                                   "gnome-keyring")
+                                       if subprocess.run(["pacman", "-Q", p], capture_output=True).returncode])
+    observe("launcher, bar, notification daemon processes",
+            run("sh", "-c", "pgrep -a -x 'waybar|wofi|fuzzel|rofi|mako|dunst|swaync|walker' || echo none"))
+    observe("Wayfire errors in its log", sorted(set(
+        l.split(" - ", 1)[-1] for l in open(os.path.expanduser("~/.local/state/scottland/wayfire.log"), errors="replace")
+        if l.startswith("EE"))))
     return finish()
 
 
 def finish():
     with open(os.path.join(OUT, "results.json"), "w") as f:
-        json.dump({"failures": failures, "results": results}, f, indent=1)
+        json.dump({"failures": failures, "results": results, "observations": observations}, f, indent=1)
     log(f"{len(results) - failures}/{len(results)} checks passed")
     return 1 if failures else 0
 

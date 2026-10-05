@@ -7,7 +7,7 @@ if ((GOOARCHY_AUTOLOGIN)); then
 # /etc/profile.d/gooarchy-session.sh then starts Scottland. Delete this file to turn it off.
 [Service]
 ExecStart=
-ExecStart=-/usr/bin/agetty -o '-- \\\\u' --noreset --noclear --autologin $USER - \${TERM}
+ExecStart=-/usr/bin/agetty --autologin $USER --noreset --noclear - \${TERM}
 CONF
   sudo systemctl daemon-reload
   echo "tty1 logs $USER in at boot ($dropin)."
