@@ -419,7 +419,7 @@ json.dump({
   "image_sha256": "$(cat "$image.sha256-local")",
   "qemu": "$("$qemu" --version | head -1)",
   "graphics": "$gpu", "screen": "$size", "memory_mib": "$memory", "cpus": "$cpus", "disk": "$disk",
-  "proxy_used": $([[ -n $proxy ]] && echo true || echo false),
+  "proxy_used": $([[ -n $proxy ]] && echo True || echo False),
   "test_accommodations": ["cloud-init seed (SSH key, passwordless sudo)", "systemd-time-wait-sync masked",
                           "pacman cache shared from the host, no download timeout", "Wayfire stipc plugin loaded at check time"],
   "guest_packages": "guest-packages.txt",

@@ -299,6 +299,18 @@ def session_state(sid):
     return run("loginctl", "show-session", sid, "-p", "State", "--value")
 
 
+def enter_session(timeout=90):
+    """Use the session running now (after a logout): its environment, and the test's virtual input."""
+    env = wait_for(session_env, timeout=timeout, interval=1)
+    if not env:
+        return False
+    os.environ.update(env)
+    plugins = ipc("wayfire/get-config-option", {"option": "core/plugins"}).get("value", "")
+    if "stipc" not in plugins.split():
+        ipc("wayfire/set-config-options", {"core/plugins": plugins + " stipc"})
+    return wait_for(lambda: "error" not in ipc("stipc/move_cursor", {"x": 10, "y": 10}), timeout=15)
+
+
 def save_session_log(name):
     try:
         shutil.copy(WAYFIRE_LOG, os.path.join(OUT, name))
@@ -552,7 +564,9 @@ def main():
     with open(solar, "w") as f:
         f.write(f"[solar]\nenabled = true\nallow_ip = false\nlocation_set = true\nlatitude = 0\n"
                 f"longitude = {night_longitude():.2f}\n")
-    dark = wait_for(lambda: color_scheme() == "prefer-dark", timeout=40)
+    # The schedule re-reads its location when its settings change; asking GeoClue (absent here)
+    # first can take its D-Bus timeout, so allow two minutes.
+    dark = wait_for(lambda: color_scheme() == "prefer-dark", timeout=120)
     check("with a location where it's night, Sunlight switches to dark", dark, color_scheme())
     shot("11-sunlight-dark.png")
     warning = subprocess.run(["gooarchy-theme", "light"], capture_output=True, text=True).stderr
@@ -613,18 +627,18 @@ def main():
         except OSError:
             pass  # Wayfire quit before the keys were released: the logout worked
         new_pid = wait_for(lambda: (lambda p: p if p and p != old_pid else None)(wayfire_pid()), timeout=60)
-        closed = wait_for(lambda: session_gone(old_sid), timeout=30)
-        watchers = [len(helpers("libexec/scottland-color-scheme")), len(helpers("libexec/scottland-solar-theme"))]
         check(f"logout {cycle}: Super+Shift+Escape ends the session and autologin starts a new one",
               new_pid, f"wayfire {old_pid} -> {new_pid}")
+        closed = wait_for(lambda: session_gone(old_sid), timeout=30)
+        entered = new_pid and enter_session()
+        # The new session starts its own watchers; exactly one set must be running.
+        watchers = wait_for(lambda: (lambda w: w if w == [1, 1] else None)(
+            [len(helpers("libexec/scottland-color-scheme")), len(helpers("libexec/scottland-solar-theme"))]),
+            timeout=60) or [len(helpers("libexec/scottland-color-scheme")), len(helpers("libexec/scottland-solar-theme"))]
         check(f"logout {cycle}: the old login closes (no session left closing, one set of watchers)",
               closed and watchers == [1, 1],
               f"session {old_sid}: {'gone' if closed else session_state(old_sid)}; "
-              f"color-scheme and solar watchers running: {watchers}")
-        if new_pid:
-            env = wait_for(session_env, timeout=60, interval=1)
-            if env:
-                os.environ.update(env)
+              f"color-scheme and solar watchers running: {watchers}; new session entered: {bool(entered)}")
     pid = wayfire_pid()
     sid = session_of(pid)
     save_session_log("wayfire-before-crash.log")

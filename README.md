@@ -24,44 +24,65 @@ What you get:
 |---|---|
 | Desktop | Scottland on Wayfire 0.11, built from Scottland's repository as the `scottland` package |
 | Session | log in on tty1 and Scottland starts (no display manager); `--autologin` skips the password |
+| Keyboard | the layout the system was installed with (Scottland's own default is `us`) |
 | Terminal | Ghostty (Super+Enter) |
 | Browser | Chromium (Super+Shift+B), with "Use system title bar and borders" on |
 | Files | Strata (Super+Shift+F), the folder handler, from its AUR package |
-| Theme | Watercolor Dream, light by default; `gooarchy-theme dark` switches Scottland's halos, Ghostty, GTK apps and the wallpaper (Strata keeps its own theme for now) |
+| Theme | Watercolor Dream, light to start with; `gooarchy-theme dark` switches Scottland's halos, Ghostty, GTK apps and the wallpaper (Strata keeps its own theme for now). Scottland's Sunlight schedule is on by default: once it knows the location (GeoClue, saved coordinates, or an IP lookup to a public service) it switches light/dark with the sun every few seconds, also over a mode you picked. Turn it off in Scottland Settings (Super+comma) > Sunlight to keep one mode |
 | Audio | PipeWire with WirePlumber; the volume keys work, with no on-screen indicator |
-| Defaults | tmux titles read "session on host", mosh adds no title prefix, touchpad tap and tap-and-drag on, Claude Code and Codex ring the terminal bell (Scottland shows it as attention) |
+| Defaults | tmux titles read "session on host", mosh adds no title prefix, touchpad tap and tap-and-drag on, Print saves into your Pictures folder, Claude Code and Codex set to ring the terminal bell (Scottland shows a bell as attention) |
 
 ## Trying it
 
 ### In a VM (recommended)
 
-`tests/vm/run.sh` does the whole thing on any x86_64 Linux machine with KVM and QEMU: it boots the
-official Arch Linux cloud image, runs the installer in it unattended, reboots into Scottland and
-checks the desktop, saving screenshots and logs. Run it on a spare or test machine:
+`tests/vm/run.sh` boots the official Arch Linux cloud image under QEMU/KVM, runs the installer in it
+unattended, reboots into Scottland and checks the desktop, saving screenshots, logs and a manifest
+of the run. Run it on a spare or test machine, not one you're using.
+
+You need an x86_64 Linux machine with KVM (`/dev/kvm`), QEMU with its virtio-gpu modules, python3,
+OpenSSH (`ssh`, `ssh-keygen`), curl, git and tar. The default graphics (virgl) also need a usable GPU
+render node (`/dev/dri/renderD*`); without one, set `GOOARCHY_VM_GPU=software`. On an Arch-based
+machine without QEMU or root, `tests/vm/fetch-qemu.sh` unpacks a private copy first.
 
 ```sh
-tests/vm/run.sh            # boot, install, reboot, check; artifacts in ~/.cache/gooarchy-vm-test/artifacts/
+git clone https://github.com/clickety-clacks/gooarchy.git
+cd gooarchy
+tests/vm/run.sh            # everything; exits 1 if a check failed. Results: ~/.cache/gooarchy-vm-test/artifacts/<time>/
 tests/vm/run.sh start      # boot the installed disk again afterwards (the run stops the VM)
 tests/vm/run.sh ssh        # a shell in the guest
+tests/vm/run.sh stop
 ```
 
-The check drives the session the way a person would, through Wayfire's virtual input, and checks
-each step against Scottland's own model: autologin on tty1 reaches a Scottland session; Super+Enter
-opens Ghostty, Super+Shift+F Strata and Super+Shift+B Chromium; a window dragged to the side scales
-down; a window dragged to the edge becomes a widget on the rail; a bell in an unfocused terminal
-becomes Scottland attention; the volume and Print keys work; Super+Shift+Escape logs out; a crashed
-compositor leaves a shell on tty1 instead of a restart loop; plus the defaults (Chromium's title
-bar, tmux titles, mosh, touchpad, color scheme, folder handler, agents' bell, PipeWire). It
-screenshots each step and records what's missing (notifications, lock, portals, ...) for
-[DEFICIT.md](DEFICIT.md). On 2026-10-04 a fresh run passed all 32 checks with virgl graphics.
+To see the desktop, start the disk with software graphics and VNC, and point a VNC viewer at
+port 5900 on that machine (from elsewhere: `ssh -L 5900:127.0.0.1:5900 <test machine>`):
 
-Without QEMU installed and without root, `tests/vm/fetch-qemu.sh` unpacks a private copy of QEMU
-on an Arch-based machine. The guest's GPU uses virgl through the host's render node by default
-(`GOOARCHY_VM_GPU=software` for llvmpipe). See the top of `tests/vm/run.sh` for all settings.
+```sh
+GOOARCHY_VM_GPU=software GOOARCHY_VM_VNC=1 tests/vm/run.sh start
+```
 
-To look at the desktop yourself, boot the VM with a window instead: install it with
-`tests/vm/run.sh boot && tests/vm/run.sh install`, stop it, then start QEMU on
-`~/.cache/gooarchy-vm-test/run/disk.qcow2` with `-device virtio-vga-gl -display gtk,gl=on`.
+What the run does, in order: an install made to fail at one step and then rerun (it must recover);
+rebuilding Scottland at another commit and back (the installed plugin must follow); a reboot into
+the autologin session; the session check; password logins typed at the consoles; and a check that a
+newer Wayfire can't install over the Scottland built for this one.
+
+The session check drives the desktop the way a person would, through Wayfire's virtual input, and
+checks each step against Scottland's own model and against the screen: Super+Enter opens Ghostty,
+Super+Shift+F Strata and Super+Shift+B Chromium; the window dragged to the side scales down; the
+window dragged to the edge becomes a widget card on the rail; a bell in an unfocused terminal becomes
+Scottland attention; the volume and Print keys work; the system's keyboard layout reaches the
+session; "show in folder" opens Strata; the portal's file chooser opens and cancels; Sunlight behaves
+as described above; two logouts each close the old login completely; a crashed compositor leaves a
+shell on tty1 instead of a restart loop. Checks named "config:" only read configuration (Chromium's
+title bar setting, tmux, touchpad, the agents' bell settings); they don't show the behavior. It also
+records what's missing (notifications, lock, portals, ...) for [DEFICIT.md](DEFICIT.md).
+
+What it doesn't show: it's the Arch cloud image (cloud-init gives it an SSH key and passwordless
+sudo; the harness masks systemd's wait for network time and shares pacman's cache from the host),
+not an archinstall minimal install; nothing is played or recorded through the sound card; and no
+real hardware is involved. The default image is the latest one; to repeat a run exactly, use the
+dated image and checksum from its `manifest.json` (`GOOARCHY_VM_IMAGE_URL`,
+`GOOARCHY_VM_IMAGE_SHA256`). All settings are at the top of `tests/vm/run.sh`.
 
 ### On a machine
 
@@ -76,7 +97,21 @@ cd gooarchy
 
 Then reboot, or log in on tty1. Super+Enter opens a terminal; Super+Shift+Escape logs out. Read
 [DEFICIT.md](DEFICIT.md) first: there is no lock screen, no network or Bluetooth UI, no
-notifications and no bar. [docs/uninstall.md](docs/uninstall.md) explains how to remove it.
+notifications and no bar. [docs/uninstall.md](docs/uninstall.md) explains how to remove it, and
+how to back out of an install that failed partway (running `./install.sh` again retries it).
+
+How logging in works: any ordinary account that logs in on tty1 from a bash or zsh login shell gets
+Scottland. Root on tty1 gets a plain console, and so does every other console and every SSH login.
+Creating `~/.config/gooarchy/no-session` keeps tty1 a console for that account. Other login shells
+(fish, ...) don't read the profile script, so for them tty1 stays a console. With `--autologin`, tty1
+logs your account in at boot without a password; logging out logs straight back in, and after a
+crash tty1 is left at your logged-in shell. Running the installer again without `--autologin` keeps
+an existing autologin setting; [docs/uninstall.md](docs/uninstall.md) says how to remove it.
+
+Keeping it current: `pacman -Syu` updates Arch's packages as usual. When Arch updates Wayfire,
+pacman stops ("wayfire=… required by scottland"), because the Scottland plugin is built for one
+Wayfire version; run `./install.sh` again from an up-to-date checkout and it rebuilds Scottland for
+the new Wayfire.
 
 ## How it is put together
 
@@ -86,13 +121,18 @@ notifications and no bar. [docs/uninstall.md](docs/uninstall.md) explains how to
 | `install/gooarchy-base.packages` | The Arch packages Gooarchy is made of |
 | `install/sources.conf` | Scottland and Strata, pinned to the versions tested together |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on everything) and `gooarchy-flavorings` |
-| `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`) |
+| `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
 | `flavorings/` | The curated defaults: Scottland config fragment and hooks, theme, tmux, mosh, default apps, per-user defaults (`gooarchy-flavorings-apply`). They will move to [gooarchy-flavorings](https://github.com/clickety-clacks/gooarchy-flavorings), which Scottland's Omarchy adapter will also install |
-| `tests/vm/` | The VM test |
+| `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
+| `tests/flavorings-apply-test.py` | The per-user defaults tool in throwaway home directories |
+| `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
-Every file Gooarchy puts on the system comes from a package; the installer only builds and installs
-packages, writes the optional autologin drop-in, and fills in per-user defaults that aren't set. A
-setting you already have is never replaced silently: it is left alone and reported.
+Gooarchy's programs, hooks, themes and default configuration all come from packages. Outside
+packages, the installer writes only configuration state: the optional autologin drop-in (a replaced
+one is reported), and per-user defaults in your home directory that `gooarchy-flavorings-apply`
+fills in once each, only where nothing is set. A setting you already have is left alone and
+reported, a symlinked config file is not touched, and files it does change keep their
+permissions. Build records and logs go to `~/.local/state/gooarchy`.
 
 ## Plan
 
