@@ -362,7 +362,10 @@ def main():
     # Last, because they end the session: logging out (Super+Shift+Escape) ends it and autologin
     # starts a new one; a crashed compositor leaves a shell on tty1 instead of a restart loop.
     old = run("pgrep", "-xo", "wayfire")
-    press("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_ESC")
+    try:
+        press("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_ESC")
+    except OSError:
+        pass  # Wayfire quit before the keys were released: the logout worked
     new = wait_for(lambda: (lambda p: p if p and p != old else None)(run("pgrep", "-xo", "wayfire")), timeout=40)
     check("Super+Shift+Escape logs out, and autologin starts a new session", new, f"wayfire {old} -> {new}")
     if new:
