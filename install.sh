@@ -11,17 +11,18 @@
 #                              lock screen yet, so autologin leaves the machine open to anyone.
 #
 # The steps run in order from install/: preflight, packaging, user, login, post-install. Each
-# step's output goes to the terminal and to ~/.local/state/gooarchy/install.log.
+# step's output goes to the terminal and to this attempt's log (~/.local/state/gooarchy/install.log
+# points at the latest). If a step fails, running ./install.sh again retries; packages already
+# installed and the Arch upgrade are not rolled back (docs/uninstall.md).
 set -eEo pipefail
 
 GOOARCHY_PATH=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 GOOARCHY_INSTALL=$GOOARCHY_PATH/install
 GOOARCHY_STATE=${XDG_STATE_HOME:-$HOME/.local/state}/gooarchy
-GOOARCHY_INSTALL_LOG_FILE=$GOOARCHY_STATE/install.log
 GOOARCHY_BUILD=${XDG_CACHE_HOME:-$HOME/.cache}/gooarchy/build
 GOOARCHY_YES=0
 GOOARCHY_AUTOLOGIN=0
-export GOOARCHY_PATH GOOARCHY_INSTALL GOOARCHY_STATE GOOARCHY_INSTALL_LOG_FILE GOOARCHY_BUILD
+export GOOARCHY_PATH GOOARCHY_INSTALL GOOARCHY_STATE GOOARCHY_BUILD
 
 for arg in "$@"; do
   case $arg in

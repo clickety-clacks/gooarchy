@@ -2,14 +2,11 @@
 source "$GOOARCHY_INSTALL/helpers/packages.sh"
 source "$GOOARCHY_INSTALL/sources.conf"
 src=$GOOARCHY_BUILD/strata-bin
-if [[ -d $src/.git ]]; then
-  git -C "$src" fetch --quiet origin
-else
-  rm -rf "$src"
-  git clone --quiet "$GOOARCHY_STRATA_AUR" "$src"
-fi
-git -C "$src" -c advice.detachedHead=false checkout --quiet --force "$GOOARCHY_STRATA_REF"
-git -C "$src" clean -qfdx
-echo "strata-bin $(sed -n 's/^pkgver=//p' "$src/PKGBUILD") (AUR $(git -C "$src" rev-parse --short HEAD))"
+checkout_source "$GOOARCHY_STRATA_AUR" "$GOOARCHY_STRATA_REF" "$src"
+rev=$(git -C "$src" rev-parse HEAD)
+echo "strata-bin $(sed -n 's/^pkgver=//p' "$src/PKGBUILD") (AUR ${rev:0:12})"
 build_package "$src"
-install_built --asdeps "$src"/strata-bin-*.pkg.tar.zst
+# Exactly strata-bin: makepkg may also produce strata-bin-debug, which nothing needs.
+mapfile -t files < <(built_files "$src" strata-bin)
+install_built --asdeps "${files[@]}"
+record_build strata-bin "$GOOARCHY_STRATA_AUR" "$rev" "$(pacman -Q strata-bin | awk '{print $2}')"

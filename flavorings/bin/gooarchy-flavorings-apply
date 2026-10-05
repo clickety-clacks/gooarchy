@@ -8,13 +8,23 @@
 Each default is applied at most once per user (a marker in ~/.local/state/gooarchy/flavorings
 remembers it), so changing it back later sticks. A default only fills a setting that isn't set:
 a setting the user already has is left alone and reported (also in
-~/.local/state/gooarchy/reports.log). Nothing is replaced silently.
+~/.local/state/gooarchy/reports.log).
+
+Files are changed carefully: an existing file keeps its permissions and owner (a new file holding
+an app's private settings is created readable by the user only); the new contents are written to
+a private temporary file and moved into place in one step, so an interrupted run leaves the old
+file intact; a file that is a symlink (managed elsewhere, e.g. by a dotfiles tool) is left alone
+and reported; settings of an app that is running are applied at a later login instead; and two
+runs at once wait for each other.
 """
+import fcntl
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -24,6 +34,10 @@ STATE = Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local/state") / "gooar
 MARKERS = STATE / "flavorings"
 SHARE = Path("/usr/share/gooarchy-flavorings")
 SESSION = "--session" in sys.argv
+
+
+class Declined(Exception):
+    """A default that can't be applied safely; reported, and not retried."""
 
 
 def say(message):
@@ -38,6 +52,52 @@ def report(message):
     STATE.mkdir(parents=True, exist_ok=True)
     with open(STATE / "reports.log", "a") as f:
         f.write(line + "\n")
+
+
+def write_file(path, text, new_mode=0o600):
+    """Replace (or create) PATH with TEXT in one step, keeping an existing file's mode and owner."""
+    path = Path(path)
+    if path.is_symlink():
+        raise Declined(f"{path} is a symlink (managed elsewhere?)")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old = path.stat() if path.exists() else None
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".gooarchy")  # mode 0600
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        if old:
+            try:
+                os.chown(tmp, old.st_uid, old.st_gid)
+            except PermissionError:
+                pass
+            os.chmod(tmp, stat.S_IMODE(old.st_mode))
+        else:
+            os.chmod(tmp, new_mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+    dirfd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dirfd)
+    finally:
+        os.close(dirfd)
+
+
+def read_text(path):
+    path = Path(path)
+    if path.is_symlink():
+        raise Declined(f"{path} is a symlink (managed elsewhere?)")
+    return path.read_text() if path.exists() else None
+
+
+def running(name):
+    return subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", name], capture_output=True).returncode == 0
 
 
 def session_bus_env():
@@ -57,32 +117,47 @@ def gsettings(*args):
     return subprocess.run(command, env=env, capture_output=True, text=True, check=True).stdout.strip()
 
 
+def sunlight_enabled():
+    """Scottland's Sunlight schedule (on unless turned off in Scottland Settings)."""
+    solar = CONFIG / "scottland" / "solar.ini"
+    text = solar.read_text() if solar.exists() else ""
+    match = re.search(r"^\s*enabled\s*=\s*(\S+)", text, re.M)
+    return (match.group(1).lower() if match else "true") in ("true", "yes", "1", "on")
+
+
 def folders():
-    """The standard folders (Pictures is where Print saves screenshots)."""
+    """The standard folders (Print saves screenshots in Pictures, wherever it is)."""
     subprocess.run(["xdg-user-dirs-update"], check=True)
     say("Created the standard folders (Desktop, Documents, Downloads, Pictures, ...).")
     return True
 
 
 def color_scheme():
-    """Watercolor Dream light, unless the user already chose light or dark."""
-    current = gsettings("get", "org.gnome.desktop.interface", "color-scheme").strip("'")
-    if current != "default":
-        report(f"kept your color scheme ({current}); gooarchy-theme light|dark switches it.")
-        return True
-    gsettings("set", "org.gnome.desktop.interface", "color-scheme", "prefer-light")
-    say("Set the desktop to Watercolor Dream light (gooarchy-theme dark switches).")
+    """Watercolor Dream light, unless the user already set a color scheme (any value)."""
+    # dconf read prints the user's own value, or nothing when the key was never set.
+    explicit = subprocess.run(["dconf", "read", "/org/gnome/desktop/interface/color-scheme"],
+                              capture_output=True, text=True).stdout.strip()
+    if explicit:
+        report(f"kept your color scheme ({explicit.strip(chr(39))}); gooarchy-theme light|dark switches it.")
+    else:
+        gsettings("set", "org.gnome.desktop.interface", "color-scheme", "prefer-light")
+        say("Set the desktop to Watercolor Dream light (gooarchy-theme dark switches).")
+    if sunlight_enabled():
+        say("Scottland's Sunlight schedule is on: it switches between light and dark with the sun once it "
+            "knows where you are (GeoClue, saved coordinates, or an IP lookup). Turn it off in Scottland "
+            "Settings > Sunlight to keep one mode.")
     return True
 
 
 def chromium():
     """Chromium draws no frame of its own: "Use system title bar and borders" is on."""
     prefs = CONFIG / "chromium" / "Default" / "Preferences"
-    if subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "chromium"], capture_output=True).returncode == 0:
+    if running("chromium"):
         say("Chromium is running; its title bar setting will be applied at a later login.")
         return False
-    if prefs.exists():
-        data = json.loads(prefs.read_text() or "{}")
+    text = read_text(prefs)
+    if text is not None:
+        data = json.loads(text or "{}")
         browser = data.setdefault("browser", {})
         if "custom_chrome_frame" in browser:
             if browser["custom_chrome_frame"]:
@@ -92,10 +167,7 @@ def chromium():
         browser["custom_chrome_frame"] = False
     else:
         data = {"browser": {"custom_chrome_frame": False}}
-        prefs.parent.mkdir(parents=True, exist_ok=True)
-    tmp = prefs.with_name(prefs.name + ".gooarchy")
-    tmp.write_text(json.dumps(data))
-    tmp.replace(prefs)
+    write_file(prefs, json.dumps(data))
     say("Chromium: \"Use system title bar and borders\" is on.")
     return True
 
@@ -105,21 +177,25 @@ def ghostty():
     themes = SHARE / "themes"
     line = f"theme = light:{themes}/watercolor-dream-light/ghostty,dark:{themes}/watercolor-dream-dark/ghostty"
     config = CONFIG / "ghostty" / "config"
-    if config.exists():
-        if not re.search(r"^\s*theme\s*=", config.read_text(), re.M):
+    text = read_text(config)
+    if text is not None:
+        if not re.search(r"^\s*theme\s*=", text, re.M):
             report(f"kept your Ghostty config as it is; for Gooarchy's theme, add: {line}")
         return True
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text("# Gooarchy flavorings: the Watercolor Dream theme, light or dark with the desktop.\n"
-                      f"{line}\n")
+    write_file(config, "# Gooarchy flavorings: the Watercolor Dream theme, light or dark with the desktop.\n"
+                       f"{line}\n", new_mode=0o644)
     say("Ghostty: Watercolor Dream theme.")
     return True
 
 
 def claude_code():
     """Claude Code rings the terminal bell when it needs the user (Scottland shows it as attention)."""
+    if running("claude"):
+        say("Claude Code is running; its bell setting will be applied at a later login.")
+        return False
     config = HOME / ".claude.json"
-    data = json.loads(config.read_text() or "{}") if config.exists() else {}
+    text = read_text(config)
+    data = json.loads(text or "{}") if text is not None else {}
     current = data.get("preferredNotifChannel")
     if current is not None:
         if current != "terminal_bell":
@@ -127,24 +203,24 @@ def claude_code():
                    "terminal_bell, which Scottland turns into window attention.")
         return True
     data["preferredNotifChannel"] = "terminal_bell"
-    tmp = config.with_name(config.name + ".gooarchy")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    tmp.replace(config)
+    write_file(config, json.dumps(data, indent=2) + "\n")
     say("Claude Code: rings the terminal bell when it needs you.")
     return True
 
 
 def codex():
     """Codex rings the terminal bell when it needs the user."""
+    if running("codex"):
+        say("Codex is running; its bell setting will be applied at a later login.")
+        return False
     config = HOME / ".codex" / "config.toml"
     wanted = {"notifications": "true", "notification_method": '"bel"'}
-    if not config.exists():
-        config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text("# Gooarchy flavorings: ring the terminal bell when Codex needs you.\n[tui]\n" +
-                          "".join(f"{k} = {v}\n" for k, v in wanted.items()))
+    text = read_text(config)
+    if text is None:
+        write_file(config, "# Gooarchy flavorings: ring the terminal bell when Codex needs you.\n[tui]\n" +
+                   "".join(f"{k} = {v}\n" for k, v in wanted.items()))
         say("Codex: rings the terminal bell when it needs you.")
         return True
-    text = config.read_text()
     tui = tomllib.loads(text).get("tui", {})
     method = tui.get("notification_method")
     if method is not None:
@@ -163,7 +239,7 @@ def codex():
         return True
     else:
         text = text.rstrip("\n") + "\n\n# Gooarchy flavorings: ring the terminal bell when Codex needs you.\n[tui]\n" + lines
-    config.write_text(text)
+    write_file(config, text)
     say("Codex: rings the terminal bell when it needs you.")
     return True
 
@@ -189,16 +265,21 @@ def main():
         for name, _ in STEPS:
             print(f"{name}: {'applied' if (MARKERS / name).exists() else 'not yet'}")
         return 0
-    failed = False
-    for name, step in STEPS:
-        if (MARKERS / name).exists():
-            continue
-        try:
-            if step():
+    with open(STATE / "flavorings.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # one run at a time (installer and session autostart)
+        failed = False
+        for name, step in STEPS:
+            if (MARKERS / name).exists():
+                continue
+            try:
+                if step():
+                    (MARKERS / name).touch()
+            except Declined as why:
+                report(f"left the {name} default unapplied: {why}.")
                 (MARKERS / name).touch()
-        except Exception as error:  # one default failing shouldn't stop the others
-            print(f"Gooarchy: couldn't apply the {name} default: {error}", file=sys.stderr)
-            failed = True
+            except Exception as error:  # one default failing shouldn't stop the others
+                print(f"Gooarchy: couldn't apply the {name} default: {error}", file=sys.stderr)
+                failed = True
     return 1 if failed and not SESSION else 0
 
 

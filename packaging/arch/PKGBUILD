@@ -1,13 +1,20 @@
 # Gooarchy's own packages, built from this repository. install/packaging/gooarchy.sh builds them
 # during install; by hand: cd packaging/arch && makepkg.
-#   gooarchy             the distro: the tty1 session start, and dependencies on everything
-#                        Gooarchy is made of (removing it takes them along)
+#   gooarchy             the distro: the tty1 session start and its helpers, and dependencies on
+#                        everything Gooarchy is made of (removing it takes them along)
 #   gooarchy-flavorings  the curated defaults (flavorings/), which will move to their own
 #                        repository (gooarchy-flavorings)
+#
+# This is a local build of a checkout, not a self-contained source package: package() reads the
+# checkout ($GOOARCHY_PATH, or two levels up) directly, so makepkg --source would not capture it.
+# /usr/share/gooarchy/build-info records exactly what went in (checkout revision, uncommitted
+# changes, Scottland revision of the themes), and a checkout with uncommitted changes gets
+# ".dirty" in its version. A source package that builds anywhere comes with the package repository.
 pkgbase=gooarchy
 pkgname=(gooarchy gooarchy-flavorings)
 _repo=${GOOARCHY_PATH:-$startdir/../..}
-pkgver=0.0.1.r$(git -C "$_repo" rev-list --count HEAD 2>/dev/null || echo 0).g$(git -C "$_repo" rev-parse --short HEAD 2>/dev/null || echo none)
+_dirty=$(git -C "$_repo" status --porcelain 2>/dev/null | grep -q . && echo .dirty || true)
+pkgver=0.0.1.r$(git -C "$_repo" rev-list --count HEAD 2>/dev/null || echo 0).g$(git -C "$_repo" rev-parse --short HEAD 2>/dev/null || echo none)$_dirty
 pkgrel=1
 pkgdesc="Gooarchy, a desktop Linux distribution built around Scottland"
 arch=('any')
@@ -34,11 +41,20 @@ package_gooarchy() {
   depends=('scottland' 'strata-bin' 'gooarchy-flavorings'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
   install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
+  install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
+  install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
+gooarchy $pkgver
+checkout $(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo unknown)${_dirty:+ with uncommitted changes}
+scottland-themes $(git -C "$srcdir/scottland" rev-parse HEAD) from $GOOARCHY_SCOTTLAND_REPO
+built $(date -u +%Y-%m-%dT%H:%M:%SZ)
+INFO
 }
 
 package_gooarchy-flavorings() {
   pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
-  depends=('scottland' 'python' 'glib2' 'swaybg' 'webp-pixbuf-loader' 'xdg-user-dirs')
+  depends=('scottland' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
+           'xdg-user-dirs' 'grim' 'slurp')
   optdepends=('ghostty: themed terminal' 'chromium: browser (system title bar)'
               'strata-bin: file manager' 'tmux: titled terminal sessions')
   backup=('etc/tmux.conf')

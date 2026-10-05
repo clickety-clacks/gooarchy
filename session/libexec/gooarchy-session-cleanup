@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Stop what Scottland's session started that outlives the compositor, for this login only.
+
+Run by /etc/profile.d/gooarchy-session.sh after start-scottland returns. Scottland's autostart
+hooks start watchers (scottland-color-scheme, scottland-solar-theme, ...) that keep running
+without Wayfire, which holds the login session open ("closing") and piles up a set per login.
+This stops processes in this login's own session scope whose command runs Scottland's or
+Gooarchy's session helpers, together with their children. Nothing else is touched: not tmux or
+other programs the user started, not processes of other logins (SSH, other consoles), not the
+user's systemd services.
+"""
+import os
+import signal
+import time
+
+HELPERS = ("/usr/lib/scottland/", "/usr/lib/gooarchy-flavorings/")
+
+
+def scope_of(pid):
+    try:
+        with open(f"/proc/{pid}/cgroup") as f:
+            for line in f:
+                if line.startswith("0::"):
+                    return line[3:].strip()
+    except OSError:
+        pass
+    return None
+
+
+def cmdline(pid):
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return f.read().replace(b"\0", b" ").decode(errors="replace")
+    except OSError:
+        return ""
+
+
+def parent(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def main():
+    mine = scope_of(os.getpid())
+    if not mine or not mine.rsplit("/", 1)[-1].startswith("session-"):
+        return  # not in a login session scope: nothing that is safely ours
+    pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+    in_scope = {p for p in pids if scope_of(p) == mine}
+    roots = {p for p in in_scope if any(h in cmdline(p) for h in HELPERS)}
+    children = {}
+    for p in in_scope:
+        children.setdefault(parent(p), []).append(p)
+    doomed, todo = set(), list(roots)
+    while todo:
+        p = todo.pop()
+        if p in doomed or p == os.getpid():
+            continue
+        doomed.add(p)
+        todo.extend(children.get(p, []))
+    for p in doomed:
+        try:
+            os.kill(p, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and any(os.path.exists(f"/proc/{p}") for p in doomed):
+        time.sleep(0.1)
+    for p in doomed:
+        try:
+            os.kill(p, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+if __name__ == "__main__":
+    main()

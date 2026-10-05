@@ -3,23 +3,43 @@
 # in it unattended, reboot into the session and check the desktop (tests/vm/guest-check.py).
 # Run it on a test machine, never on a machine someone is using.
 #
-#   tests/vm/run.sh [all]   everything below in order, on a fresh disk (the default)
+# What it is and isn't: an unattended test on the official Arch cloud image (cloud-init gives it an
+# SSH key; see "Test-only" below for the accommodations the guest gets). It is not an archinstall
+# minimal install, and real hardware is a different matter.
+#
+#   tests/vm/run.sh [all]   everything below in order, on a fresh disk (the default); exits 1 if
+#                           any check failed. Results: GOOARCHY_VM_DIR/artifacts/<time>/
 #   tests/vm/run.sh boot    fresh disk from the cloud image, boot, wait for SSH
-#   tests/vm/run.sh install copy this checkout in and run ./install.sh --yes --autologin
-#   tests/vm/run.sh reboot  reboot the guest and wait for SSH
+#   tests/vm/run.sh install copy this checkout in; ./install.sh made to fail at one step first, then
+#                           run again (it must recover); with --autologin
+#   tests/vm/run.sh rebuild-check   rebuild Scottland at another commit with the same upstream
+#                           version and back, plus an identical rebuild; the installed plugin must
+#                           follow each time
+#   tests/vm/run.sh reboot  reboot the guest and wait for the new boot
+#   tests/vm/run.sh check   check the running session (guest-check.py); screenshots and logs
+#   tests/vm/run.sh login-check     password logins typed at the consoles (login-check.py)
+#   tests/vm/run.sh upgrade-guard   a newer Wayfire must not install over the Scottland built for this one
 #   tests/vm/run.sh start   boot the existing disk again (after stop)
-#   tests/vm/run.sh check   check the running session; screenshots and logs into the artifacts
 #   tests/vm/run.sh ssh [CMD]   a shell (or CMD) in the guest
 #   tests/vm/run.sh stop    power the guest off
 #
+# Looking at the desktop: GOOARCHY_VM_GPU=software GOOARCHY_VM_VNC=1 tests/vm/run.sh start, then
+# point a VNC viewer at 127.0.0.1:5900 on this machine (e.g. through ssh -L 5900:127.0.0.1:5900).
+# The seed server and the guest's network stay as the test uses them.
+#
 # Configuration (environment):
 #   GOOARCHY_VM_DIR         work directory (default ~/.cache/gooarchy-vm-test): image, disk, logs
-#   GOOARCHY_VM_IMAGE_URL   Arch cloud image (default: the latest official one)
+#   GOOARCHY_VM_IMAGE_URL   Arch cloud image (default: the latest official one; to repeat a run,
+#                           use the dated image named in its manifest.json)
+#   GOOARCHY_VM_IMAGE_SHA256  expected checksum of that image (checked on every run when set)
 #   GOOARCHY_VM_QEMU_BIN    directory holding qemu-system-x86_64 and qemu-img (default: the copy
 #                           tests/vm/fetch-qemu.sh unpacked, else PATH)
 #   GOOARCHY_VM_GPU         virgl (default: guest GL through the host GPU) or software (llvmpipe)
 #   GOOARCHY_VM_RENDERNODE  host render node for virgl (default: the first /dev/dri/renderD*)
 #   GOOARCHY_VM_SIZE        guest screen size (default 1920x1080)
+#   GOOARCHY_VM_VNC         1: show the screen over VNC on 127.0.0.1:5900 (software graphics only)
+#   GOOARCHY_VM_REBUILD_REF Scottland commit for rebuild-check (default: a later commit whose
+#                           PKGBUILD has the same version as the pinned one)
 #   GOOARCHY_VM_MEMORY, GOOARCHY_VM_CPUS, GOOARCHY_VM_DISK   (default 6144 MiB, 4, 40G)
 #   The guest's pacman cache is kept in GOOARCHY_VM_DIR/pkgcache (shared into the guest over 9p).
 #   GOOARCHY_VM_SSH_PORT    host port forwarded to the guest's SSH (default 2222, bound to loopback)
@@ -27,6 +47,8 @@
 #                           socks5h://127.0.0.1:1080): used for the image download and, with
 #                           127.0.0.1 rewritten to the host as the guest sees it, inside the guest.
 #                           Test-only; Gooarchy's installer knows nothing about it.
+# Host needs: x86_64 Linux with KVM (/dev/kvm), QEMU (or tests/vm/fetch-qemu.sh), with virgl a
+# usable render node, plus python3, ssh/ssh-keygen, curl, git, tar.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
@@ -49,6 +71,20 @@ qemu_img=${qemu_bin:+$qemu_bin/}qemu-img
 
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die() { log "FAILED: $*"; exit 1; }
+
+# A check made by the harness itself (results land in harness-checks.json next to guest-check's).
+hcheck() {
+  local name=$1 ok=$2 detail=${3:-}
+  python3 - "$(artifacts)/harness-checks.json" "$name" "$ok" "$detail" <<'EOF'
+import json, os, sys
+path, name, ok, detail = sys.argv[1:]
+data = json.load(open(path)) if os.path.exists(path) else {"failures": 0, "results": []}
+data["results"].append({"check": name, "ok": ok == "1", "detail": detail})
+data["failures"] = sum(not r["ok"] for r in data["results"])
+json.dump(data, open(path, "w"), indent=1)
+EOF
+  if [[ $ok == 1 ]]; then log "PASS $name${detail:+: $detail}"; else log "FAIL $name${detail:+: $detail}"; fi
+}
 
 artifacts() {
   # One directory per run of the test, named when first needed.
@@ -81,6 +117,12 @@ fetch_image() {
     (cd "$dir/images" && sed "s/ .*\$/  $name.part/" "$name.SHA256" | sha256sum -c --quiet) ||
       die "image checksum mismatch"
     mv "$dir/images/$name.part" "$dir/images/$name"
+    sha256sum "$dir/images/$name" | cut -d' ' -f1 >"$dir/images/$name.sha256-local"
+  fi
+  [[ -f $dir/images/$name.sha256-local ]] || sha256sum "$dir/images/$name" | cut -d' ' -f1 >"$dir/images/$name.sha256-local"
+  if [[ -n ${GOOARCHY_VM_IMAGE_SHA256:-} ]]; then
+    [[ $(sha256sum "$dir/images/$name" | cut -d' ' -f1) == "$GOOARCHY_VM_IMAGE_SHA256" ]] ||
+      die "$dir/images/$name doesn't match GOOARCHY_VM_IMAGE_SHA256"
   fi
   echo "$dir/images/$name"
 }
@@ -174,8 +216,12 @@ start_qemu() {
       local node=${GOOARCHY_VM_RENDERNODE:-$(ls /dev/dri/renderD* 2>/dev/null | head -1)}
       [[ -n $node ]] || die "no render node for virgl; set GOOARCHY_VM_GPU=software"
       display=(-device "virtio-vga-gl,xres=$xres,yres=$yres" -display "egl-headless,rendernode=$node")
+      [[ ${GOOARCHY_VM_VNC:-} == 1 ]] && die "GOOARCHY_VM_VNC needs GOOARCHY_VM_GPU=software"
       ;;
-    software) display=(-device "virtio-vga,xres=$xres,yres=$yres" -display none) ;;
+    software)
+      display=(-device "virtio-vga,xres=$xres,yres=$yres" -display none)
+      [[ ${GOOARCHY_VM_VNC:-} == 1 ]] && display+=(-vnc 127.0.0.1:0)
+      ;;
     *) die "GOOARCHY_VM_GPU must be virgl or software" ;;
   esac
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
@@ -218,27 +264,117 @@ prepare_guest() {
   guest "sudo $(guest_proxy_env) pacman -Sy --noconfirm >/dev/null"
 }
 
-cmd_install() {
-  running || die "the guest isn't running (tests/vm/run.sh boot)"
-  local out; out=$(artifacts)
+copy_checkout() {
   log "copying the checkout (tracked and untracked files, and its history) into the guest"
   (cd "$repo" && { git ls-files -co --exclude-standard -z; printf '.git\0'; } | tar --null -T - -cf -) |
     guest 'rm -rf ~/gooarchy && mkdir ~/gooarchy && tar -C ~/gooarchy -xf -'
-  log "running ./install.sh --yes --autologin (log: $out/install.log)"
+}
+
+cmd_install() {
+  running || die "the guest isn't running (tests/vm/run.sh boot)"
+  local out; out=$(artifacts)
+  copy_checkout
   local status=0
+  if [[ ${GOOARCHY_VM_RETRY_TEST:-1} == 1 ]]; then
+    # A failed attempt (made to fail at the Strata step), then a retry that must complete.
+    log "running ./install.sh, made to fail at packaging/strata.sh (log: $out/install-failed-attempt.log)"
+    guest "cd ~/gooarchy && GOOARCHY_TEST_FAIL_AT=packaging/strata.sh $(guest_proxy_env) ./install.sh --yes --autologin" \
+      >"$out/install-failed-attempt.log" 2>&1 || status=$?
+    local last; last=$(guest 'cat ~/.local/state/gooarchy/last-step 2>/dev/null')
+    local ok=0
+    [[ $status != 0 && $last == packaging/scottland.sh ]] &&
+      grep -q 'last completed: packaging/scottland.sh' "$out/install-failed-attempt.log" && ok=1
+    hcheck "an install that fails at a step stops there and says what completed" "$ok" \
+      "exit $status, last completed step: $last"
+    status=0
+  fi
+  log "running ./install.sh --yes --autologin (log: $out/install.log)"
   guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes --autologin" >"$out/install.log" 2>&1 || status=$?
-  tail -n 25 "$out/install.log" >&2
-  guest 'cat ~/.local/state/gooarchy/install.log 2>/dev/null' >"$out/install-steps.log" || true
+  tail -n 30 "$out/install.log" >&2
+  guest 'tar -C ~/.local/state/gooarchy -cf - logs builds.tsv reports.log 2>/dev/null' | tar -C "$out" -xf - 2>/dev/null || true
+  hcheck "./install.sh completes (after the failed attempt, when the retry test runs)" "$(( status == 0 ))" "exit $status"
+  if [[ ${GOOARCHY_VM_RETRY_TEST:-1} == 1 ]]; then
+    local attempts; attempts=$(guest 'ls ~/.local/state/gooarchy/logs | wc -l')
+    local manifests; manifests=$(guest 'ls ~/.local/state/gooarchy/logs/*/packages-{before,after}.txt 2>/dev/null | wc -l')
+    hcheck "each attempt keeps its own log and package manifests" "$(( attempts >= 2 && manifests >= 4 ))" \
+      "$attempts attempt logs, $manifests manifests"
+  fi
   (( status == 0 )) || die "install.sh exited with $status"
   log "install finished"
 }
 
+plugin_state() {
+  guest 'printf "%s %s\n" "$(pacman -Q scottland | cut -d" " -f2)" \
+           "$(sha256sum "$(pacman -Qlq scottland | grep "/libscottland.so$")" | cut -c1-16)"'
+}
+
+cmd_rebuild_check() {
+  # Scottland's PKGBUILD has a fixed version; a rebuild at another commit (or for another Wayfire)
+  # must still replace the installed plugin, and the package version must say what was built.
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  local pinned; pinned=$(sed -n 's/.*GOOARCHY_SCOTTLAND_REF:-\([0-9a-f]*\)}.*/\1/p' "$repo/install/sources.conf")
+  local other=${GOOARCHY_VM_REBUILD_REF:-f3ba4c56d9d84e906e9023cce9f2fa786c6bce45}
+  local a b c d status=0
+  a=$(plugin_state)
+  guest "cd ~/gooarchy && GOOARCHY_SCOTTLAND_REF=$other $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-b.log" 2>&1 || status=$?
+  b=$(plugin_state)
+  local ok=0
+  [[ $status == 0 && ${a#* } != "${b#* }" && $b == *g${other:0:7}* ]] && ok=1
+  hcheck "rebuilding Scottland at another commit (same upstream version) replaces the installed plugin" "$ok" \
+    "A: $a; B: $b"
+  status=0
+  guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-a.log" 2>&1 || status=$?
+  c=$(plugin_state)
+  ok=0
+  [[ $status == 0 && $c == *g${pinned:0:7}* && ${c#* } != "${b#* }" ]] && ok=1
+  hcheck "going back to the pinned commit replaces the plugin again" "$ok" "now: $c"
+  status=0
+  guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-same.log" 2>&1 || status=$?
+  d=$(plugin_state)
+  local reinstalled; reinstalled=$(guest 'grep -c "reinstalled scottland" /var/log/pacman.log')
+  ok=0
+  [[ $status == 0 && $reinstalled -gt 0 && $d == *g${pinned:0:7}* ]] && ok=1
+  hcheck "an identical rebuild is installed too (not skipped as already installed)" "$ok" \
+    "pacman.log 'reinstalled scottland': $reinstalled; now: $d"
+  guest 'pacman -Qi scottland | grep -E "^(Version|Depends On)"' | tee "$out/scottland-package.txt" >&2
+  hcheck "the scottland package depends on the exact Wayfire it was built for" \
+    "$(grep -q 'wayfire=[0-9]' "$out/scottland-package.txt" && echo 1 || echo 0)"
+}
+
+cmd_upgrade_guard() {
+  # A Wayfire newer than the one Scottland was built for must not install over it silently.
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  guest 'set -e; d=$(mktemp -d); cd "$d"; v=$(pacman -Q wayfire | cut -d" " -f2); v=${v%-*}
+         cat >PKGBUILD <<EOF
+pkgname=wayfire
+pkgver=$v.99
+pkgrel=1
+arch=(any)
+package() { :; }
+EOF
+         makepkg -f >/dev/null 2>&1; ls "$d"/wayfire-*.pkg.tar.* >~/fake-wayfire-path'
+  local result status=0
+  result=$(guest 'sudo pacman -U --noconfirm "$(cat ~/fake-wayfire-path)" 2>&1') || status=$?
+  echo "$result" >"$out/upgrade-guard.log"
+  local ok=0
+  [[ $status != 0 ]] && grep -q 'required by scottland' <<<"$result" && ok=1
+  hcheck "pacman refuses a newer Wayfire under the Scottland built for this one" "$ok" \
+    "$(grep -m1 -E 'breaks dependency|required by' <<<"$result")"
+}
 cmd_reboot() {
   running || die "the guest isn't running"
   ensure_seed
+  local before; before=$(guest 'cat /proc/sys/kernel/random/boot_id')
   guest 'sudo systemctl reboot' || true
-  sleep 10
-  wait_ssh 300
+  local deadline=$((SECONDS + 300))
+  until [[ $(guest 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) =~ ^[0-9a-f-]+$ &&
+           $(guest 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) != "$before" ]]; do
+    running || die "QEMU exited; see $run/qemu.log"
+    (( SECONDS < deadline )) || die "the guest didn't come back from the reboot"
+    sleep 5
+  done
   log "rebooted"
 }
 
@@ -250,15 +386,66 @@ cmd_check() {
   guest 'cat >/tmp/gooarchy-check/guest-check.py' <"$here/guest-check.py"
   log "checking the session in the guest"
   local status=0
-  guest 'python3 /tmp/gooarchy-check/guest-check.py /tmp/gooarchy-check/out' 2>&1 | tee "$out/guest-check.log" >&2 ||
-    status=$?
+  guest "timeout 1500 python3 /tmp/gooarchy-check/guest-check.py /tmp/gooarchy-check/out --gpu $gpu" 2>&1 |
+    tee "$out/guest-check.log" >&2 || status=$?
   screendump vm-display-after-check.png
   guest 'cd /tmp/gooarchy-check/out && tar -cf - .' | tar -C "$out" -xf - || true
   guest 'journalctl -b --no-pager -o short-monotonic' >"$out/journal.log" 2>/dev/null || true
-  guest 'cp ~/.local/state/scottland/wayfire.log /dev/stdout' >"$out/wayfire.log" 2>/dev/null || true
+  guest 'cat ~/.local/state/scottland/wayfire.log' >"$out/wayfire-last-session.log" 2>/dev/null || true
+  guest 'cat ~/.local/state/scottland/wayfire.log.previous' >"$out/wayfire-previous-session.log" 2>/dev/null || true
   cp "$run/serial.log" "$out/serial.log" 2>/dev/null || true
   log "artifacts: $out"
   return "$status"
+}
+
+cmd_login_check() {
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  timeout 900 python3 "$here/login-check.py" "$run/qmp.sock" "$out" -- ssh "${ssh_opts[@]}" arch@127.0.0.1 2>&1 |
+    tee "$out/login-check.log" >&2
+}
+
+manifest() {
+  # What this run was: enough to repeat it and to know what the results are about.
+  local out; out=$(artifacts)
+  local image; image=$(fetch_image)
+  guest 'pacman -Q' >"$out/guest-packages.txt" 2>/dev/null || true
+  guest 'cat /usr/share/gooarchy/build-info' >"$out/gooarchy-build-info.txt" 2>/dev/null || true
+  python3 - "$out/manifest.json" <<EOF
+import json, sys
+json.dump({
+  "harness_revision": "$(git -C "$repo" rev-parse HEAD)$(git -C "$repo" status --porcelain | grep -q . && echo ' (with uncommitted changes)')",
+  "image": "$(basename "$image")", "image_url": "$image_url",
+  "image_sha256": "$(cat "$image.sha256-local")",
+  "qemu": "$("$qemu" --version | head -1)",
+  "graphics": "$gpu", "screen": "$size", "memory_mib": "$memory", "cpus": "$cpus", "disk": "$disk",
+  "proxy_used": $([[ -n $proxy ]] && echo true || echo false),
+  "test_accommodations": ["cloud-init seed (SSH key, passwordless sudo)", "systemd-time-wait-sync masked",
+                          "pacman cache shared from the host, no download timeout", "Wayfire stipc plugin loaded at check time"],
+  "guest_packages": "guest-packages.txt",
+}, open(sys.argv[1], "w"), indent=1)
+EOF
+}
+
+summary() {
+  local out; out=$(artifacts)
+  python3 - "$out" <<'EOF'
+import json, os, sys
+out, total, failed = sys.argv[1], 0, []
+for name in ("harness-checks.json", "results.json", "login-check.json"):
+    path = os.path.join(out, name)
+    if not os.path.exists(path):
+        failed.append(f"{name} missing")
+        continue
+    for r in json.load(open(path))["results"]:
+        total += 1
+        if not r["ok"]:
+            failed.append(r["check"])
+print(f"{total - len([f for f in failed if not f.endswith('missing')])}/{total} checks passed")
+for f in failed:
+    print(f"  FAILED: {f}")
+sys.exit(1 if failed else 0)
+EOF
 }
 
 cmd_stop() {
@@ -277,17 +464,27 @@ case ${1:-all} in
   boot) cmd_boot ;;
   start) cmd_start ;;
   install) cmd_install ;;
+  rebuild-check) cmd_rebuild_check ;;
   reboot) cmd_reboot ;;
   check) cmd_check ;;
+  login-check) cmd_login_check ;;
+  upgrade-guard) cmd_upgrade_guard ;;
   ssh) shift; guest -t "$@" ;;
   stop) cmd_stop ;;
   all)
     rm -f "$run/artifacts"
     trap cmd_stop EXIT
     cmd_boot
+    manifest
     cmd_install
+    cmd_rebuild_check
     cmd_reboot
-    cmd_check
+    cmd_check || true
+    cmd_login_check || true
+    cmd_upgrade_guard
+    manifest
+    log "artifacts: $(artifacts)"
+    summary
     ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2 ;;
 esac

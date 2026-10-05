@@ -20,4 +20,4 @@ if systemctl is-enabled --quiet display-manager.service 2>/dev/null; then
   echo "Note: a display manager is enabled ($(readlink -f /etc/systemd/system/display-manager.service | xargs basename)). Gooarchy starts Scottland from a console login on tty1, which the display manager may own; choose Scottland in its session menu instead (Gooarchy installs a Scottland session entry)."
 fi
 
-echo "Installing Gooarchy for $USER on $(. /etc/os-release && echo "$PRETTY_NAME"), kernel $(uname -r)."
+echo "Installing Gooarchy for $(id -un) on $(. /etc/os-release && echo "$PRETTY_NAME"), kernel $(uname -r)."

@@ -1,0 +1,38 @@
+#!/bin/sh
+# Scottland config fragment: use the keyboard layout the system was installed with, instead of
+# Scottland's shipped "us". From the X11 keyboard settings (localectl set-x11-keymap, or what
+# localectl set-keymap converted), else from the console keymap (/etc/vconsole.conf) through
+# systemd's own console-to-X11 table. Prints nothing when the system has no layout or uses "us".
+# ~/.config/scottland/overrides.ini is appended later and still wins.
+x11=/etc/X11/xorg.conf.d/00-keyboard.conf
+vconsole=/etc/vconsole.conf
+map=/usr/share/systemd/kbd-model-map
+if [ "${1:-}" = --watch-paths ]; then
+  # Only paths that exist (Scottland's watcher can't watch missing ones); a layout set where none
+  # was configured before applies from the next login.
+  [ -d /etc/X11/xorg.conf.d ] && echo /etc/X11/xorg.conf.d
+  [ -f "$vconsole" ] && echo "$vconsole"
+  exit 0
+fi
+option() { sed -n "s/^[[:space:]]*Option[[:space:]]*\"$1\"[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$x11" 2>/dev/null | head -1; }
+layout= variant= options= source=
+if [ -r "$x11" ]; then
+  layout=$(option XkbLayout) variant=$(option XkbVariant) options=$(option XkbOptions) source=$x11
+fi
+if [ -z "$layout" ] && [ -r "$vconsole" ]; then
+  keymap=$(sed -n 's/^KEYMAP=["]\{0,1\}\([^"]*\)["]\{0,1\}$/\1/p' "$vconsole" | head -1)
+  if [ -n "$keymap" ] && [ -r "$map" ]; then
+    set -- $(awk -v k="$keymap" '$1 == k { print $2, $4; exit }' "$map")
+    layout=${1:-} variant=${2:-} source="$vconsole (KEYMAP=$keymap)"
+    [ "$variant" = - ] && variant=
+  fi
+fi
+[ -n "$layout" ] && [ "$layout" != us -o -n "$variant" ] || exit 0
+echo "# keyboard layout from $source"
+echo "[input]"
+echo "xkb_layout = $layout"
+echo "xkb_variant = $variant"
+if [ -n "$options" ]; then
+  case $options in *compose:*) ;; *) options="$options,compose:caps" ;; esac
+  echo "xkb_options = $options"
+fi
