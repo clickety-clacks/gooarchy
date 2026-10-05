@@ -7,6 +7,7 @@
 #   tests/vm/run.sh boot    fresh disk from the cloud image, boot, wait for SSH
 #   tests/vm/run.sh install copy this checkout in and run ./install.sh --yes --autologin
 #   tests/vm/run.sh reboot  reboot the guest and wait for SSH
+#   tests/vm/run.sh start   boot the existing disk again (after stop)
 #   tests/vm/run.sh check   check the running session; screenshots and logs into the artifacts
 #   tests/vm/run.sh ssh [CMD]   a shell (or CMD) in the guest
 #   tests/vm/run.sh stop    power the guest off
@@ -89,7 +90,9 @@ seed() {
   # passwordless sudo) gets this run's SSH key. Nothing else is configured here.
   [[ -f $run/id_ed25519 ]] || ssh-keygen -q -t ed25519 -N '' -C gooarchy-vm-test -f "$run/id_ed25519"
   mkdir -p "$run/seed"
-  printf 'instance-id: gooarchy-vm-%s\nlocal-hostname: gooarchy-vm\n' "$(date +%s)" >"$run/seed/meta-data"
+  # One instance id per disk: a new one makes cloud-init set the machine up again.
+  [[ -f $run/seed/meta-data ]] ||
+    printf 'instance-id: gooarchy-vm-%s\nlocal-hostname: gooarchy-vm\n' "$(date +%s)" >"$run/seed/meta-data"
   cat >"$run/seed/user-data" <<EOF
 #cloud-config
 ssh_authorized_keys:
@@ -143,12 +146,27 @@ screendump() {
 
 cmd_boot() {
   cmd_stop
-  local image seed_port display
+  local image
   image=$(fetch_image)
-  rm -f "$run/disk.qcow2" "$run/artifacts"
+  rm -rf "$run/disk.qcow2" "$run/artifacts" "$run/seed"
   # Never smaller than the image (that would cut its partitions off); cloud-init grows the root
   # partition into the rest on first boot.
   "$qemu_img" create -q -f qcow2 -F qcow2 -b "$image" "$run/disk.qcow2" "$disk"
+  start_qemu
+  log "guest is up: $(guest 'uname -r; . /etc/os-release; echo $PRETTY_NAME' | tr '\n' ' ')"
+  prepare_guest
+}
+
+cmd_start() {
+  # Boot the existing disk again (after stop), e.g. to look at an installed system.
+  cmd_stop
+  [[ -f $run/disk.qcow2 ]] || die "no disk yet (tests/vm/run.sh boot)"
+  start_qemu
+  log "guest is up"
+}
+
+start_qemu() {
+  local seed_port display
   seed_port=$(seed)
   local xres=${size%x*} yres=${size#*x}
   case $gpu in
@@ -175,7 +193,13 @@ cmd_boot() {
   sleep 2
   running || die "QEMU didn't start: $(cat "$run/qemu.log")"
   wait_ssh 300
-  log "guest is up: $(guest 'uname -r; . /etc/os-release; echo $PRETTY_NAME' | tr '\n' ' ')"
+}
+
+prepare_guest() {
+  # Test-only: the guest's clock comes from QEMU's RTC, and a test machine may not pass NTP
+  # through, which would leave systemd-time-wait-sync (and the cloud image's pacman-init, and
+  # sshd after it) waiting forever on the next boot.
+  guest 'sudo systemctl mask --quiet systemd-time-wait-sync.service'
   if [[ -n $proxy ]]; then
     # Test-only: let sudo (pacman, makepkg -s) keep the proxy variables.
     guest 'echo "Defaults env_keep += \"ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy\"" |
@@ -251,6 +275,7 @@ cmd_stop() {
 
 case ${1:-all} in
   boot) cmd_boot ;;
+  start) cmd_start ;;
   install) cmd_install ;;
   reboot) cmd_reboot ;;
   check) cmd_check ;;

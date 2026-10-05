@@ -290,8 +290,9 @@ def main():
     check("Claude Code rings the terminal bell", claude == "terminal_bell", claude)
     codex = open(os.path.expanduser("~/.codex/config.toml")).read()
     check("Codex rings the terminal bell", 'notification_method = "bel"' in codex)
-    for unit in ("pipewire", "wireplumber", "pipewire-pulse.socket", "rtkit-daemon"):
-        active = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True).stdout.strip()
+    for scope, unit in (("--user", "pipewire"), ("--user", "wireplumber"), ("--user", "pipewire-pulse.socket"),
+                        ("--system", "rtkit-daemon")):
+        active = subprocess.run(["systemctl", scope, "is-active", unit], capture_output=True, text=True).stdout.strip()
         check(f"{unit} running", active == "active", active)
     sinks = subprocess.run(["wpctl", "status"], capture_output=True, text=True).stdout
     check("PipeWire sees an audio sink", "Sinks:" in sinks and "Audio" in sinks)
@@ -307,12 +308,14 @@ def main():
     press("KEY_PRINT")
     new = wait_for(lambda: set(os.listdir(pictures)) - shots_before, timeout=10)
     check("Print saves a screenshot in ~/Pictures", new, sorted(new or []))
+    # Scottland Settings is a layer-shell overlay, not a window in Scottland's model.
     press("KEY_LEFTMETA", "KEY_COMMA")
-    settings = wait_for(lambda: [v for v in views() if "Settings" in (v.get("title") or "")], timeout=20)
-    check("Super+comma opens Scottland Settings", settings, settings and settings[0].get("title"))
+    settings = wait_for(lambda: [v for v in ipc("window-rules/list-views")
+                                 if v.get("app-id") == "scottland-settings" and v.get("mapped")], timeout=30)
+    check("Super+comma opens Scottland Settings", settings, settings and settings[0].get("app-id"))
     time.sleep(2)
     shot("07-scottland-settings.png")
-    press("KEY_ESC")
+    subprocess.run(["pkill", "-f", "qs -n -p /usr/share/scottland/settings"])
 
     # A terminal bell in a window you're not using becomes Scottland attention (what coding agents
     # ring when they need you).
@@ -355,6 +358,21 @@ def main():
     observe("Wayfire errors in its log", sorted(set(
         l.split(" - ", 1)[-1] for l in open(os.path.expanduser("~/.local/state/scottland/wayfire.log"), errors="replace")
         if l.startswith("EE"))))
+
+    # Last, because they end the session: logging out (Super+Shift+Escape) ends it and autologin
+    # starts a new one; a crashed compositor leaves a shell on tty1 instead of a restart loop.
+    old = run("pgrep", "-xo", "wayfire")
+    press("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_ESC")
+    new = wait_for(lambda: (lambda p: p if p and p != old else None)(run("pgrep", "-xo", "wayfire")), timeout=40)
+    check("Super+Shift+Escape logs out, and autologin starts a new session", new, f"wayfire {old} -> {new}")
+    if new:
+        time.sleep(5)
+        os.kill(int(new), 11)
+        time.sleep(15)
+        after = run("pgrep", "-x", "wayfire")
+        tty1 = run("loginctl", "list-sessions", "--no-legend")
+        check("a crashed session leaves a shell on tty1 (no restart loop)", not after and "tty1" in tty1,
+              f"wayfire after crash: {after or 'none'}")
     return finish()
 
 

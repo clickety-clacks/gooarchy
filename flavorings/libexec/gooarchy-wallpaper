@@ -1,18 +1,40 @@
-#!/bin/sh
-# Draw the theme's wallpaper (swaybg) for the current light/dark mode and redraw it when the mode
-# changes (org.gnome.desktop.interface color-scheme, which gooarchy-theme sets).
-themes=/usr/share/gooarchy-flavorings/themes
-mode() {
-  case $(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null) in
-    *dark*) echo dark ;;
-    *) echo light ;;
-  esac
-}
-draw() {
-  [ -n "${pid:-}" ] && kill "$pid" 2>/dev/null
-  swaybg --mode fill --image "$themes/watercolor-dream-$(mode)/background.webp" &
-  pid=$!
-}
-trap '[ -n "${pid:-}" ] && kill "$pid"' EXIT INT TERM
-draw
-gsettings monitor org.gnome.desktop.interface color-scheme | while read -r _; do draw; done
+#!/usr/bin/env python3
+"""Draw the theme's wallpaper (swaybg) for the current light/dark mode, and redraw it when the mode
+changes (org.gnome.desktop.interface color-scheme, which gooarchy-theme sets). Exits when the
+session does: swaybg ending on its own means the compositor is gone."""
+import select
+import subprocess
+
+THEMES = "/usr/share/gooarchy-flavorings/themes"
+
+
+def mode():
+    scheme = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                            capture_output=True, text=True).stdout
+    return "dark" if "dark" in scheme else "light"
+
+
+def draw():
+    return subprocess.Popen(["swaybg", "--mode", "fill", "--image",
+                             f"{THEMES}/watercolor-dream-{mode()}/background.webp"])
+
+
+monitor = subprocess.Popen(["gsettings", "monitor", "org.gnome.desktop.interface", "color-scheme"],
+                           stdout=subprocess.PIPE, text=True)
+swaybg = draw()
+try:
+    while True:
+        ready, _, _ = select.select([monitor.stdout], [], [], 1.0)
+        if ready:
+            if not monitor.stdout.readline():
+                break  # the monitor died; keep the current wallpaper until the session ends
+            swaybg.terminate()
+            swaybg.wait()
+            swaybg = draw()
+        elif swaybg.poll() is not None:
+            break
+    swaybg.wait()
+finally:
+    monitor.terminate()
+    if swaybg.poll() is None:
+        swaybg.terminate()
