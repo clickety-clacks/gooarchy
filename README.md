@@ -75,7 +75,10 @@ session; "show in folder" opens Strata; the portal's file chooser opens and canc
 as described above; two logouts each close the old login completely; a crashed compositor leaves a
 shell on tty1 instead of a restart loop. Checks named "config:" only read configuration (Chromium's
 title bar setting, tmux, touchpad, the agents' bell settings); they don't show the behavior. It also
-records what's missing (notifications, lock, portals, ...) for [DEFICIT.md](DEFICIT.md).
+records what's missing (notifications, lock, portals, ...) for [DEFICIT.md](DEFICIT.md). On
+2026-10-05, fresh runs passed every check with virgl graphics (65) and with software graphics (66,
+including the login check restoring autologin). `tests/vm/selftest.py` and
+`tests/flavorings-apply-test.py` test the harness and the defaults tool without a VM.
 
 What it doesn't show: it's the Arch cloud image (cloud-init gives it an SSH key and passwordless
 sudo; the harness masks systemd's wait for network time and shares pacman's cache from the host),
