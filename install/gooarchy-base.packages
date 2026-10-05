@@ -1,0 +1,39 @@
+# Arch packages Gooarchy is made of, from Arch's official repositories. The gooarchy package
+# depends on all of them; the installer puts them in first (install/packaging/base.sh).
+# Scottland and Strata are built separately (they aren't in Arch's repositories) and pull in
+# their own dependencies (Wayfire, Quickshell, GTK 4, ...).
+
+# The desktop session
+wayfire
+xdg-desktop-portal
+# Settings (light/dark for GTK 4 apps and Scottland) and file chooser portals
+xdg-desktop-portal-gtk
+gsettings-desktop-schemas
+# Wallpaper for the light/dark theme (a layer-shell background; Scottland's goo soaks it up)
+swaybg
+webp-pixbuf-loader
+xdg-user-dirs
+xdg-utils
+
+# Apps
+ghostty
+chromium
+tmux
+mosh
+
+# Audio
+pipewire
+pipewire-alsa
+pipewire-pulse
+wireplumber
+
+# Keys Scottland's shipped config binds: Print (grim, slurp), brightness (brightnessctl).
+# Volume keys use wpctl from wireplumber.
+grim
+slurp
+brightnessctl
+
+# Fonts
+noto-fonts
+noto-fonts-emoji
+ttf-liberation

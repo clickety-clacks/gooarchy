@@ -1,0 +1,8 @@
+#!/bin/sh
+# Append Gooarchy's flavorings (touchpad, file manager and browser keys) to the session's config.
+ini=/usr/share/gooarchy-flavorings/scottland.ini
+if [ "${1:-}" = --watch-paths ]; then
+  echo "$ini"
+  exit 0
+fi
+cat "$ini"

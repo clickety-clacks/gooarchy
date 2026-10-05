@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fill in Gooarchy's per-user defaults for a user who hasn't had them yet (each is applied once
+# per user and never again; see gooarchy-flavorings-apply).
+exec gooarchy-flavorings-apply --session

@@ -1,0 +1,4 @@
+run_logged "$GOOARCHY_INSTALL/packaging/base.sh"
+run_logged "$GOOARCHY_INSTALL/packaging/scottland.sh"
+run_logged "$GOOARCHY_INSTALL/packaging/strata.sh"
+run_logged "$GOOARCHY_INSTALL/packaging/gooarchy.sh"

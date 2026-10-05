@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Fill in Gooarchy's per-user defaults (the flavorings that live in a home directory).
+
+  gooarchy-flavorings-apply            apply what this user hasn't had yet, reporting each step
+  gooarchy-flavorings-apply --session  the same, quietly, from the session's autostart
+  gooarchy-flavorings-apply --list     show which defaults have been applied for this user
+
+Each default is applied at most once per user (a marker in ~/.local/state/gooarchy/flavorings
+remembers it), so changing it back later sticks. A default only fills a setting that isn't set:
+a setting the user already has is left alone and reported (also in
+~/.local/state/gooarchy/reports.log). Nothing is replaced silently.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+HOME = Path.home()
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
+STATE = Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local/state") / "gooarchy"
+MARKERS = STATE / "flavorings"
+SHARE = Path("/usr/share/gooarchy-flavorings")
+SESSION = "--session" in sys.argv
+
+
+def say(message):
+    if not SESSION:
+        print(message)
+
+
+def report(message):
+    """A setting the user had that Gooarchy left alone (or changed), with the reason."""
+    line = f"Gooarchy: {message}"
+    print(line, file=sys.stderr)
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "reports.log", "a") as f:
+        f.write(line + "\n")
+
+
+def session_bus_env():
+    env = dict(os.environ)
+    bus = Path(f"/run/user/{os.getuid()}/bus")
+    if "DBUS_SESSION_BUS_ADDRESS" not in env and bus.exists():
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+    return env
+
+
+def gsettings(*args):
+    env = session_bus_env()
+    command = ["gsettings", *args]
+    if "DBUS_SESSION_BUS_ADDRESS" not in env:
+        # No session bus (e.g. installing over SSH before the first login): dconf still needs one.
+        command = ["dbus-run-session", "--", *command]
+    return subprocess.run(command, env=env, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def folders():
+    """The standard folders (Pictures is where Print saves screenshots)."""
+    subprocess.run(["xdg-user-dirs-update"], check=True)
+    say("Created the standard folders (Desktop, Documents, Downloads, Pictures, ...).")
+    return True
+
+
+def color_scheme():
+    """Watercolor Dream light, unless the user already chose light or dark."""
+    current = gsettings("get", "org.gnome.desktop.interface", "color-scheme").strip("'")
+    if current != "default":
+        report(f"kept your color scheme ({current}); gooarchy-theme light|dark switches it.")
+        return True
+    gsettings("set", "org.gnome.desktop.interface", "color-scheme", "prefer-light")
+    say("Set the desktop to Watercolor Dream light (gooarchy-theme dark switches).")
+    return True
+
+
+def chromium():
+    """Chromium draws no frame of its own: "Use system title bar and borders" is on."""
+    prefs = CONFIG / "chromium" / "Default" / "Preferences"
+    if subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "chromium"], capture_output=True).returncode == 0:
+        say("Chromium is running; its title bar setting will be applied at a later login.")
+        return False
+    if prefs.exists():
+        data = json.loads(prefs.read_text() or "{}")
+        browser = data.setdefault("browser", {})
+        if "custom_chrome_frame" in browser:
+            if browser["custom_chrome_frame"]:
+                report("kept Chromium drawing its own title bar (your setting); Gooarchy's default is "
+                       "\"Use system title bar and borders\", so Scottland's goo and halo meet the window's edge.")
+            return True
+        browser["custom_chrome_frame"] = False
+    else:
+        data = {"browser": {"custom_chrome_frame": False}}
+        prefs.parent.mkdir(parents=True, exist_ok=True)
+    tmp = prefs.with_name(prefs.name + ".gooarchy")
+    tmp.write_text(json.dumps(data))
+    tmp.replace(prefs)
+    say("Chromium: \"Use system title bar and borders\" is on.")
+    return True
+
+
+def ghostty():
+    """Ghostty uses the Watercolor Dream theme, light or dark with the desktop."""
+    themes = SHARE / "themes"
+    line = f"theme = light:{themes}/watercolor-dream-light/ghostty,dark:{themes}/watercolor-dream-dark/ghostty"
+    config = CONFIG / "ghostty" / "config"
+    if config.exists():
+        if not re.search(r"^\s*theme\s*=", config.read_text(), re.M):
+            report(f"kept your Ghostty config as it is; for Gooarchy's theme, add: {line}")
+        return True
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("# Gooarchy flavorings: the Watercolor Dream theme, light or dark with the desktop.\n"
+                      f"{line}\n")
+    say("Ghostty: Watercolor Dream theme.")
+    return True
+
+
+def claude_code():
+    """Claude Code rings the terminal bell when it needs the user (Scottland shows it as attention)."""
+    config = HOME / ".claude.json"
+    data = json.loads(config.read_text() or "{}") if config.exists() else {}
+    current = data.get("preferredNotifChannel")
+    if current is not None:
+        if current != "terminal_bell":
+            report(f"kept Claude Code's notification channel ({current}); Gooarchy's default is "
+                   "terminal_bell, which Scottland turns into window attention.")
+        return True
+    data["preferredNotifChannel"] = "terminal_bell"
+    tmp = config.with_name(config.name + ".gooarchy")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(config)
+    say("Claude Code: rings the terminal bell when it needs you.")
+    return True
+
+
+def codex():
+    """Codex rings the terminal bell when it needs the user."""
+    config = HOME / ".codex" / "config.toml"
+    wanted = {"notifications": "true", "notification_method": '"bel"'}
+    if not config.exists():
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("# Gooarchy flavorings: ring the terminal bell when Codex needs you.\n[tui]\n" +
+                          "".join(f"{k} = {v}\n" for k, v in wanted.items()))
+        say("Codex: rings the terminal bell when it needs you.")
+        return True
+    text = config.read_text()
+    tui = tomllib.loads(text).get("tui", {})
+    method = tui.get("notification_method")
+    if method is not None:
+        if method != "bel":
+            report(f"kept Codex's notification method ({method}); Gooarchy's default is bel, "
+                   "which Scottland turns into window attention.")
+        return True
+    missing = {k: v for k, v in wanted.items() if k not in tui}
+    lines = "".join(f"{k} = {v}\n" for k, v in missing.items())
+    header = re.search(r"^\[tui\][ \t]*\n", text, re.M)
+    if header:
+        text = text[:header.end()] + lines + text[header.end():]
+    elif "tui" in tomllib.loads(text):
+        report(f"left {config} alone (its tui settings aren't in a [tui] table); for the bell, set "
+               "tui.notification_method = \"bel\".")
+        return True
+    else:
+        text = text.rstrip("\n") + "\n\n# Gooarchy flavorings: ring the terminal bell when Codex needs you.\n[tui]\n" + lines
+    config.write_text(text)
+    say("Codex: rings the terminal bell when it needs you.")
+    return True
+
+
+def file_manager():
+    """Strata opens folders (system default in a Scottland session); report a user's own choice."""
+    user = CONFIG / "mimeapps.list"
+    if user.exists():
+        match = re.search(r"^inode/directory=(.*)$", user.read_text(), re.M)
+        if match and "Strata" not in match.group(1):
+            report(f"kept your folder handler ({match.group(1)}); Gooarchy's is Strata.")
+    return True
+
+
+STEPS = [("folders", folders), ("color-scheme", color_scheme), ("chromium", chromium),
+         ("ghostty", ghostty), ("claude-code", claude_code), ("codex", codex),
+         ("file-manager", file_manager)]
+
+
+def main():
+    MARKERS.mkdir(parents=True, exist_ok=True)
+    if "--list" in sys.argv:
+        for name, _ in STEPS:
+            print(f"{name}: {'applied' if (MARKERS / name).exists() else 'not yet'}")
+        return 0
+    failed = False
+    for name, step in STEPS:
+        if (MARKERS / name).exists():
+            continue
+        try:
+            if step():
+                (MARKERS / name).touch()
+        except Exception as error:  # one default failing shouldn't stop the others
+            print(f"Gooarchy: couldn't apply the {name} default: {error}", file=sys.stderr)
+            failed = True
+    return 1 if failed and not SESSION else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

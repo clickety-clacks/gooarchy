@@ -1,0 +1,3 @@
+#!/bin/sh
+# The theme's wallpaper for the desktop's light or dark mode, following changes.
+exec /usr/lib/gooarchy-flavorings/gooarchy-wallpaper

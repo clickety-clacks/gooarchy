@@ -1,0 +1,59 @@
+# Removing Gooarchy (rollback)
+
+Gooarchy's installer changes three kinds of things. Each comes off separately, and none of
+it touches your files beyond the few settings listed below.
+
+## 1. Packages
+
+Everything the installer added from packages hangs off two packages, `gooarchy` and
+`gooarchy-flavorings`. The Arch packages from `install/gooarchy-base.packages` and the
+`scottland` and `strata-bin` packages it built went in as their dependencies. Remove those two
+packages from a console, not from inside Scottland:
+
+```sh
+sudo pacman -Rns gooarchy gooarchy-flavorings
+```
+
+That also removes their dependencies that nothing else needs. A package you had installed
+yourself before Gooarchy stays: the installer never changes the install reason of a package
+that was already there. `git` and `base-devel` (installed to build Scottland and Strata) stay;
+remove them yourself if you don't want them. To see what would go first, run
+`pacman -Rns --print gooarchy gooarchy-flavorings`.
+
+Removing the packages also removes what they own: `/etc/profile.d/gooarchy-session.sh` (the
+tty1 session start), `/etc/profile.d/gooarchy-flavorings.sh`, `/etc/tmux.conf`,
+`/etc/xdg/scottland-mimeapps.list` and Scottland's Gooarchy hooks under `/usr/lib/scottland/`.
+If you edited `/etc/tmux.conf`, pacman keeps your edited copy as `/etc/tmux.conf.pacsave`.
+
+## 2. The autologin setting (only with `--autologin`)
+
+```sh
+sudo rm /etc/systemd/system/getty@tty1.service.d/gooarchy-autologin.conf
+sudo rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null
+sudo systemctl daemon-reload
+```
+
+## 3. Settings in your home directory
+
+`gooarchy-flavorings-apply` only filled settings that weren't set, once each. A setting it found
+already set was left alone and logged in `~/.local/state/gooarchy/reports.log`. To undo what it
+set, edit or remove:
+
+| Setting | Where |
+|---|---|
+| Chromium "Use system title bar and borders" | Chromium settings > Appearance, or `browser.custom_chrome_frame` in `~/.config/chromium/Default/Preferences` |
+| Ghostty theme | the `theme = ...` line in `~/.config/ghostty/config` (the file was created by Gooarchy if you had none) |
+| Claude Code bell | `preferredNotifChannel` in `~/.claude.json` |
+| Codex bell | `notifications` and `notification_method` under `[tui]` in `~/.codex/config.toml` |
+| Light/dark preference | `gsettings reset org.gnome.desktop.interface color-scheme` |
+| Standard folders | `~/Desktop`, `~/Documents`, `~/Downloads`, ... (created by `xdg-user-dirs-update`; empty ones can go) |
+
+Gooarchy's own state lives in `~/.local/state/gooarchy` (install log, reports, markers of
+applied defaults) and its build checkouts in `~/.cache/gooarchy`. Both can be deleted. Scottland
+keeps its own state in `~/.local/state/scottland` and `~/.config/scottland`.
+
+## Going back to a previous system state
+
+Gooarchy has no snapshots or rollback of its own yet (see [DEFICIT.md](../DEFICIT.md)). On a
+Btrfs root with snapshots (snapper, timeshift), take a snapshot before installing. That snapshot
+is the real way back.

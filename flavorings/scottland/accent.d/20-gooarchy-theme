@@ -1,0 +1,21 @@
+#!/bin/sh
+# The Gooarchy theme's accent color for the focused window's halo, in the desktop's light or dark
+# mode. With --watch-paths: where a light/dark switch writes. With --palette: the theme's colors
+# as Scottland's palette (JSON), for widgets.
+if [ "${1:-}" = --watch-paths ]; then
+  echo "${XDG_CONFIG_HOME:-$HOME/.config}/dconf"
+  exit 0
+fi
+case $(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null) in
+  *dark*) mode=dark ;;
+  *) mode=light ;;
+esac
+colors=/usr/share/gooarchy-flavorings/themes/watercolor-dream-$mode/colors.toml
+pick() { sed -n "s/^$1 *= *\"\(#[0-9a-fA-F]\{6\}\)\".*/\1/p" "$colors" 2>/dev/null | head -1; }
+if [ "${1:-}" = --palette ]; then
+  printf '{"background": "%s", "foreground": "%s", "muted": "%s", "accent": "%s", "alert": "%s", "attention": "%s"}\n' \
+    "$(pick lighter_background)" "$(pick foreground)" "$(pick light_foreground)" "$(pick accent)" \
+    "$(pick red)" "$(pick yellow)"
+  exit 0
+fi
+pick accent

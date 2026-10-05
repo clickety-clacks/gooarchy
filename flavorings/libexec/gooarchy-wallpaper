@@ -1,0 +1,18 @@
+#!/bin/sh
+# Draw the theme's wallpaper (swaybg) for the current light/dark mode and redraw it when the mode
+# changes (org.gnome.desktop.interface color-scheme, which gooarchy-theme sets).
+themes=/usr/share/gooarchy-flavorings/themes
+mode() {
+  case $(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null) in
+    *dark*) echo dark ;;
+    *) echo light ;;
+  esac
+}
+draw() {
+  [ -n "${pid:-}" ] && kill "$pid" 2>/dev/null
+  swaybg --mode fill --image "$themes/watercolor-dream-$(mode)/background.webp" &
+  pid=$!
+}
+trap '[ -n "${pid:-}" ] && kill "$pid"' EXIT INT TERM
+draw
+gsettings monitor org.gnome.desktop.interface color-scheme | while read -r _; do draw; done
