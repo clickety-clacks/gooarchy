@@ -32,7 +32,7 @@ QEMU/KVM guest with virgl graphics.
 | Keyring / secret service | Medium | No `org.freedesktop.secrets` provider. Chromium has no keyring to encrypt saved passwords with (it falls back to its basic store); apps that keep tokens in the keyring can't sign in or forget the login. |
 | Keybinding help | Medium | No cheatsheet; Scottland's and Gooarchy's keys are only in the config files. |
 | Display manager / greeter, boot polish | Low | Boot shows kernel and systemd text, then a console login on tty1 (or autologin). That is the chosen design for now (see README); there is no graphical greeter, boot splash or branding. |
-| Logout leaves the old login behind | Low | After logging out, the old tty1 login session lingers as "closing" while leftover session processes exit. |
+| Logout leaves the old login behind | Low | After logging out, the old tty1 login lingers as "closing" with Scottland's color-scheme and solar watchers still running; each login adds another set (see "Needs a Scottland change"). |
 
 ## Input, display, sound
 
@@ -105,11 +105,13 @@ attention work. These are the Scottland changes a clean distro wants:
    `Unknown animation type: ""` at startup, and the goo shaders log
    `Uniform uBackgroundMap/uShine/uHints not found in program`. Harmless, but they bury real errors
    in `wayfire.log`.
-5. **Close the login session on exit.** After logout, the old tty1 session stays "closing" while
-   session processes that don't need Wayland keep running. Scottland's `start-scottland` stops
-   `scottland-session.target`, but processes started from `autostart.d` hooks aren't tied to the
-   compositor's lifetime. Gooarchy's own wallpaper hook now exits with the compositor; the others
-   need checking.
+5. **Stop the session's watchers when the compositor exits.** After logout, the old tty1 login
+   stays "closing" because `scottland-color-scheme watch` and `scottland-solar-theme watch` (from
+   `autostart.d/07-*`) and their `gsettings monitor`, `gdbus monitor` and `inotifywait` children
+   keep running without Wayfire; each new login adds another set. They should exit when their
+   Wayfire socket goes away (or run under `scottland-session.target`, which `start-scottland`
+   already stops). Gooarchy's own wallpaper hook had the same flaw and now exits with the
+   compositor.
 6. **A portal configuration for the Scottland desktop.** The portal currently picks backends
    through Wayfire's `wayfire-portals.conf` (Scottland sets `XDG_CURRENT_DESKTOP=Scottland:Wayfire:wlroots`).
    When Gooarchy adds screen sharing, a `scottland-portals.conf` naming the backends belongs with

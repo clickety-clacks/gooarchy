@@ -9,6 +9,8 @@ screen's edges, and a window dropped on a side rail becomes a widget. Gooarchy i
 clean on plain Arch Linux. Nothing is borrowed to fill a gap: Gooarchy has no bar yet, so it has no
 bar. Everything missing is listed in [DEFICIT.md](DEFICIT.md), found by using the built system.
 
+![Gooarchy in the VM test: a terminal in the center, Chromium scaled down in the periphery, Strata as a widget on the right rail](docs/screenshots/vm-desktop.webp)
+
 ## Current state: pre-alpha
 
 There is an install script that turns a fresh, minimal Arch Linux install into a working Scottland
@@ -25,7 +27,7 @@ What you get:
 | Terminal | Ghostty (Super+Enter) |
 | Browser | Chromium (Super+Shift+B), with "Use system title bar and borders" on |
 | Files | Strata (Super+Shift+F), the folder handler, from its AUR package |
-| Theme | Watercolor Dream, light by default; `gooarchy-theme dark` switches the desktop, Ghostty, GTK apps and the wallpaper |
+| Theme | Watercolor Dream, light by default; `gooarchy-theme dark` switches Scottland's halos, Ghostty, GTK apps and the wallpaper (Strata keeps its own theme for now) |
 | Audio | PipeWire with WirePlumber; the volume keys work, with no on-screen indicator |
 | Defaults | tmux titles read "session on host", mosh adds no title prefix, touchpad tap and tap-and-drag on, Claude Code and Codex ring the terminal bell (Scottland shows it as attention) |
 
@@ -39,8 +41,19 @@ checks the desktop, saving screenshots and logs. Run it on a spare or test machi
 
 ```sh
 tests/vm/run.sh            # boot, install, reboot, check; artifacts in ~/.cache/gooarchy-vm-test/artifacts/
-tests/vm/run.sh ssh        # a shell in the guest afterwards (the run leaves the VM stopped)
+tests/vm/run.sh start      # boot the installed disk again afterwards (the run stops the VM)
+tests/vm/run.sh ssh        # a shell in the guest
 ```
+
+The check drives the session the way a person would, through Wayfire's virtual input, and checks
+each step against Scottland's own model: autologin on tty1 reaches a Scottland session; Super+Enter
+opens Ghostty, Super+Shift+F Strata and Super+Shift+B Chromium; a window dragged to the side scales
+down; a window dragged to the edge becomes a widget on the rail; a bell in an unfocused terminal
+becomes Scottland attention; the volume and Print keys work; Super+Shift+Escape logs out; a crashed
+compositor leaves a shell on tty1 instead of a restart loop; plus the defaults (Chromium's title
+bar, tmux titles, mosh, touchpad, color scheme, folder handler, agents' bell, PipeWire). It
+screenshots each step and records what's missing (notifications, lock, portals, ...) for
+[DEFICIT.md](DEFICIT.md). On 2026-10-04 a fresh run passed all 32 checks with virgl graphics.
 
 Without QEMU installed and without root, `tests/vm/fetch-qemu.sh` unpacks a private copy of QEMU
 on an Arch-based machine. The guest's GPU uses virgl through the host's render node by default

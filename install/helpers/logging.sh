@@ -5,7 +5,10 @@ start_install_log() {
   mkdir -p "$GOOARCHY_STATE"
   : >"$GOOARCHY_INSTALL_LOG_FILE"
   GOOARCHY_START_EPOCH=$(date +%s)
-  log_line "=== Gooarchy install started $(date '+%Y-%m-%d %H:%M:%S') ($(git -C "$GOOARCHY_PATH" rev-parse --short HEAD 2>/dev/null || echo 'no git'))"
+  # git may not be installed yet on a fresh system; the summary names the built versions anyway.
+  local rev
+  rev=$(git -C "$GOOARCHY_PATH" rev-parse --short HEAD 2>/dev/null) || rev=
+  log_line "=== Gooarchy install started $(date '+%Y-%m-%d %H:%M:%S')${rev:+ (checkout $rev)}"
 }
 
 stop_install_log() {
