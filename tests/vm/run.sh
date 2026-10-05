@@ -16,6 +16,9 @@
 #                           version and back, plus an identical rebuild; the installed plugin must
 #                           follow each time
 #   tests/vm/run.sh reboot  reboot the guest and wait for the new boot
+#   tests/vm/run.sh terminal-check  foot and Ghostty, side by side, in the running session
+#                           (terminal-check.py): bells, titles, colors, folders, glyphs, clipboard,
+#                           start time and memory
 #   tests/vm/run.sh check   check the running session (guest-check.py); screenshots and logs
 #   tests/vm/run.sh login-check     password logins typed at the consoles (login-check.py)
 #   tests/vm/run.sh upgrade-guard   a newer Wayfire must not install over the Scottland built for this one
@@ -398,6 +401,49 @@ cmd_check() {
   return "$status"
 }
 
+cmd_terminal_check() {
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  # Test-only additions: wl-clipboard as the clipboard oracle, Ghostty as the baseline when
+  # Gooarchy doesn't ship it, and an SSH key so the guest can SSH to itself (bells over SSH).
+  guest "sudo $(guest_proxy_env) pacman -S --needed --noconfirm wl-clipboard ghostty foot >/dev/null"
+  guest 'test -f ~/.ssh/id_localtest || { ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_localtest &&
+         cat ~/.ssh/id_localtest.pub >>~/.ssh/authorized_keys &&
+         printf "Host localhost\n  IdentityFile ~/.ssh/id_localtest\n  StrictHostKeyChecking accept-new\n" >>~/.ssh/config &&
+         chmod 600 ~/.ssh/config; }'
+  guest 'rm -rf /tmp/gooarchy-terminal && mkdir -p /tmp/gooarchy-terminal'
+  guest 'cat >/tmp/gooarchy-terminal/guest-check.py' <"$here/guest-check.py"
+  guest 'cat >/tmp/gooarchy-terminal/terminal-check.py' <"$here/terminal-check.py"
+  local terminal status=0
+  for terminal in foot ghostty; do
+    log "checking $terminal"
+    guest "timeout 1300 python3 /tmp/gooarchy-terminal/terminal-check.py /tmp/gooarchy-terminal/out --terminal $terminal" \
+      2>&1 | tee -a "$out/terminal-check.log" >&2 || status=1
+  done
+  guest 'cd /tmp/gooarchy-terminal/out && tar -cf - .' | tar -C "$out" -xf - || true
+  python3 - "$out" <<'EOF' | tee "$out/terminal-comparison.txt" >&2
+import json, os, sys
+out = sys.argv[1]
+data = {t: json.load(open(os.path.join(out, f"terminal-{t}.json"))) for t in ("foot", "ghostty")
+        if os.path.exists(os.path.join(out, f"terminal-{t}.json"))}
+names = []
+for d in data.values():
+    for r in d["results"]:
+        if r["check"] not in names:
+            names.append(r["check"])
+print(f"{'check':90} " + " ".join(f"{t:8}" for t in data))
+for n in names:
+    row = []
+    for t, d in data.items():
+        r = next((r for r in d["results"] if r["check"] == n), None)
+        row.append("-" if r is None else ("pass" if r["ok"] else "FAIL"))
+    print(f"{n[:90]:90} " + " ".join(f"{c:8}" for c in row))
+for t, d in data.items():
+    print(f"{t}: start {d['metrics'].get('start_seconds')} s, memory {d['metrics'].get('pss_mib')} MiB")
+EOF
+  return "$status"
+}
+
 cmd_login_check() {
   running || die "the guest isn't running"
   local out; out=$(artifacts)
@@ -421,6 +467,7 @@ json.dump({
   "graphics": "$gpu", "screen": "$size", "memory_mib": "$memory", "cpus": "$cpus", "disk": "$disk",
   "proxy_used": $([[ -n $proxy ]] && echo True || echo False),
   "test_accommodations": ["cloud-init seed (SSH key, passwordless sudo)", "systemd-time-wait-sync masked",
+                          "terminal check: wl-clipboard (clipboard oracle), Ghostty (baseline) and a loopback SSH key added",
                           "pacman cache shared from the host, no download timeout", "Wayfire stipc plugin loaded at check time"],
   "guest_packages": "guest-packages.txt",
 }, open(sys.argv[1], "w"), indent=1)
@@ -432,7 +479,7 @@ summary() {
   python3 - "$out" <<'EOF'
 import json, os, sys
 out, total, failed = sys.argv[1], 0, []
-for name in ("harness-checks.json", "results.json", "login-check.json"):
+for name in ("harness-checks.json", "results.json", "login-check.json", "terminal-foot.json", "terminal-ghostty.json"):
     path = os.path.join(out, name)
     if not os.path.exists(path):
         failed.append(f"{name} missing")
@@ -467,6 +514,7 @@ case ${1:-all} in
   rebuild-check) cmd_rebuild_check ;;
   reboot) cmd_reboot ;;
   check) cmd_check ;;
+  terminal-check) cmd_terminal_check ;;
   login-check) cmd_login_check ;;
   upgrade-guard) cmd_upgrade_guard ;;
   ssh) shift; guest -t "$@" ;;
@@ -479,6 +527,7 @@ case ${1:-all} in
     cmd_install
     cmd_rebuild_check
     cmd_reboot
+    cmd_terminal_check || true
     cmd_check || true
     cmd_login_check || true
     cmd_upgrade_guard

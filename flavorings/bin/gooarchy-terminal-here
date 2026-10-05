@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Open a terminal in the folder of the terminal you're using (Super+Alt+Return).
+
+Takes the focused window from Scottland; if it is a terminal, finds the shell running in it (the
+newest login shell among its processes, as listed in /etc/shells) and opens a new terminal of the
+same kind in that shell's working directory. Otherwise, or if no shell is found, opens the default
+terminal ($TERMINAL, else foot, else Ghostty) in the home folder.
+"""
+import json
+import os
+import shutil
+import socket
+import struct
+import subprocess
+
+TERMINALS = {  # app-id: command to open one in a directory
+    "foot": lambda d: ["foot", "--working-directory", d],
+    "com.mitchellh.ghostty": lambda d: ["ghostty", "--gtk-single-instance=false", f"--working-directory={d}"],
+}
+PROGRAMS = {"foot": "foot", "ghostty": "com.mitchellh.ghostty"}
+
+
+def focused_view():
+    try:
+        with socket.socket(socket.AF_UNIX) as s:
+            s.settimeout(3)
+            s.connect(os.environ["WAYFIRE_SOCKET"])
+            body = json.dumps({"method": "scottland/layout-state", "data": {}}).encode()
+            s.sendall(struct.pack("<I", len(body)) + body)
+            size = struct.unpack("<I", s.recv(4, socket.MSG_WAITALL))[0]
+            reply = b""
+            while len(reply) < size:
+                chunk = s.recv(size - len(reply))
+                if not chunk:
+                    return None
+                reply += chunk
+        return next((v for v in json.loads(reply).get("views", []) if v.get("focused")), None)
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def children(pid):
+    found = []
+    for p in os.listdir("/proc"):
+        if p.isdigit():
+            try:
+                with open(f"/proc/{p}/stat") as f:
+                    if int(f.read().rsplit(")", 1)[1].split()[1]) == pid:
+                        found.append(int(p))
+            except (OSError, ValueError, IndexError):
+                pass
+    return sorted(found)
+
+
+def shell_cwd(pid):
+    """The working directory of the newest shell under PID (depth-first), or None."""
+    shells = {line.strip() for line in open("/etc/shells") if line.startswith("/")}
+    shells |= {os.path.realpath(s) for s in shells}
+    best = None
+    todo = [pid]
+    while todo:
+        p = todo.pop(0)
+        try:
+            if os.path.realpath(f"/proc/{p}/exe") in shells:
+                best = os.readlink(f"/proc/{p}/cwd")
+        except OSError:
+            pass
+        todo.extend(children(p))
+    return best
+
+
+def default_command(directory):
+    configured = os.environ.get("TERMINAL", "")
+    name = os.path.basename(configured.split()[0]) if configured else ""
+    for candidate in ([name] if name else []) + ["foot", "ghostty"]:
+        if candidate in PROGRAMS and shutil.which(candidate):
+            return TERMINALS[PROGRAMS[candidate]](directory)
+    if configured:
+        return ["sh", "-c", f'cd "$1" && exec {configured}', "sh", directory]
+    return None
+
+
+def main():
+    view = focused_view()
+    directory, command = os.path.expanduser("~"), None
+    if view and view.get("app_id") in TERMINALS and view.get("pid"):
+        cwd = shell_cwd(int(view["pid"]))
+        if cwd and os.path.isdir(cwd):
+            directory = cwd
+        command = TERMINALS[view["app_id"]](directory)
+    command = command or default_command(directory)
+    if command:
+        subprocess.Popen(command, cwd=directory, start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+if __name__ == "__main__":
+    main()

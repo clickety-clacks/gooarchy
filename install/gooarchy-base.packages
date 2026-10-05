@@ -17,6 +17,7 @@ xdg-utils
 
 # Apps
 ghostty
+foot
 chromium
 tmux
 mosh
@@ -39,3 +40,5 @@ brightnessctl
 noto-fonts
 noto-fonts-emoji
 ttf-liberation
+# foot's font: JetBrains Mono (Ghostty's built-in font) with Nerd Font symbols
+ttf-jetbrains-mono-nerd

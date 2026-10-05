@@ -188,6 +188,26 @@ def ghostty():
     return True
 
 
+def foot():
+    """foot uses Gooarchy's configuration (Watercolor Dream light/dark, bell, font) by including it."""
+    shared = SHARE / "foot" / "foot.ini"
+    mode_file = STATE / "foot-theme.ini"
+    if read_text(mode_file) is None:
+        # The session keeps this current (gooarchy-follow-scheme); start it before any login.
+        write_file(mode_file, "# Written by Gooarchy: foot's starting theme, light or dark with the desktop.\n"
+                              "[main]\ninitial-color-theme=light\n", new_mode=0o644)
+    config = CONFIG / "foot" / "foot.ini"
+    text = read_text(config)
+    if text is not None:
+        if f"include={shared}" not in text:
+            report(f"kept your foot config as it is; for Gooarchy's theme and bell, put this line first: include={shared}")
+        return True
+    write_file(config, "# Gooarchy flavorings: Watercolor Dream (light or dark with the desktop), the bell, the font.\n"
+                       f"include={shared}\n# Your own settings go below this line and win.\n", new_mode=0o644)
+    say("foot: Watercolor Dream theme and bell.")
+    return True
+
+
 def claude_code():
     """Claude Code rings the terminal bell when it needs the user (Scottland shows it as attention)."""
     if running("claude"):
@@ -255,7 +275,7 @@ def file_manager():
 
 
 STEPS = [("folders", folders), ("color-scheme", color_scheme), ("chromium", chromium),
-         ("ghostty", ghostty), ("claude-code", claude_code), ("codex", codex),
+         ("ghostty", ghostty), ("foot", foot), ("claude-code", claude_code), ("codex", codex),
          ("file-manager", file_manager)]
 
 

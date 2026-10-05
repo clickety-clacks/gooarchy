@@ -1,0 +1,3 @@
+#!/bin/sh
+# The desktop's light or dark mode, followed live: the theme's wallpaper, and foot's colors.
+exec /usr/lib/gooarchy-flavorings/gooarchy-follow-scheme

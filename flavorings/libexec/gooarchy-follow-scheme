@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Keep the session in the desktop's light or dark mode (org.gnome.desktop.interface color-scheme,
+which gooarchy-theme sets): draw the theme's wallpaper (swaybg), and keep foot in the same mode,
+both for terminals opened later (~/.local/state/gooarchy/foot-theme.ini, which Gooarchy's foot
+configuration includes) and for open ones (SIGUSR1 switches foot to dark, SIGUSR2 to light).
+Exits when the session does: swaybg ending on its own means the compositor is gone."""
+import os
+import select
+import subprocess
+from pathlib import Path
+
+THEMES = "/usr/share/gooarchy-flavorings/themes"
+STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "gooarchy"
+
+
+def mode():
+    scheme = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                            capture_output=True, text=True).stdout
+    return "dark" if "dark" in scheme else "light"
+
+
+def draw(current):
+    return subprocess.Popen(["swaybg", "--mode", "fill", "--image",
+                             f"{THEMES}/watercolor-dream-{current}/background.webp"])
+
+
+def terminals(current):
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = STATE / ".foot-theme.ini.new"
+    tmp.write_text(f"# Written by gooarchy-follow-scheme: foot's starting theme, light or dark with the desktop.\n"
+                   f"[main]\ninitial-color-theme={current}\n")
+    tmp.replace(STATE / "foot-theme.ini")
+    signal = "-USR1" if current == "dark" else "-USR2"
+    for name in ("foot", "footclient"):
+        subprocess.run(["pkill", signal, "-u", str(os.getuid()), "-x", name], capture_output=True)
+
+
+monitor = subprocess.Popen(["gsettings", "monitor", "org.gnome.desktop.interface", "color-scheme"],
+                           stdout=subprocess.PIPE, text=True)
+current = mode()
+terminals(current)
+swaybg = draw(current)
+try:
+    while True:
+        ready, _, _ = select.select([monitor.stdout], [], [], 1.0)
+        if ready:
+            if not monitor.stdout.readline():
+                break  # the monitor died; keep the current mode until the session ends
+            current = mode()
+            terminals(current)
+            swaybg.terminate()
+            swaybg.wait()
+            swaybg = draw(current)
+        elif swaybg.poll() is not None:
+            break
+    swaybg.wait()
+finally:
+    monitor.terminate()
+    if swaybg.poll() is None:
+        swaybg.terminate()

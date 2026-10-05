@@ -604,7 +604,7 @@ def main():
     os.unlink(solar)
 
     # Calibration: the wallpaper check must reject a desktop without its wallpaper.
-    run("pkill", "-f", "gooarchy-wallpaper")
+    run("pkill", "-f", "gooarchy-follow-scheme")
     run("pkill", "-x", "swaybg")
     time.sleep(2)
     blank = grab_ppm(int(screen["x"]) + 20, int(screen["y"]) + 20, 240, 240)
