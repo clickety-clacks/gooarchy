@@ -7,7 +7,7 @@
 The SSH command reaches the guest as its admin user (passwordless sudo), to set up accounts and to
 observe. Covered: a password login on tty1 starts Scottland; root on tty1 stays a console; the
 ~/.config/gooarchy/no-session opt-out; a second user gets Scottland and Gooarchy's defaults; a login
-on tty2 stays a console. Autologin is turned off for this (the drop-in is removed). Writes
+on tty2 stays a console. Autologin is turned off for this and put back afterwards. Writes
 login-check.json to OUTDIR; exits 1 if a check fails.
 """
 import json
@@ -128,7 +128,9 @@ def main():
     pw = {"arch": "Vm" + secrets.token_hex(6), "root": "Vm" + secrets.token_hex(6), "ada": "Vm" + secrets.token_hex(6)}
     guest("sudo useradd -m ada 2>/dev/null; "
           + "; ".join(f"echo '{u}:{p}' | sudo chpasswd" for u, p in pw.items()))
-    guest("sudo rm -f /etc/systemd/system/getty@tty1.service.d/gooarchy-autologin.conf && sudo systemctl daemon-reload")
+    dropin = "/etc/systemd/system/getty@tty1.service.d/gooarchy-autologin.conf"
+    saved = guest(f"sudo cat {dropin} 2>/dev/null | base64 -w0")
+    guest(f"sudo rm -f {dropin} && sudo systemctl daemon-reload")
     check("setup: autologin off, tty1 back at a login prompt", logout_console("tty1"))
 
     # 1. A password login on tty1 starts Scottland.
@@ -174,6 +176,12 @@ def main():
           f"session: {bool(ok)}, wayfire: {wayfire_for('arch') or 'none'}")
     logout_console("tty2")
     qmp.keys("ctrl", "alt", "f1")
+
+    # Put autologin back as it was, so the disk boots into the desktop again.
+    if saved:
+        guest(f"echo {saved} | base64 -d | sudo install -Dm644 /dev/stdin {dropin} && sudo systemctl daemon-reload")
+        logout_console("tty1")
+        check("autologin restored: tty1 is back in Scottland", wait_for(lambda: wayfire_for("arch"), timeout=90))
 
     failed = sum(not r["ok"] for r in results)
     with open(os.path.join(OUT, "login-check.json"), "w") as f:
