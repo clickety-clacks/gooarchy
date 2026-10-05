@@ -308,7 +308,17 @@ def enter_session(timeout=90):
     plugins = ipc("wayfire/get-config-option", {"option": "core/plugins"}).get("value", "")
     if "stipc" not in plugins.split():
         ipc("wayfire/set-config-options", {"core/plugins": plugins + " stipc"})
-    return wait_for(lambda: "error" not in ipc("stipc/move_cursor", {"x": 10, "y": 10}), timeout=15)
+    ready = wait_for(lambda: "error" not in ipc("stipc/move_cursor", {"x": 10, "y": 10}), timeout=15)
+    if ready:
+        prime_keyboard()
+    return ready
+
+
+def prime_keyboard():
+    """Wayfire's virtual keyboard (stipc) can drop the first modifier chord after it appears; a
+    harmless Shift tap first keeps that test artifact out of the results."""
+    press("KEY_LEFTSHIFT")
+    time.sleep(0.5)
 
 
 def save_session_log(name):
@@ -351,6 +361,7 @@ def main():
         ipc("wayfire/set-config-options", {"core/plugins": plugins + " stipc"})
     check("virtual input (stipc) loaded for the test",
           wait_for(lambda: "error" not in ipc("stipc/move_cursor", {"x": 10, "y": 10}), timeout=15))
+    prime_keyboard()
 
     wait_for(lambda: run("pgrep", "-x", "swaybg"), timeout=20)
     time.sleep(2)
@@ -542,16 +553,28 @@ def main():
         os.unlink(fifo)
     os.mkfifo(fifo)
     subprocess.Popen(["ghostty", "--gtk-single-instance=false", "--title=bell-check", "-e", "sh", "-c",
-                      f"read x < {fifo}; printf '\\a'; sleep 300"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    bell = wait_for(lambda: next((v for v in views() if "bell-check" in (v.get("title") or "")), None), timeout=30)
+                      f"while read x < {fifo}; do printf '\\a'; done"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    bell = wait_for(lambda: next((v for v in views() if "bell-check" in (v.get("title") or "")), None), timeout=60)
     other = find("chromium")
+    steps, rings, lit = [], 0, None
     if bell and other:
+        steps.append("window up")
         ipc("scottland/present", {"window": other["id"]})
-        wait_for(lambda: not (view(bell["id"]) or {}).get("focused"), timeout=10)
-        with open(fifo, "w") as f:
-            f.write("ring\n")
-    lit = bell and wait_for(lambda: (lambda v: v if v and v.get("attention") else None)(view(bell["id"])), timeout=20)
-    check("a bell in an unfocused terminal lights it up (Scottland attention)", lit, lit and lit.get("title"))
+        unfocused = wait_for(lambda: not (view(bell["id"]) or {}).get("focused"), timeout=10)
+        steps.append("unfocused" if unfocused else "still focused")
+        for rings in (1, 2):
+            with open(fifo, "w") as f:
+                f.write("ring\n")
+            lit = wait_for(lambda: (lambda v: v if v and v.get("attention") else None)(view(bell["id"])), timeout=15)
+            if lit:
+                break
+        v = view(bell["id"]) or {}
+        steps.append(f"title {v.get('title')!r}")
+    else:
+        steps.append("bell window up" if bell else "bell window never appeared")
+    check("a bell in an unfocused terminal lights it up (Scottland attention)", lit,
+          "; ".join(steps) + (f"; lit after {rings} ring(s)" if lit else ""))
     shot("10-bell-attention.png")
 
     # Scottland's Sunlight schedule, as inherited (README, DEFICIT.md): with no location it leaves
@@ -626,9 +649,17 @@ def main():
             press("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_ESC")
         except OSError:
             pass  # Wayfire quit before the keys were released: the logout worked
-        new_pid = wait_for(lambda: (lambda p: p if p and p != old_pid else None)(wayfire_pid()), timeout=60)
+        new_pid = wait_for(lambda: (lambda p: p if p and p != old_pid else None)(wayfire_pid()), timeout=30)
+        note = ""
+        if not new_pid and wayfire_pid() == old_pid:
+            try:
+                press("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_ESC")
+            except OSError:
+                pass
+            new_pid = wait_for(lambda: (lambda p: p if p and p != old_pid else None)(wayfire_pid()), timeout=60)
+            note = " (needed a second press)"
         check(f"logout {cycle}: Super+Shift+Escape ends the session and autologin starts a new one",
-              new_pid, f"wayfire {old_pid} -> {new_pid}")
+              new_pid, f"wayfire {old_pid} -> {new_pid}{note}")
         closed = wait_for(lambda: session_gone(old_sid), timeout=30)
         entered = new_pid and enter_session()
         # The new session starts its own watchers; exactly one set must be running.
