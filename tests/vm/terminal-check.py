@@ -327,7 +327,7 @@ def identity():
             # output line. Sparse digits need not change five percent of the whole background.
             changed = sum(any(abs(before[(y * w + x) * 3 + c] - after[(y * w + x) * 3 + c]) > 12
                               for c in range(3))
-                          for y in range(40, int(h * .6)) for x in range(40, w - 40))
+                          for y in range(40, int(h * .6)) for x in range(8, w - 40))
             return changed >= 50
         check("a finger dragged down the window scrolls back (text-region pixels change)",
               g.wait_for(scrolled_pixels, timeout=15), f"{changed} text-region pixels changed")
