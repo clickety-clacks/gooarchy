@@ -144,7 +144,10 @@ class Pane:
 
     def present(self):
         g.ipc("scottland/present", {"window": self.view["id"]})
-        return g.wait_for(lambda: (self.state() or {}).get("focused"), timeout=10)
+        focused = g.wait_for(lambda: (self.state() or {}).get("focused"), timeout=10)
+        if not focused:
+            raise RuntimeError(f"{self.name}: terminal did not receive focus before input")
+        return focused
 
     def frame(self):
         f = (self.state() or {}).get("scene_frame") or (self.state() or {}).get("frame")
