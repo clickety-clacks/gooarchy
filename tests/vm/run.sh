@@ -288,8 +288,11 @@ cmd_install() {
   local out; out=$(artifacts)
   copy_checkout
   local status=0
-  local kernel_option=
-  [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]] && kernel_option=--kernel
+  local kernel_option= kernel_build_env=
+  if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+    kernel_option=--kernel
+    kernel_build_env=MAKEFLAGS=-j$kernel_jobs
+  fi
   if [[ ${GOOARCHY_VM_RETRY_TEST:-1} == 1 ]]; then
     # A failed attempt (made to fail at the Strata step), then a retry that must complete.
     log "running ./install.sh, made to fail at packaging/strata.sh (log: $out/install-failed-attempt.log)"
@@ -304,7 +307,7 @@ cmd_install() {
     status=0
   fi
   log "running ./install.sh --yes --autologin (log: $out/install.log)"
-  guest "cd ~/gooarchy && MAKEFLAGS=-j$kernel_jobs $(guest_proxy_env) ./install.sh --yes --autologin $kernel_option" >"$out/install.log" 2>&1 || status=$?
+  guest "cd ~/gooarchy && $kernel_build_env $(guest_proxy_env) ./install.sh --yes --autologin $kernel_option" >"$out/install.log" 2>&1 || status=$?
   tail -n 30 "$out/install.log" >&2
   guest 'tar -C ~/.local/state/gooarchy -cf - logs builds.tsv reports.log 2>/dev/null' | tar -C "$out" -xf - 2>/dev/null || true
   hcheck "./install.sh completes (after the failed attempt, when the retry test runs)" "$(( status == 0 ))" "exit $status"
