@@ -13,9 +13,11 @@ linux-gooarchy is the Linux kernel (GPL-2.0-only, kernel.org) with two sets of p
 2. **Gooarchy's own patches**, in `patches/`, applied after Omarchy's. Each carries its upstream
    author, sign-offs and links in its header.
 
-| Gooarchy patch | Author | Upstream | Why Gooarchy carries it |
+Gooarchy carries no patches of its own at present. Dropped:
+
+| Gooarchy patch | Author | Upstream | Dropped because |
 |---|---|---|---|
-| `0001-spi-cs42l43-workaround-for-wrong-speaker-id-on-dell-xps-13-dx13260.patch` | Richard Fitzgerald (Cirrus Logic) | [v2 on linux-spi](https://lore.kernel.org/linux-spi/20261001085830.4014291-1-rf@opensource.cirrus.com/) (2026-10-01, reviewed), superseding [v1](https://lore.kernel.org/linux-spi/20260919134730.895381-1-rf@opensource.cirrus.com/); [kernel bug 221956](https://bugzilla.kernel.org/show_bug.cgi?id=221956) | Dell XPS 13 DX13260: the amplifiers read the wrong speaker ID, so the speakers stay silent or get the wrong amp tuning. Context: [omacom/omarchy#9687](https://github.com/omacom/omarchy/issues/9687). Drop it once the kernel Omarchy ships contains it. |
+| `0001-spi-cs42l43-workaround-for-wrong-speaker-id-on-dell-xps-13-dx13260.patch` (Dell XPS 13 DX13260 speaker ID; [kernel bug 221956](https://bugzilla.kernel.org/show_bug.cgi?id=221956)) | Richard Fitzgerald (Cirrus Logic) | [v2 on linux-spi](https://lore.kernel.org/linux-spi/20261001085830.4014291-1-rf@opensource.cirrus.com/) | Omarchy's 7.2.8-2 (`8d103ac`) carries the same v2 change in its `0528-asoc-fixes-4.patch` (identical `drivers/spi/spi-cs42l43.c` hunk), so linux-gooarchy gets it from Omarchy's patch set. |
 
 `keys/pgp/` holds the public keys used to check the sources: the kernel release signers (Linus
 Torvalds, Greg Kroah-Hartman) and Omarchy's patch signing key, all as published in

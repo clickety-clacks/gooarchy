@@ -8,17 +8,16 @@
 
 pkgbase=linux-gooarchy
 # --- pinned by bump.py ----------------------------------------------------------------------
-_omarchy_commit=18433c2499ba60c826c4d040320405c5672e53bd
-pkgver=7.2.5
-_omarchy_pkgrel=6
+_omarchy_commit=8d103ac6e3edeaf4dff8a71de671c00aad78e443
+pkgver=7.2.8
+_omarchy_pkgrel=2
 _gooarchy_rel=1
 _gooarchy_patches=(
-  0001-spi-cs42l43-workaround-for-wrong-speaker-id-on-dell-xps-13-dx13260.patch
 )
-_kernel_sha256sums=('55ddf0df8325d9dad96fcff7bd93977d22e3f50af06527572af59b77c7632b78' 'SKIP')
-_kernel_b2sums=('48551bee71cd02815136fb8abe7da4464c2e17c89ef35cb0c0530c8b969fe12127ca97ab6c656ea8e5b29f2c4a8fe4cc143a626f4cca6b972a8105991e4c6905' 'SKIP')
-_patch_sha256sums=('61b549a60b1542e05d85adf5a5834c63d78628cf8bac5d3890fb6f650b139834')
-_patch_b2sums=('af4067689a1454ff36f070293767d6495c416b19ce8d60c735f5340df955b1450fe78d644422ff09cf6384b669f21f05575025f25be5e3c65de718f82fd19d53')
+_kernel_sha256sums=('12e8d5a973d1ad7c5a5c69882e4022b131ed715db7003fdcd760ddf8c3e51941' 'SKIP')
+_kernel_b2sums=('5326dde778eb945f282740ef0d8765b46fbd198f1209cdfd7b91e5dac1312fc01f8bf0b2bc67b16a76de736edd8ea21b38b6c91e696ec0c4b39746cd21a15214' 'SKIP')
+_patch_sha256sums=()
+_patch_b2sums=()
 # --- end of pinned block ----------------------------------------------------------------------
 # Omarchy's release number, then Gooarchy's (reset to 1 when Omarchy's release changes).
 pkgrel=$_omarchy_pkgrel.$_gooarchy_rel
@@ -82,6 +81,10 @@ validpgpkeys=(
 sha256sums=("${_kernel_sha256sums[@]}" SKIP SKIP SKIP "${_patch_sha256sums[@]}")
 b2sums=("${_kernel_b2sums[@]}" SKIP SKIP SKIP "${_patch_b2sums[@]}")
 
+export KBUILD_BUILD_HOST=gooarchy
+export KBUILD_BUILD_USER=$pkgbase
+export KBUILD_BUILD_TIMESTAMP="$(date -Ru${SOURCE_DATE_EPOCH:+d @$SOURCE_DATE_EPOCH})"
+
 # Omarchy's patches, in the order their PKGBUILD lists (and applies) them.
 _omarchy_patches() {
   grep -oE '^  [0-9]{4}-[^ {]+\.patch' "$srcdir/$_omarchy/PKGBUILD" | sed 's/^  //'
@@ -141,7 +144,8 @@ build() {
   cd $_srcname
   MAKEFLAGS="-j$(nproc) $MAKEFLAGS"
   make all
-  make -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
+  env -u CFLAGS -u CXXFLAGS -u LDFLAGS \
+    make -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
 }
 
 _package() {

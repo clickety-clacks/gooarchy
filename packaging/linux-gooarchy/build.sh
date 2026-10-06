@@ -1,6 +1,8 @@
 #!/bin/bash
 # Build linux-gooarchy (and linux-gooarchy-headers) on an x86_64 build or test host. Builds only:
-# installing a kernel is a separate, deliberate step. Takes about an hour on 4 cores.
+# installing a kernel is a separate, deliberate step. Needs about 35 GB free in the build directory
+# while it runs (the kernel build tree; less on disk under btrfs compression) and takes hours: about
+# 2h15m with two jobs in a test VM.
 #
 #   packaging/linux-gooarchy/build.sh      packages land in $GOOARCHY_KERNEL_BUILD (printed)
 #
@@ -13,6 +15,7 @@ dir=${GOOARCHY_KERNEL_BUILD:-${XDG_CACHE_HOME:-$HOME/.cache}/gooarchy/build/linu
 [[ $(uname -m) == x86_64 ]] || { echo "build.sh: linux-gooarchy is an x86_64 kernel; build it on an x86_64 host" >&2; exit 1; }
 rm -rf "$dir/pkg" "$dir"/*.pkg.tar.* "$dir/gnupg"
 mkdir -p "$dir"
+shopt -s nullglob  # patches/ may be empty
 cp "$here/PKGBUILD" "$here/NOTICE.md" "$here/LICENSE.omarchy-pkgs" "$here"/patches/*.patch "$dir/"
 export GNUPGHOME=$dir/gnupg
 mkdir -m700 "$GNUPGHOME"
