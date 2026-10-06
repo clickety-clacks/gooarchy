@@ -169,7 +169,20 @@ stop_seed() {
   rm -f "$run/seed-http.pid"
 }
 
-running() { [[ -f $run/qemu.pid ]] && kill -0 "$(cat "$run/qemu.pid")" 2>/dev/null; }
+running() {
+  # A PID file can survive a host restart; verify the process before stop/kill uses it.
+  local pid arg
+  local -a args
+  [[ -f $run/qemu.pid ]] || return 1
+  pid=$(cat "$run/qemu.pid")
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+  mapfile -d '' -t args 2>/dev/null <"/proc/$pid/cmdline" || return 1
+  [[ ${args[0]:-} == */qemu-system-x86_64 || ${args[0]:-} == qemu-system-x86_64 ]] || return 1
+  for arg in "${args[@]}"; do
+    [[ $arg == "file=$run/disk.qcow2,if=virtio,discard=unmap" ]] && return 0
+  done
+  return 1
+}
 
 wait_ssh() {
   local deadline=$((SECONDS + ${1:-300}))
