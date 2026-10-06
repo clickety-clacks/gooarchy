@@ -31,6 +31,8 @@ from pathlib import Path
 HOME = Path.home()
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
 STATE = Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local/state") / "gooarchy"
+# foot's include can't follow XDG_STATE_HOME, so Gooarchy's foot.ini names this path as it is.
+FOOT_THEME = HOME / ".local/state/gooarchy/foot-theme.ini"
 MARKERS = STATE / "flavorings"
 SHARE = Path("/usr/share/gooarchy-flavorings")
 SESSION = "--session" in sys.argv
@@ -191,7 +193,7 @@ def ghostty():
 def foot():
     """foot uses Gooarchy's configuration (Watercolor Dream light/dark, bell, font) by including it."""
     shared = SHARE / "foot" / "foot.ini"
-    mode_file = STATE / "foot-theme.ini"
+    mode_file = FOOT_THEME
     if read_text(mode_file) is None:
         # The session keeps this current (gooarchy-follow-scheme); start it before any login.
         write_file(mode_file, "# Written by Gooarchy: foot's starting theme, light or dark with the desktop.\n"

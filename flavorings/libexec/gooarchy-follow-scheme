@@ -10,7 +10,8 @@ import subprocess
 from pathlib import Path
 
 THEMES = "/usr/share/gooarchy-flavorings/themes"
-STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "gooarchy"
+# Where Gooarchy's foot.ini includes it from: foot's include can't follow XDG_STATE_HOME.
+FOOT_THEME = Path.home() / ".local/state/gooarchy/foot-theme.ini"
 
 
 def mode():
@@ -25,11 +26,11 @@ def draw(current):
 
 
 def terminals(current):
-    STATE.mkdir(parents=True, exist_ok=True)
-    tmp = STATE / ".foot-theme.ini.new"
+    FOOT_THEME.parent.mkdir(parents=True, exist_ok=True)
+    tmp = FOOT_THEME.with_name(".foot-theme.ini.new")
     tmp.write_text(f"# Written by gooarchy-follow-scheme: foot's starting theme, light or dark with the desktop.\n"
                    f"[main]\ninitial-color-theme={current}\n")
-    tmp.replace(STATE / "foot-theme.ini")
+    tmp.replace(FOOT_THEME)
     signal = "-USR1" if current == "dark" else "-USR2"
     for name in ("foot", "footclient"):
         subprocess.run(["pkill", signal, "-u", str(os.getuid()), "-x", name], capture_output=True)
