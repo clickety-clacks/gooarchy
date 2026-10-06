@@ -38,11 +38,14 @@ build() {
 }
 
 package_gooarchy() {
-  depends=('scottland' 'strata-bin' 'gooarchy-flavorings'
+  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'jq'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
   install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
   install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
   install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
+  install -Dm755 "$_repo/session/35-gooarchy-lid" "$pkgdir/usr/lib/scottland/config.d/35-gooarchy-lid"
+  install -Dm755 "$_repo/session/autostart.d/45-gooarchy-clamshell" "$pkgdir/usr/lib/scottland/autostart.d/45-gooarchy-clamshell"
+  install -Dm755 "$_repo/session/libexec/gooarchy-clamshell" "$pkgdir/usr/bin/gooarchy-clamshell"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
 gooarchy $pkgver
 checkout $(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo unknown)${_dirty:+ with uncommitted changes}

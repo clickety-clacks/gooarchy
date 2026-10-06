@@ -1,0 +1,4 @@
+#!/bin/sh
+# At session start, put the laptop panel in the state the lid and the docks call for: a session
+# started with the lid closed on a dock starts with the panel off, as one that saw the lid close.
+exec gooarchy-clamshell

@@ -128,6 +128,7 @@ the new Wayfire.
 | `flavorings/` | The curated defaults: Scottland config fragment and hooks, theme, tmux, mosh, default apps, per-user defaults (`gooarchy-flavorings-apply`). They will move to [gooarchy-flavorings](https://github.com/clickety-clacks/gooarchy-flavorings), which Scottland's Omarchy adapter will also install |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
 | `tests/flavorings-apply-test.py` | The per-user defaults tool in throwaway home directories |
+| `tests/clamshell-test.py` | Clamshell mode on the lid in a headless Scottland session (needs a Scottland checkout with output control; run on a test machine) |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
 Gooarchy's programs, hooks, themes and default configuration all come from packages. Outside

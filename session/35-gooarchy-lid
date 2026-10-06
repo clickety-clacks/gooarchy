@@ -1,0 +1,15 @@
+#!/bin/sh
+# Scottland config fragment: clamshell mode on the laptop lid. Every lid change, also on the lock
+# screen, runs gooarchy-clamshell, which turns the laptop panel off while the lid is closed and an
+# external display is in use, and back on otherwise (Scottland's switch bindings, core E11).
+if [ "${1:-}" = --watch-paths ]; then
+  exit 0
+fi
+cat <<'INI'
+[scottland]
+# Gooarchy: clamshell mode (gooarchy-clamshell)
+switch_device_gooarchy_lid = Lid Switch
+switch_state_gooarchy_lid = toggle
+switch_locked_gooarchy_lid = true
+switch_command_gooarchy_lid = gooarchy-clamshell
+INI
