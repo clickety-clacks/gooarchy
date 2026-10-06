@@ -368,6 +368,12 @@ cmd_kernel_check() {
   guest "cd ~/gooarchy && export GOOARCHY_PATH=\$PWD GOOARCHY_INSTALL=\$PWD/install
          export GOOARCHY_STATE=\$HOME/.local/state/gooarchy GOOARCHY_BUILD=\$HOME/.cache/gooarchy/build
          MAKEFLAGS=-j$kernel_jobs $(guest_proxy_env) bash -e -o pipefail install/packaging/kernel.sh" >"$out/kernel-install.log" 2>&1
+  cmd_kernel_boot_check
+}
+
+cmd_kernel_boot_check() {
+  # Boot an already installed candidate, e.g. after an interrupted build was recovered.
+  running || die "the guest is not running"
   prepare_kernel_boot
   cmd_reboot
   local version; version=$(guest 'uname -r')
@@ -552,6 +558,7 @@ case ${1:-all} in
   reboot) cmd_reboot ;;
   check) cmd_check ;;
   kernel-check) cmd_kernel_check ;;
+  kernel-boot-check) cmd_kernel_boot_check ;;
   login-check) cmd_login_check ;;
   upgrade-guard) cmd_upgrade_guard ;;
   ssh) shift; guest -t "$@" ;;
