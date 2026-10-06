@@ -156,7 +156,7 @@ EOF
 ensure_seed() {
   # cloud-init asks for its seed at every boot; without it, it re-initializes the instance (new
   # host keys, no SSH key). Keep serving it on the port the guest was booted with.
-  [[ -f $run/seed-http.pid ]] && kill -0 "$(cat "$run/seed-http.pid")" 2>/dev/null && return 0
+  seed_running && return 0
   local seed_port
   seed_port=$(tr '\0' '\n' <"/proc/$(cat "$run/qemu.pid")/cmdline" | sed -n 's|.*10\.0\.2\.2:\([0-9]*\)/.*|\1|p')
   setsid python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
@@ -164,8 +164,21 @@ ensure_seed() {
   echo $! >"$run/seed-http.pid"
 }
 
+seed_running() {
+  local pid
+  local -a args
+  [[ -f $run/seed-http.pid ]] || return 1
+  pid=$(cat "$run/seed-http.pid")
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+  mapfile -d '' -t args 2>/dev/null <"/proc/$pid/cmdline" || return 1
+  [[ ${args[0]:-} == */python3 || ${args[0]:-} == python3 ]] &&
+    [[ ${args[1]:-} == -m && ${args[2]:-} == http.server &&
+       ${args[3]:-} == --bind && ${args[4]:-} == 127.0.0.1 &&
+       ${args[5]:-} == --directory && ${args[6]:-} == "$run/seed" ]]
+}
+
 stop_seed() {
-  [[ -f $run/seed-http.pid ]] && kill "$(cat "$run/seed-http.pid")" 2>/dev/null || true
+  seed_running && kill "$(cat "$run/seed-http.pid")" 2>/dev/null || true
   rm -f "$run/seed-http.pid"
 }
 
@@ -521,7 +534,8 @@ EOF
 cmd_stop() {
   stop_seed
   if running; then
-    python3 "$here/qmp.py" "$run/qmp.sock" quit >/dev/null 2>&1 || kill "$(cat "$run/qemu.pid")" 2>/dev/null || true
+    python3 "$here/qmp.py" "$run/qmp.sock" quit >/dev/null 2>&1 ||
+      { running && kill "$(cat "$run/qemu.pid")" 2>/dev/null; } || true
     local deadline=$((SECONDS + 20))
     while running && (( SECONDS < deadline )); do sleep 1; done
     running && kill -9 "$(cat "$run/qemu.pid")" 2>/dev/null || true
