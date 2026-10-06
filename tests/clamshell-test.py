@@ -196,7 +196,7 @@ try:
     ok, seen = wait(lambda: "eDP-1" not in outputs(), timeout=10)
     check("docked lid close turns the laptop panel off", ok, seen)
     check("the external display stays on, in place", outputs().get("DP-1") == DOCK, outputs())
-    check("the panel no longer renders (screencopy of eDP-1 fails)", capture("eDP-1", "closed") is None)
+    check("the panel produces no frames (screencopy of eDP-1 fails)", capture("eDP-1", "closed") is None)
     check("the script records that it turned the panel off", flag.exists())
 
     ok, _ = lid(False)
@@ -204,7 +204,7 @@ try:
     ok, seen = wait(lambda: outputs().get("eDP-1") == PANEL, timeout=10)
     check("lid open brings the panel back at its scale (1.5) and position (1920,0)", ok, seen)
     shot = capture("eDP-1", "open")
-    check("the panel renders again (screencopy of eDP-1 is its 1280x720 mode)", shot == (1280, 720), shot)
+    check("the panel produces frames again (screencopy of eDP-1 returns its 1280x720 mode)", shot == (1280, 720), shot)
     check("the record is gone", not flag.exists())
 
     # A panel the user turned off stays off while docked.
