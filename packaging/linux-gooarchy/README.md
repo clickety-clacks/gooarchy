@@ -7,6 +7,16 @@ from whom). It doesn't use Omarchy's package repository: it builds from Omarchy'
 Status: **not Gooarchy's default kernel.** It becomes the default only after it passes the VM test
 and real hardware. Until then it is opt-in, and nothing installs it without being asked.
 
+Installed-guest validation for **7.2.5-6.1-gooarchy**: both split packages built and installed,
+the candidate booted directly in QEMU and passed **50/50 software-desktop checks**, and the
+installed headers compiled an external module with matching version metadata. The ordinary
+kernel still booted through the disk bootloader, with unchanged GRUB configuration hashes.
+The initial direct-boot transition lost buffered guest writes; the controller now requires
+`sync` before stopping QEMU. Validation reused the completed compilation to repackage and
+install after that correction. The full fresh `--kernel` installer route has not been run;
+real-hardware audio and bootloader integration remain pending. Cirrus v2 is enabled and
+packaged, but its physical speaker behavior is not established by a VM.
+
 | File | What |
 |---|---|
 | `PKGBUILD` | The package. Its pinned block (Omarchy commit, kernel version, Omarchy's release, Gooarchy's release, Gooarchy's patch list, checksums) is written by `bump.py`; the rest is Omarchy's build and package steps with a `prepare()` that checks and applies both patch sets |
