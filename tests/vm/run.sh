@@ -132,7 +132,8 @@ fetch_image() {
 
 seed() {
   # cloud-init NoCloud seed, served over HTTP from the host: the image's default user (arch, with
-  # passwordless sudo) gets this run's SSH key. Nothing else is configured here.
+  # passwordless sudo) gets this run's SSH key. Disable the network-time wait in bootcmd, before
+  # its ordering can hold sshd on the first boot. QEMU supplies the RTC; this is test-only.
   [[ -f $run/id_ed25519 ]] || ssh-keygen -q -t ed25519 -N '' -C gooarchy-vm-test -f "$run/id_ed25519"
   mkdir -p "$run/seed"
   # One instance id per disk: a new one makes cloud-init set the machine up again.
@@ -142,6 +143,8 @@ seed() {
 #cloud-config
 ssh_authorized_keys:
   - $(cat "$run/id_ed25519.pub")
+bootcmd:
+  - [systemctl, mask, --now, systemd-time-wait-sync.service]
 EOF
   local seed_port
   seed_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
