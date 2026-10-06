@@ -24,7 +24,9 @@ For an already installed test VM, `tests/vm/run.sh kernel-check` exercises the i
 step, copies the candidate kernel and initramfs out, and boots them directly with QEMU before
 running the desktop check. This validates the running kernel and desktop, not real-machine
 bootloader integration. `GOOARCHY_VM_KERNEL=1 tests/vm/run.sh` includes the opt-in in a full fresh
-VM install. Builds can be lengthy; set `MAKEFLAGS=-j1` when sharing a test host.
+VM install. `tests/vm/run.sh kernel-boot-check` boots and checks a candidate already installed
+in the guest, without rebuilding it. Set `GOOARCHY_VM_KERNEL_JOBS=1` when sharing a VM test
+host; for a standalone `build.sh` invocation, set `MAKEFLAGS=-j1`.
 
 Version: `<kernel>-<Omarchy release>.<Gooarchy release>`, e.g. `7.2.5-6.1`; the running kernel
 reports `7.2.5-6.1-gooarchy`. Gooarchy's release starts at 1 for each Omarchy release and counts
