@@ -4,7 +4,7 @@
 Takes the focused window from Scottland; if it is a terminal, finds the shell running in it (the
 newest login shell among its processes, as listed in /etc/shells) and opens a new terminal of the
 same kind in that shell's working directory. Otherwise, or if no shell is found, opens the default
-terminal ($TERMINAL, else foot, else Ghostty) in the home folder.
+terminal ($TERMINAL, else Ghostty, else foot) in the home folder.
 """
 import json
 import os
@@ -72,7 +72,7 @@ def shell_cwd(pid):
 def default_command(directory):
     configured = os.environ.get("TERMINAL", "")
     name = os.path.basename(configured.split()[0]) if configured else ""
-    for candidate in ([name] if name else []) + ["foot", "ghostty"]:
+    for candidate in ([name] if name else []) + ["ghostty", "foot"]:
         if candidate in PROGRAMS and shutil.which(candidate):
             return TERMINALS[PROGRAMS[candidate]](directory)
     if configured:

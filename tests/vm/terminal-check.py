@@ -46,6 +46,10 @@ results, observations, metrics = [], [], {}
 procs = []
 
 
+class HangDeadline(BaseException):
+    """The overall hang deadline must escape scenario and observation exception handlers."""
+
+
 def log(message):
     print(f"[{time.strftime('%H:%M:%S')}] [{TERMINAL}] {message}", flush=True)
 
@@ -108,8 +112,21 @@ class Pane:
         self.ok = bool(self.view) and bool(g.wait_for(lambda: os.path.exists(self.ready), timeout=30))
 
     def send(self, line):
-        with open(self.fifo, "w") as f:
-            f.write(line + "\n")
+        if not self.ok or self.proc.poll() is not None:
+            raise RuntimeError(f"{self.name}: test shell is not running")
+        # A crashed terminal must not leave the harness blocked opening a FIFO with no reader.
+        fd = os.open(self.fifo, os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            os.write(fd, (line + "\n").encode())
+        finally:
+            os.close(fd)
+
+    def completed(self, line):
+        """Run a setup command once and wait until the fixture shell has completed it."""
+        marker = f"{TMP}/{self.name}.{secrets.token_hex(6)}.done"
+        self.send(f"{line}; touch {marker}")
+        if not g.wait_for(lambda: os.path.exists(marker), timeout=30):
+            raise RuntimeError(f"{self.name}: setup command did not complete: {line}")
 
     def state(self):
         return g.view(self.view["id"]) if self.view else None
@@ -136,6 +153,21 @@ def pixel(image, x, y):
     w, h, pixels = image
     i = (y * w + x) * 3
     return tuple(pixels[i:i + 3])
+
+
+def settled_pixels(pane, previous=None):
+    """Wait for captured client pixels to change (when requested), then agree across samples."""
+    last, matching = None, 0
+    def ready():
+        nonlocal last, matching
+        image = ppm(pane.frame())
+        matching = matching + 1 if image == last else 1
+        last = image
+        return image if matching >= 3 and (previous is None or image[2] != previous) else None
+    image = g.wait_for(ready, timeout=30, interval=.1)
+    if image is None:
+        raise RuntimeError(f"{pane.name}: captured pixels did not settle")
+    return image
 
 
 def near(a, b, tolerance=12):
@@ -225,7 +257,8 @@ def bells():
     # they need you is a plain BEL, the same byte as above.
     claude = json.load(open(f"{HOME}/.claude.json")).get("preferredNotifChannel")
     codex = tomllib.load(open(f"{HOME}/.codex/config.toml", "rb")).get("tui", {})
-    plain_ok = all(r["ok"] for r in results if r["check"].startswith("bell (plain)"))
+    plain_results = [r for r in results if r["check"].startswith("bell (plain)")]
+    plain_ok = len(plain_results) == 1 and plain_results[0]["ok"]
     check("Claude Code's and Codex's seeded settings select BEL, which lights the window (agents not run)",
           claude == "terminal_bell" and codex.get("notification_method") == "bel" and codex.get("notifications") is True
           and plain_ok, f"claude {claude}, codex {codex}")
@@ -243,23 +276,29 @@ def identity():
     check("config: Scottland's touch scrolling lists this app-id", re.search(regex, APP_ID) is not None, regex)
     # Touch scrolling: a finger dragged down the window scrolls the scrollback (seen on screen).
     pane.present()
-    pane.send("seq 1 4000")
-    time.sleep(1.5)
+    before_output = ppm(pane.frame())[2]
+    pane.completed("seq 1 4000")
     f = pane.frame()
-    before = ppm(f)[2]
+    before = settled_pixels(pane, previous=before_output)[2]
     x, y = f["x"] + f["width"] // 2, f["y"] + f["height"] // 3
     probe = g.ipc("stipc/touch", {"finger": 0, "x": x, "y": y})
     if isinstance(probe, dict) and probe.get("error"):
         observe("touch scrolling", f"not testable here: {probe.get('error')}")
     else:
-        for i in range(1, 21):
-            g.ipc("stipc/touch", {"finger": 0, "x": x, "y": y + i * 20})
-            time.sleep(0.02)
-        g.ipc("stipc/touch_release", {"finger": 0})
-        time.sleep(1.0)
-        after = ppm(pane.frame())[2]
-        changed = sum(a != b for a, b in zip(before[::31], after[::31])) / max(1, len(before[::31]))
-        check("a finger dragged down the window scrolls back (screen changes)", changed > 0.05, f"{changed:.1%} of samples changed")
+        try:
+            for i in range(1, 21):
+                g.ipc("stipc/touch", {"finger": 0, "x": x, "y": y + i * 20})
+                time.sleep(0.02)  # gesture pacing
+        finally:
+            g.ipc("stipc/touch_release", {"finger": 0})
+        changed = 0
+        def scrolled_pixels():
+            nonlocal changed
+            after = ppm(pane.frame())[2]
+            changed = sum(a != b for a, b in zip(before[::31], after[::31])) / max(1, len(before[::31]))
+            return changed > 0.05
+        check("a finger dragged down the window scrolls back (screen changes)",
+              g.wait_for(scrolled_pixels, timeout=15), f"{changed:.1%} of samples changed")
         g.shot(f"{TERMINAL}-touch-scroll.png")
     pane.proc.terminate()
     # tmux set-titles: "session on host" as the window title.
@@ -276,8 +315,7 @@ def identity():
 def colors():
     pane = Pane()
     pane.present()
-    pane.send("clear; printf '\\033[41m%60s\\033[0m\\n' ''")
-    time.sleep(1)
+    pane.completed("clear; printf '\\033[41m%60s\\033[0m\\n' ''")
 
     def sample():
         f = pane.frame()
@@ -299,9 +337,13 @@ def colors():
     g.shot(f"{TERMINAL}-dark.png")
     fresh = Pane()
     fresh.present()
-    f = fresh.frame()
-    corner = pixel(ppm(f), f["width"] - 30, f["height"] - 30)
-    check("a window opened in dark mode starts dark", near(corner, hex_rgb(theme("dark")["background"])), f"bg {corner}")
+    corner = None
+    def dark_pixels():
+        nonlocal corner
+        f = fresh.frame()
+        corner = pixel(ppm(f), f["width"] - 30, f["height"] - 30)
+        return near(corner, hex_rgb(theme("dark")["background"]))
+    check("a window opened in dark mode starts dark", g.wait_for(dark_pixels, timeout=10), f"bg {corner}")
     fresh.proc.terminate()
     pane.present()
     g.run("gooarchy-theme", "light")
@@ -314,15 +356,19 @@ def folders():
     folder = f"{TMP}/cwd here"
     os.makedirs(folder, exist_ok=True)
     pane = Pane()
-    pane.send(f"cd '{folder}'")
-    time.sleep(0.5)
+    pane.completed(f"cd '{folder}'")
     pane.present()
     before = ids()
     g.press("KEY_LEFTMETA", "KEY_LEFTALT", "KEY_ENTER")
     new = g.wait_for(lambda: [v for v in g.views() if v["id"] not in before and v.get("app_id") == APP_ID], timeout=20)
-    cwds = new and g.wait_for(lambda: [c for _, c in shells_under(new[0]["pid"])], timeout=10)
+    cwds = []
+    def correct_cwd():
+        nonlocal cwds
+        cwds = [c for _, c in shells_under(new[0]["pid"])]
+        return folder in cwds
+    cwd_ok = new and g.wait_for(correct_cwd, timeout=10)
     check("Super+Alt+Return opens a terminal of the same kind in the folder of the focused one",
-          new and folder in (cwds or []), f"new window: {bool(new)}, its shell's folder: {cwds}")
+          cwd_ok, f"new window: {bool(new)}, its shell's folder: {cwds}")
     for v in new or []:
         g.run("kill", str(v["pid"]))
     pane.proc.terminate()
@@ -335,12 +381,13 @@ def folders():
     sv = g.wait_for(lambda: next((v for v in g.views() if "strata" in (v.get("app_id") or "").lower()), None), timeout=30)
     if sv:
         g.ipc("scottland/present", {"window": sv["id"]})
-        time.sleep(2)
+        if not g.wait_for(lambda: (g.view(sv["id"]) or {}).get("focused"), timeout=10):
+            raise RuntimeError("Strata did not receive focus before the folder shortcut")
         before = ids()
         g.press("KEY_LEFTCTRL", "KEY_T")
         new = g.wait_for(lambda: [v for v in g.views() if v["id"] not in before and v.get("app_id") == APP_ID], timeout=20)
-        cwds = new and g.wait_for(lambda: [c for _, c in shells_under(new[0]["pid"])], timeout=10)
-        check("Strata's Ctrl+T opens this terminal in the folder Strata shows", new and folder in (cwds or []),
+        cwd_ok = new and g.wait_for(correct_cwd, timeout=10)
+        check("Strata's Ctrl+T opens this terminal in the folder Strata shows", cwd_ok,
               f"new window: {bool(new)}, its shells' folders: {cwds}")
         for v in new or []:
             if v.get("pid") != sv.get("pid"):
@@ -354,10 +401,10 @@ def glyphs():
     pane = Pane()
     pane.present()
     nerd, emoji, missing = "", "\U0001f642", "\U0010fffd"
-    pane.send(f"clear; printf 'X MMMMMMMMMMMMMMMM\\n\\nX {nerd * 6}\\n\\nX {emoji * 6}\\n\\nX {missing * 12}\\n'")
-    time.sleep(1.5)
+    before = ppm(pane.frame())[2]
+    pane.completed(f"clear; printf 'X MMMMMMMMMMMMMMMM\\n\\nX {nerd * 6}\\n\\nX {emoji * 6}\\n\\nX {missing * 12}\\n'")
     f = pane.frame()
-    w, h, px = ppm(f)
+    w, h, px = settled_pixels(pane, previous=before)
     bg = pixel((w, h, px), w - 20, h - 20)
     ink = lambda x, y: sum(abs(a - b) for a, b in zip(pixel((w, h, px), x, y), bg)) > 90
     rows = [y for y in range(h) if any(ink(x, y) for x in range(0, min(w, 400), 2))]
@@ -409,18 +456,20 @@ def copy_paste():
     copier.wait(timeout=10)
     pane.present()
     pane.send(f"head -n1 > {out}")
-    time.sleep(0.5)
+    if not g.wait_for(lambda: os.path.exists(out), timeout=10):
+        raise RuntimeError("the paste reader did not open its output file")
+    before = ppm(pane.frame())[2]
     g.press("KEY_LEFTCTRL", "KEY_LEFTSHIFT", "KEY_V")
-    time.sleep(0.3)
+    settled_pixels(pane, previous=before)
     g.press("KEY_ENTER")
     got = g.wait_for(lambda: os.path.exists(out) and open(out).read().strip(), timeout=10)
     check("Ctrl+Shift+V pastes the clipboard", got == token, f"{got!r}")
     # Copy a selection: double-click a word, Ctrl+Shift+C.
     word = "copyme" + secrets.token_hex(8)
-    pane.send(f"clear; printf '%s\\n' {word}")
-    time.sleep(0.8)
+    before = ppm(pane.frame())[2]
+    pane.completed(f"clear; printf '%s\\n' {word}")
+    settled_pixels(pane, previous=before)
     click(pane.frame(), dx=40, dy=10, double=True)
-    time.sleep(0.3)
     g.press("KEY_LEFTCTRL", "KEY_LEFTSHIFT", "KEY_C")
     copied = g.wait_for(lambda: clipboard() == word and word, timeout=5)
     check("double-click and Ctrl+Shift+C copy a word", copied, f"clipboard {clipboard()!r}")
@@ -447,11 +496,12 @@ def copy_paste():
 def performance():
     # One warm-up launch (cold caches), then five measured: launch -> window in Scottland's model,
     # and the terminal process's proportional memory (PSS) two seconds later.
-    times, mem = [], []
+    times, mem, opened = [], [], []
     for i in range(6):
         t0 = time.monotonic()
         p = launch(["sleep", "30"])
         v = window_of(p.pid, timeout=30)
+        opened.append(bool(v))
         dt = time.monotonic() - t0
         time.sleep(2)
         kib = pss_kib(p.pid)
@@ -459,12 +509,15 @@ def performance():
         p.wait(timeout=10)
         if i and v:
             times.append(dt)
-            mem.append(kib)
-    metrics["start_seconds"] = {"median": round(statistics.median(times), 3), "max": round(max(times), 3), "runs": times}
-    metrics["pss_mib"] = {"median": round(statistics.median(mem) / 1024, 1), "max": round(max(mem) / 1024, 1)}
+            if kib is not None:
+                mem.append(kib)
+    metrics["start_seconds"] = {"median": round(statistics.median(times), 3) if times else None,
+                                "max": round(max(times), 3) if times else None, "runs": times}
+    metrics["pss_mib"] = {"median": round(statistics.median(mem) / 1024, 1) if mem else None,
+                          "max": round(max(mem) / 1024, 1) if mem else None, "samples": len(mem)}
     observe("start time (launch to window, s)", metrics["start_seconds"])
     observe("memory (PSS of the terminal process, MiB)", metrics["pss_mib"])
-    check("starts and opens a window every time", len(times) == 5, f"{len(times)}/5")
+    check("starts and opens a window every time, including warm-up", all(opened), f"{sum(opened)}/6")
 
 
 def main():
@@ -483,7 +536,7 @@ def main():
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGALRM, lambda *a: (_ for _ in ()).throw(TimeoutError("terminal check deadline")))
+    signal.signal(signal.SIGALRM, lambda *a: (_ for _ in ()).throw(HangDeadline("terminal check deadline")))
     signal.alarm(1200)
     try:
         main()
@@ -498,6 +551,15 @@ if __name__ == "__main__":
                 pass
         g.run("gooarchy-theme", "light")
         g.run("tmux", "-L", "gooarchy-terminal-check", "kill-server")
+        for p in procs:
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                p.wait(timeout=5)
         failed = sum(not r["ok"] for r in results)
         with open(os.path.join(OUT, f"terminal-{TERMINAL}.json"), "w") as f:
             json.dump({"terminal": TERMINAL, "failures": failed, "results": results, "observations": observations,
