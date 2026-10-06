@@ -21,20 +21,33 @@ PROGRAMS = {"foot": "foot", "ghostty": "com.mitchellh.ghostty"}
 
 
 def focused_view():
-    try:
+    def request(method):
         with socket.socket(socket.AF_UNIX) as s:
             s.settimeout(3)
             s.connect(os.environ["WAYFIRE_SOCKET"])
-            body = json.dumps({"method": "scottland/layout-state", "data": {}}).encode()
+            body = json.dumps({"method": method, "data": {}}).encode()
             s.sendall(struct.pack("<I", len(body)) + body)
-            size = struct.unpack("<I", s.recv(4, socket.MSG_WAITALL))[0]
+            header = s.recv(4, socket.MSG_WAITALL)
+            if len(header) != 4:
+                raise ValueError("incomplete IPC header")
+            size = struct.unpack("<I", header)[0]
             reply = b""
             while len(reply) < size:
                 chunk = s.recv(size - len(reply))
                 if not chunk:
-                    return None
+                    raise ValueError("incomplete IPC response")
                 reply += chunk
-        return next((v for v in json.loads(reply).get("views", []) if v.get("focused")), None)
+        return json.loads(reply)
+
+    try:
+        view = next((v for v in request("scottland/layout-state").get("views", [])
+                     if v.get("focused")), None)
+        if view and view.get("app_id") in TERMINALS:
+            # Presentation state supplies focus; Wayfire supplies client process metadata.
+            client = next((v for v in request("window-rules/list-views")
+                           if v.get("id") == view.get("id")), {})
+            view["pid"] = client.get("pid")
+        return view
     except (OSError, KeyError, ValueError):
         return None
 
