@@ -9,6 +9,8 @@
 #   ./install.sh --autologin   also log this user in on the first console at boot, without a
 #                              password, straight into Scottland. Off by default: Gooarchy has no
 #                              lock screen yet, so autologin leaves the machine open to anyone.
+#   ./install.sh --kernel      also build and install linux-gooarchy alongside the existing
+#                              kernel; boot selection remains yours. Experimental, opt-in only.
 #
 # The steps run in order from install/: preflight, packaging, user, login, post-install. Each
 # step's output goes to the terminal and to this attempt's log (~/.local/state/gooarchy/install.log
@@ -22,17 +24,19 @@ GOOARCHY_STATE=${XDG_STATE_HOME:-$HOME/.local/state}/gooarchy
 GOOARCHY_BUILD=${XDG_CACHE_HOME:-$HOME/.cache}/gooarchy/build
 GOOARCHY_YES=0
 GOOARCHY_AUTOLOGIN=0
+GOOARCHY_KERNEL=0
 export GOOARCHY_PATH GOOARCHY_INSTALL GOOARCHY_STATE GOOARCHY_BUILD
 
 for arg in "$@"; do
   case $arg in
     --yes | -y) GOOARCHY_YES=1 ;;
     --autologin) GOOARCHY_AUTOLOGIN=1 ;;
+    --kernel) GOOARCHY_KERNEL=1 ;;
     -h | --help) sed -n '2,/^set -eEo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *) echo "install.sh: unknown option $arg (see --help)" >&2; exit 2 ;;
   esac
 done
-export GOOARCHY_YES GOOARCHY_AUTOLOGIN
+export GOOARCHY_YES GOOARCHY_AUTOLOGIN GOOARCHY_KERNEL
 
 source "$GOOARCHY_INSTALL/helpers/all.sh"
 start_install_log

@@ -16,6 +16,16 @@ and real hardware. Until then it is opt-in, and nothing installs it without bein
 | `check-patches.sh` | Checks every source and applies the whole patch series, without building; runs on any Linux machine |
 | `build.sh` | Builds the packages on an x86_64 build or test host; never installs |
 
+`./install.sh --kernel` builds and installs this package alongside the existing kernel. It does
+not change the bootloader or its default. Select the experimental kernel explicitly through your
+bootloader and keep the ordinary kernel as a fallback; real-hardware validation is still pending.
+
+For an already installed test VM, `tests/vm/run.sh kernel-check` exercises the installer kernel
+step, copies the candidate kernel and initramfs out, and boots them directly with QEMU before
+running the desktop check. This validates the running kernel and desktop, not real-machine
+bootloader integration. `GOOARCHY_VM_KERNEL=1 tests/vm/run.sh` includes the opt-in in a full fresh
+VM install. Builds can be lengthy; set `MAKEFLAGS=-j1` when sharing a test host.
+
 Version: `<kernel>-<Omarchy release>.<Gooarchy release>`, e.g. `7.2.5-6.1`; the running kernel
 reports `7.2.5-6.1-gooarchy`. Gooarchy's release starts at 1 for each Omarchy release and counts
 up when Gooarchy's patches change.
@@ -44,7 +54,7 @@ on a machine someone uses daily.
 5. **Build** on an x86_64 build/test host: `packaging/linux-gooarchy/build.sh`. A build failure in
    Gooarchy's code is fixed in `patches/`; one in Omarchy's is reported to Omarchy and the bump
    waits (or pins the previous commit).
-6. **VM test** with the kernel (`tests/vm/run.sh` with the kernel opt-in, once wired), on the same
+6. **VM test** with the kernel (`GOOARCHY_VM_KERNEL=1 tests/vm/run.sh`), on the same
    host.
 7. **Commit** `packaging/linux-gooarchy/` with a message naming Omarchy's release and commit and
    any patch added or dropped.

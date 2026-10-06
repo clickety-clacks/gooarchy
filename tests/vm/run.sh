@@ -28,6 +28,9 @@
 # The seed server and the guest's network stay as the test uses them.
 #
 # Configuration (environment):
+#   GOOARCHY_VM_KERNEL      1: install the opt-in kernel and direct-boot it in this test VM.
+#                           The disk's bootloader and ordinary kernel stay intact.
+#   GOOARCHY_VM_KERNEL_JOBS kernel build parallelism (default 2; use 1 on a shared host)
 #   GOOARCHY_VM_DIR         work directory (default ~/.cache/gooarchy-vm-test): image, disk, logs
 #   GOOARCHY_VM_IMAGE_URL   Arch cloud image (default: the latest official one; to repeat a run,
 #                           use the dated image named in its manifest.json)
@@ -59,6 +62,8 @@ size=${GOOARCHY_VM_SIZE:-1920x1080}
 memory=${GOOARCHY_VM_MEMORY:-6144}
 disk=${GOOARCHY_VM_DISK:-40G}
 cpus=${GOOARCHY_VM_CPUS:-4}
+kernel_jobs=${GOOARCHY_VM_KERNEL_JOBS:-2}
+[[ $kernel_jobs =~ ^[1-9][0-9]*$ ]] || { echo "invalid GOOARCHY_VM_KERNEL_JOBS" >&2; exit 2; }
 port=${GOOARCHY_VM_SSH_PORT:-2222}
 proxy=${GOOARCHY_VM_PROXY:-}
 run=$dir/run
@@ -209,6 +214,13 @@ cmd_start() {
 
 start_qemu() {
   local seed_port display
+  local kernel_args=()
+  if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
+    [[ -s $run/kernel/vmlinuz && -s $run/kernel/initramfs.img && -s $run/kernel/cmdline ]] ||
+      die "candidate kernel boot files are missing"
+    kernel_args=(-kernel "$run/kernel/vmlinuz" -initrd "$run/kernel/initramfs.img"
+                 -append "$(cat "$run/kernel/cmdline")")
+  fi
   seed_port=$(seed)
   local xres=${size%x*} yres=${size#*x}
   case $gpu in
@@ -228,6 +240,7 @@ start_qemu() {
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
   setsid "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
+    "${kernel_args[@]}" \
     -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
     -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.2:$seed_port/" \
@@ -275,6 +288,8 @@ cmd_install() {
   local out; out=$(artifacts)
   copy_checkout
   local status=0
+  local kernel_option=
+  [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]] && kernel_option=--kernel
   if [[ ${GOOARCHY_VM_RETRY_TEST:-1} == 1 ]]; then
     # A failed attempt (made to fail at the Strata step), then a retry that must complete.
     log "running ./install.sh, made to fail at packaging/strata.sh (log: $out/install-failed-attempt.log)"
@@ -289,7 +304,7 @@ cmd_install() {
     status=0
   fi
   log "running ./install.sh --yes --autologin (log: $out/install.log)"
-  guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes --autologin" >"$out/install.log" 2>&1 || status=$?
+  guest "cd ~/gooarchy && MAKEFLAGS=-j$kernel_jobs $(guest_proxy_env) ./install.sh --yes --autologin $kernel_option" >"$out/install.log" 2>&1 || status=$?
   tail -n 30 "$out/install.log" >&2
   guest 'tar -C ~/.local/state/gooarchy -cf - logs builds.tsv reports.log 2>/dev/null' | tar -C "$out" -xf - 2>/dev/null || true
   hcheck "./install.sh completes (after the failed attempt, when the retry test runs)" "$(( status == 0 ))" "exit $status"
@@ -300,7 +315,38 @@ cmd_install() {
       "$attempts attempt logs, $manifests manifests"
   fi
   (( status == 0 )) || die "install.sh exited with $status"
+  if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+    prepare_kernel_boot
+  fi
   log "install finished"
+}
+
+prepare_kernel_boot() {
+  mkdir -p "$run/kernel"
+  guest 'sudo cat /boot/vmlinuz-linux-gooarchy' >"$run/kernel/vmlinuz"
+  guest 'sudo cat /boot/initramfs-linux-gooarchy.img' >"$run/kernel/initramfs.img"
+  guest 'sed -E "s/(^| )BOOT_IMAGE=[^ ]*//g" /proc/cmdline' >"$run/kernel/cmdline"
+  guest 'pacman -Qlq linux-gooarchy | sed -n "s|/usr/lib/modules/\([^/]*\)/pkgbase|\1|p"' >"$run/kernel/version"
+  [[ $(cat "$run/kernel/version") =~ ^[a-zA-Z0-9._+-]+-gooarchy$ ]] || die "cannot identify the candidate kernel"
+  export GOOARCHY_VM_KERNEL_BOOT=1
+}
+
+cmd_kernel_check() {
+  # An already installed test VM: exercise just the installer kernel step, then boot and test.
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  copy_checkout
+  guest "cd ~/gooarchy && export GOOARCHY_PATH=\$PWD GOOARCHY_INSTALL=\$PWD/install
+         export GOOARCHY_STATE=\$HOME/.local/state/gooarchy GOOARCHY_BUILD=\$HOME/.cache/gooarchy/build
+         MAKEFLAGS=-j$kernel_jobs $(guest_proxy_env) bash -e -o pipefail install/packaging/kernel.sh" >"$out/kernel-install.log" 2>&1
+  prepare_kernel_boot
+  cmd_reboot
+  local version; version=$(guest 'uname -r')
+  local correct=0
+  [[ $version == "$(cat "$run/kernel/version")" ]] && correct=1
+  hcheck "the VM runs the opt-in Gooarchy kernel" "$correct" "$version"
+  [[ $version == "$(cat "$run/kernel/version")" ]] || die "the VM booted a different kernel"
+  cmd_check
 }
 
 plugin_state() {
@@ -365,6 +411,14 @@ EOF
 }
 cmd_reboot() {
   running || die "the guest isn't running"
+  if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
+    cmd_stop
+    start_qemu
+    local version; version=$(guest 'uname -r')
+    [[ $version == "$(cat "$run/kernel/version")" ]] || die "the VM booted a different kernel ($version)"
+    log "rebooted into $version (direct kernel boot; disk bootloader unchanged)"
+    return
+  fi
   ensure_seed
   local before; before=$(guest 'cat /proc/sys/kernel/random/boot_id')
   guest 'sudo systemctl reboot' || true
@@ -467,6 +521,7 @@ case ${1:-all} in
   rebuild-check) cmd_rebuild_check ;;
   reboot) cmd_reboot ;;
   check) cmd_check ;;
+  kernel-check) cmd_kernel_check ;;
   login-check) cmd_login_check ;;
   upgrade-guard) cmd_upgrade_guard ;;
   ssh) shift; guest -t "$@" ;;
