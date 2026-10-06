@@ -123,7 +123,7 @@ the new Wayfire.
 | `install.sh`, `install/` | The installer, in ordered steps like Omarchy's: `preflight/` (checks), `packaging/` (Arch packages, then Scottland, Strata and Gooarchy's own packages), `user/` (per-user defaults), `login/` (tty1 session, optional autologin), `post-install/` |
 | `install/gooarchy-base.packages` | The Arch packages Gooarchy is made of |
 | `install/sources.conf` | Scottland and Strata, pinned to the versions tested together |
-| `packaging/arch/xdg-desktop-portal-wlr/` | Gooarchy's patched screen-sharing backend, a stopgap until upstream releases the fixes ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)) |
+| `packaging/arch/xdg-desktop-portal-wlr/` | Gooarchy's screen-sharing backend, built from our own fork of xdg-desktop-portal-wlr ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)) |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on everything) and `gooarchy-flavorings` |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
 | `flavorings/` | The curated defaults: Scottland config fragment and hooks, theme, tmux, mosh, default apps, per-user defaults (`gooarchy-flavorings-apply`). They will move to [gooarchy-flavorings](https://github.com/clickety-clacks/gooarchy-flavorings), which Scottland's Omarchy adapter will also install |
@@ -146,7 +146,10 @@ In order:
    path; the Scottland changes it still needs are in DEFICIT.md.
 2. **Install script**: a fresh Arch install becomes Gooarchy (this repository today).
 3. **Package repository**: Gooarchy's own signed pacman repository with Scottland, Strata and
-   Gooarchy's packages, so nothing is built on the user's machine and the AUR isn't needed.
+   Gooarchy's packages, so nothing is built on the user's machine and the AUR isn't needed. When it
+   exists, `xdg-desktop-portal-wlr-gooarchy` must migrate to it: the installer and the Scottland
+   Omarchy adapter's setup, which both build it today, install it from the repository instead
+   ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)).
 4. **Defaults**: gooarchy-flavorings as its own package, and Gooarchy's own bar, notifications,
    launcher, lock screen and the rest of the deficit.
 5. **Hardware**: a supported hardware matrix with GPU, firmware, power and laptop quirks.

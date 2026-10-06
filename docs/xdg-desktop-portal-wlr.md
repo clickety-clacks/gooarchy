@@ -1,46 +1,52 @@
-# xdg-desktop-portal-wlr: Gooarchy's patched build (a stopgap)
+# xdg-desktop-portal-wlr: Gooarchy's build, from our own fork
 
 Scottland sends screen sharing and screenshot requests to xdg-desktop-portal-wlr (its
 `scottland-portals.conf`). Arch's xdg-desktop-portal-wlr 0.8.4 loses most shared streams under
 Wayfire: in Scottland's portal test the stream froze after one frame or the portal was
-disconnected in most runs. Two small fixes remove both failures. Gooarchy builds 0.8.4 with them
-as `xdg-desktop-portal-wlr-gooarchy` (`packaging/arch/xdg-desktop-portal-wlr/`) until an upstream
-release contains them (Scottland ruling, 2026-10-05: fix the generic backend, get the fixes
-accepted upstream, ship a patched copy only until upstream releases them).
+disconnected in most runs (4 of 6 on 2026-10-06; Omarchy's package mirror then served 0.8.2,
+which failed 3 of 6). Two small fixes remove both failures (20 of 20 runs with this package). We maintain them in our own
+public fork, and Gooarchy builds its package `xdg-desktop-portal-wlr-gooarchy`
+(`packaging/arch/xdg-desktop-portal-wlr/`) from the fork's tagged releases.
 
-## Status of the fixes upstream (2026-10-06)
+## The fork
 
-**Proposed, not submitted, not accepted.** The two patches are local proposals by the Scottland
-project. No pull request or issue carrying them exists upstream yet, so no upstream commit,
-review or release contains them. Sending them is pending: the maintainer's policy on
-LLM-assisted contributions applies (their author is an agent), so they go upstream in a human
-contributor's own words, or as an issue a maintainer fixes.
+- Repository: https://github.com/clickety-clacks/xdg-desktop-portal-wlr, a fork of
+  https://github.com/emersion/xdg-desktop-portal-wlr. Upstream's MIT license and credit are kept.
+- Branch `gooarchy` (the fork's default branch): upstream's v0.8.4 tag plus the fixes, and the
+  fork's README and CONTRIBUTING.md. Both open with its contribution policy: AI-written
+  submissions are welcome; every submission is adversarially reviewed; too many AI-written
+  submissions that fail that review may result in a ban on having submissions accepted.
+- Release: `v0.8.4-gooarchy.1`. The package builds the GitHub archive of that tag, checked by its
+  sha512 in the PKGBUILD; its pacman version is `0.8.4.gooarchy.1`.
+- The fixes are not sent upstream (ruling 2026-10-06, Scottland `docs/rulings.md`; it replaces
+  the 10-05 plan to get them accepted upstream).
 
-| Patch | What it fixes | Upstream |
-|---|---|---|
-| 0001 screencast: keep an in-flight capture across a pause | the `duplicate_frame` protocol error and the stream frozen after its first frame | not submitted |
-| 0002 screencast: don't destroy the process retry timer twice | a crash when a starved session closes | not submitted |
+| Commit | What it fixes |
+|---|---|
+| 11cb9b2 screencast: keep an in-flight capture across a pause | the `duplicate_frame` protocol error and the stream frozen after its first frame |
+| ebbbe6a screencast: don't destroy the process retry timer twice | a crash when a starved session closes |
 
-Upstream links, for whoever submits them and for checking a release:
+A new fork release: tag it on `gooarchy` (`v<upstream version>-gooarchy.<n>`), then update
+`_upstreamver`/`_tag`, `pkgver` and the tarball's sha512 in the PKGBUILD, and run Scottland's
+`tests/portal-test.py` against the built package. The Omarchy adapter's setup pins this recipe
+by Gooarchy commit and checksum, so it moves its pin too (below).
 
-- Repository: https://github.com/emersion/xdg-desktop-portal-wlr (the `v0.8` branch carries 0.8.x
-  releases: https://github.com/emersion/xdg-desktop-portal-wlr/tree/v0.8)
-- Contributing and the LLM policy:
-  https://github.com/emersion/.github/blob/main/CONTRIBUTING.md#use-of-llms
+Upstream context, for reading upstream changes against the fork:
+
 - The cause dates from #370, "drive the Pipewire graph by ourselves" (merged, in 0.8.3):
   https://github.com/emersion/xdg-desktop-portal-wlr/pull/370
 - The duplicate-frame error: #380, a guard closed unmerged by its own author
   (https://github.com/emersion/xdg-desktop-portal-wlr/pull/380), and #340, an open guard the
   maintainer said leaves damage-tracking problems
   (https://github.com/emersion/xdg-desktop-portal-wlr/pull/340).
-- The retry timer 0002 fixes came with #397 (merged, in 0.8.4):
+- The retry timer the second fix fixes came with #397 (merged, in 0.8.4):
   https://github.com/emersion/xdg-desktop-portal-wlr/pull/397
 - Related, not the same fix: #400, "Screen sharing stopped working in 0.8.4"
   (https://github.com/emersion/xdg-desktop-portal-wlr/issues/400), and #403, a backport of master's
   wlr-screencopy fixes for a 0.8.5 (https://github.com/emersion/xdg-desktop-portal-wlr/pull/403).
   #403 changes only the wlr-screencopy path; Wayfire 0.11 is captured through
-  ext-image-copy-capture, which 0001 fixes. Whether a 0.8.5 with #403 alone works under Wayfire is
-  not tested.
+  ext-image-copy-capture, which the first fix fixes. Whether a 0.8.5 with #403 alone works under
+  Wayfire is not tested.
 
 ## Delivery
 
@@ -52,17 +58,17 @@ Upstream links, for whoever submits them and for checking a release:
   Running `./install.sh` again rebuilds it. Screen sharing also needs a Scottland with
   `scottland-portals.conf` (Scottland's adapter-fixes work); the Scottland revision pinned in
   `install/sources.conf` predates it until that work is merged and the pin moves.
-- **Scottland on Omarchy (the adapter):** not delivered yet. The adapter is built from Scottland's
-  repository, and Scottland's package depends on `xdg-desktop-portal-wlr`, which pacman fills with
-  Arch's 0.8.4. There is no package repository to serve the patched build from. Until there is a
-  delivery decision, an Omarchy user can build this package by hand from a Gooarchy checkout
-  (`cd packaging/arch/xdg-desktop-portal-wlr && makepkg -si`), answering yes when pacman asks to
-  remove Arch's xdg-desktop-portal-wlr.
+- **Scottland on Omarchy (the adapter):** `scottland-omarchy-setup` builds and installs this
+  package (ruling 2026-10-06). It fetches this recipe from Gooarchy's repository at a pinned commit,
+  checks each file's sha256, builds it with makepkg and installs it with pacman. Whatever package
+  provided `xdg-desktop-portal-wlr` before (Arch's) is replaced in the same transaction, and setup
+  prints what it replaced, with what, and why. Re-running setup with the pinned version installed
+  does nothing.
 
-## Retiring it
+## Moving to a package repository
 
-When an upstream xdg-desktop-portal-wlr release contains both fixes (or fixes the same failures
-another way, shown by Scottland's `tests/portal-test.py` against that release): remove
-`packaging/arch/xdg-desktop-portal-wlr/` and `install/packaging/xdg-desktop-portal-wlr.sh`, and
-have the installer replace `xdg-desktop-portal-wlr-gooarchy` with Arch's `xdg-desktop-portal-wlr`
-on machines that have it. Record the accepted upstream commits and the release here first.
+Gooarchy has no package repository yet (DEFICIT.md, "Package repository"), so both paths compile
+this package on the user's machine. **Once a Gooarchy package repository exists, both must
+migrate to installing `xdg-desktop-portal-wlr-gooarchy` from it** (ruling 2026-10-06): the
+installer step and the Scottland Omarchy adapter's setup stop building it, and Omarchy-adapter
+users get updates of it through pacman instead of re-running setup.

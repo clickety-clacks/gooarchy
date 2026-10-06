@@ -1,23 +1,24 @@
-# xdg-desktop-portal-wlr 0.8.4 with two proposed screen-sharing fixes. They are not in any upstream
-# release, and as of 2026-10-06 they have not been submitted upstream either (no pull request or
-# issue); see docs/xdg-desktop-portal-wlr.md for their status, the upstream links and the
-# retirement rule. A stopgap: Arch's own package (same version, same release tarball) loses shared
-# streams under Wayfire. It stands in for Arch's (provides/conflicts), so packages that depend on
-# xdg-desktop-portal-wlr take it; drop it once an upstream release contains both fixes.
-#   0001  A pause while a capture is in flight (GStreamer consumers do this at start) made the
-#         portal start a second ext-image-copy-capture frame (a protocol error that ends the
-#         stream) or hand the consumer an unfinished buffer with a zero timestamp, after which
-#         GStreamer waits for a clock time a machine's uptime away and the stream starves.
-#   0002  Closing a session while the stream is starved of buffers crashed the portal
-#         (its buffer-retry timer was destroyed twice).
+# xdg-desktop-portal-wlr from our own fork, clickety-clacks/xdg-desktop-portal-wlr: upstream 0.8.4
+# with two screen-sharing fixes, released as v0.8.4-gooarchy.1 (docs/xdg-desktop-portal-wlr.md).
+# Arch's own package (upstream 0.8.4) loses shared streams under Wayfire. This one stands in for
+# it (provides/conflicts), so packages that depend on xdg-desktop-portal-wlr take it.
+#   keep an in-flight capture across a pause: a pause while a capture is in flight (GStreamer
+#         consumers do this at start) made the portal start a second ext-image-copy-capture
+#         frame (a protocol error that ends the stream) or hand the consumer an unfinished buffer
+#         with a zero timestamp, after which GStreamer waits for a clock time a machine's uptime
+#         away and the stream starves.
+#   don't destroy the process retry timer twice: closing a session while the stream is starved
+#         of buffers crashed the portal.
 # Packaging follows Arch's xdg-desktop-portal-wlr PKGBUILD.
 pkgname=xdg-desktop-portal-wlr-gooarchy
 _pkgname=xdg-desktop-portal-wlr
-pkgver=0.8.4
+_upstreamver=0.8.4
+_tag=v$_upstreamver-gooarchy.1
+pkgver=$_upstreamver.gooarchy.1
 pkgrel=1
-pkgdesc='xdg-desktop-portal backend for wlroots, with two proposed screen-sharing fixes'
+pkgdesc='xdg-desktop-portal backend for wlroots (Gooarchy fork, with screen-sharing fixes)'
 arch=('x86_64' 'aarch64')
-url="https://github.com/emersion/xdg-desktop-portal-wlr"
+url="https://github.com/clickety-clacks/xdg-desktop-portal-wlr"
 license=('MIT')
 depends=(
   'glibc'
@@ -38,35 +39,23 @@ makedepends=(
   'scdoc'
   'wayland-protocols'
 )
-provides=("$_pkgname=$pkgver" 'xdg-desktop-portal-impl')
+provides=("$_pkgname=$_upstreamver" 'xdg-desktop-portal-impl')
 conflicts=("$_pkgname")
 source=(
-  "$url/archive/v$pkgver/$_pkgname-$pkgver.tar.gz"
-  0001-screencast-keep-an-in-flight-capture-across-a-pause.patch
-  0002-screencast-don-t-destroy-the-process-retry-timer-twi.patch
+  "$_pkgname-${_tag#v}.tar.gz::$url/archive/$_tag/$_pkgname-${_tag#v}.tar.gz"
   wlr-portals.conf
 )
-sha512sums=('05c4ec1148aec480f38d83cfe99be19144315e9848584664956dd56e36c07792df90807d0e674318dda87be012c0ecdea58f49e54a5401aba4f8673c63714221'
-            '7086e092da8c158d74942f4e74c419f090d8e64980c11abdd89daf30d7d585133964db724dcc891e06b09c4a4905e93a84fb83d586721d57a3ee5f66b8a19219'
-            '6bd1d6b43dccc996cf33fb017ee7697feadadeff948eb2b8e81a2e25b9f17c88a7efbbfee56f413bb79b4d527f97ed8b215ab38777817912913ed65685c8b5ae'
+sha512sums=('3f6b012de51b7494baeea6de03ba9b8594885707ef8d7ecf135bf9eb597e2ec61a1fe0d670e611ce342a84482e4ca5195532977c2edadabb491e03f505fd073c'
             '71f3383c3f62100dc669c519d107614a4566e808deddf66a179dd2bf175dc272a2390965cf38cd11dc4f0db0dc5cc7104712805034b9bced5874d62b03a579c2')
 
-prepare() {
-  cd "$_pkgname-$pkgver"
-  local patch
-  for patch in "$srcdir"/*.patch; do
-    patch -Np1 -i "$patch"
-  done
-}
-
 build() {
-  cd "$_pkgname-$pkgver"
+  cd "$_pkgname-${_tag#v}"
   arch-meson -Dsd-bus-provider=libsystemd build
   ninja -C build
 }
 
 package() {
-  cd "$_pkgname-$pkgver"
+  cd "$_pkgname-${_tag#v}"
   DESTDIR="$pkgdir" ninja -C build install
   install -vDm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSE
 
