@@ -10,7 +10,10 @@
 #                              password, straight into Scottland. Off by default: Gooarchy has no
 #                              lock screen yet, so autologin leaves the machine open to anyone.
 #   ./install.sh --kernel      also build and install linux-gooarchy alongside the existing
-#                              kernel; boot selection remains yours. Experimental, opt-in only.
+#                              kernel, which stays the default boot (on GRUB, Gooarchy sets
+#                              GRUB_TOP_LEVEL so a regenerated menu keeps it first, and reports
+#                              that). Experimental, opt-in only. The build takes hours and needs
+#                              about 35 GB free under ~/.cache while it runs.
 #
 # The steps run in order from install/: preflight, packaging, user, login, post-install. Each
 # step's output goes to the terminal and to this attempt's log (~/.local/state/gooarchy/install.log
