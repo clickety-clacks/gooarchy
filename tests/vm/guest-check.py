@@ -592,7 +592,7 @@ def main():
     moved_before = set(os.listdir(moved_dir)) if os.path.isdir(moved_dir) else set()
     press("KEY_PRINT")
     moved = wait_for(lambda: set(os.listdir(moved_dir)) - moved_before, timeout=10)
-    check("Print follows a moved Pictures folder (~/Bilder)", moved, moved)
+    check("Print follows a moved Pictures folder (~/Bilder)", moved, sorted(moved or []))
     with open(dirs, "w") as f:
         f.write(saved)
 
