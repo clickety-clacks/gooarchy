@@ -1,6 +1,6 @@
 # Removing Gooarchy (rollback)
 
-Gooarchy's installer changes three kinds of things. Each comes off separately, and none of
+Gooarchy's installer changes three kinds of things (four with `--kernel`). Each comes off separately, and none of
 it touches your files beyond the few settings listed below.
 
 Nothing the installer does is rolled back automatically: the Arch upgrade (`pacman -Syu`) and every
@@ -79,6 +79,21 @@ set, edit or remove:
 | Codex bell | `notifications` and `notification_method` under `[tui]` in `~/.codex/config.toml` |
 | Light/dark preference | `gsettings reset org.gnome.desktop.interface color-scheme` |
 | Standard folders | `~/Desktop`, `~/Documents`, `~/Downloads`, ... (created by `xdg-user-dirs-update`; empty ones can go) |
+
+## 4. The experimental kernel (only with `--kernel`)
+
+`linux-gooarchy` and `linux-gooarchy-headers` are installed alongside your kernel, not as
+dependencies of `gooarchy`, so section 1 leaves them. Boot your ordinary kernel, then:
+
+```sh
+sudo pacman -Rns linux-gooarchy linux-gooarchy-headers
+```
+
+On GRUB, the installer also added a commented `GRUB_TOP_LEVEL` line to `/etc/default/grub` (and
+said so in `~/.local/state/gooarchy/reports.log`), which keeps your kernel first in GRUB's menu.
+Remove those lines after the kernel if you like. If you had regenerated GRUB's menu to add
+linux-gooarchy, regenerate it again (`sudo grub-mkconfig -o /boot/grub/grub.cfg`). The kernel's
+built packages and downloaded sources stay in `~/.cache/gooarchy/build/linux-gooarchy`.
 
 Gooarchy's own state lives in `~/.local/state/gooarchy` (install logs and manifests, build records,
 reports, markers of applied defaults) and its build checkouts in `~/.cache/gooarchy`. Both can be

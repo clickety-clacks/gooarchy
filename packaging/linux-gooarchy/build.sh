@@ -1,8 +1,8 @@
 #!/bin/bash
 # Build linux-gooarchy (and linux-gooarchy-headers) on an x86_64 build or test host. Builds only:
 # installing a kernel is a separate, deliberate step. Needs about 35 GB free in the build directory
-# while it runs (the kernel build tree; less on disk under btrfs compression) and takes hours: about
-# 2h15m with two jobs in a test VM.
+# while it runs (the kernel build tree; less on disk under btrfs compression) and takes hours: two to
+# three with two jobs in a test VM.
 #
 #   packaging/linux-gooarchy/build.sh      packages land in $GOOARCHY_KERNEL_BUILD (printed)
 #
