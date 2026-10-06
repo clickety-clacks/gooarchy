@@ -88,7 +88,8 @@ def window_of(pid, timeout=30):
 def views():
     """Scottland presentation plus Wayfire's independent client PID metadata, joined by view ID."""
     clients = {v["id"]: v for v in g.ipc("window-rules/list-views")}
-    return [dict(v, pid=clients.get(v["id"], {}).get("pid")) for v in g.views()]
+    return [dict(v, pid=clients.get(v["id"], {}).get("pid"),
+                 focused=clients.get(v["id"], {}).get("activated", False)) for v in g.views()]
 
 
 def ids():
@@ -139,7 +140,7 @@ class Pane:
             raise RuntimeError(f"{self.name}: setup command did not complete: {line}")
 
     def state(self):
-        return g.view(self.view["id"]) if self.view else None
+        return next((v for v in views() if v["id"] == self.view["id"]), None) if self.view else None
 
     def present(self):
         g.ipc("scottland/present", {"window": self.view["id"]})
@@ -412,7 +413,7 @@ def folders():
     sv = g.wait_for(lambda: next((v for v in views() if "strata" in (v.get("app_id") or "").lower()), None), timeout=30)
     if sv:
         g.ipc("scottland/present", {"window": sv["id"]})
-        if not g.wait_for(lambda: (g.view(sv["id"]) or {}).get("focused"), timeout=10):
+        if not g.wait_for(lambda: any(v['id'] == sv['id'] and v['focused'] for v in views()), timeout=10):
             raise RuntimeError("Strata did not receive focus before the folder shortcut")
         before = ids()
         g.press("KEY_LEFTCTRL", "KEY_T")

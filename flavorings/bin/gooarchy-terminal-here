@@ -40,12 +40,11 @@ def focused_view():
         return json.loads(reply)
 
     try:
+        client = next((v for v in request("window-rules/list-views")
+                       if v.get("activated")), None)
         view = next((v for v in request("scottland/layout-state").get("views", [])
-                     if v.get("focused")), None)
-        if view and view.get("app_id") in TERMINALS:
-            # Presentation state supplies focus; Wayfire supplies client process metadata.
-            client = next((v for v in request("window-rules/list-views")
-                           if v.get("id") == view.get("id")), {})
+                     if client and v.get("id") == client.get("id")), None)
+        if view:
             view["pid"] = client.get("pid")
         return view
     except (OSError, KeyError, ValueError):
