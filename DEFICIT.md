@@ -71,6 +71,7 @@ need it" means the severity applies to the people who depend on the feature.
 | Removable media | Medium | Config | udisks2 and gvfs are present (Strata's dependencies), but nothing automounts drives or offers to open them, and without a polkit agent some mounts are refused. |
 | Firewall | Medium | Config | No firewall is set up (Arch's default). |
 | Network shares, phones | Low | Undecided | No choice of network-share browsing (SMB is only an optional Strata dependency) or phone integration. |
+| Clipboard from tmux | Medium for those who need it | VM | tmux’s own copy reaches the system clipboard with Foot but failed with Ghostty in both software and virgl comparisons. Application OSC 52 inside tmux is blocked in both by the inherited `set-clipboard external` policy ([upstream behavior](https://github.com/tmux/tmux/wiki/Clipboard)); ordinary paste, selection copy and direct OSC 52 passed. Ghostty remains the default. |
 | Clipboard history | Low | Config | Copy and paste work between running apps; nothing keeps the clipboard after the source app closes. |
 | Time and location | Low | Config | Time sync is whatever the base install enabled. There's no GeoClue; Scottland's Sunlight schedule finds the location by an IP lookup instead (next section). |
 
@@ -190,7 +191,7 @@ So not listed above, with how far it was checked:
   workaround for a Scottland defect (above).
 - Scottland's window model: periphery scaling and rail widgets (VM).
 - Terminal window identity: tmux `set-titles on` with "#S on #h", and mosh without its prefix
-  (configuration checked; titles not observed in a running tmux).
+  (tmux titles observed with Foot and Ghostty in software and virgl VMs; mosh configuration checked).
 - Touchpad tap, tap-and-drag and drag lock (configuration checked; no physical touchpad).
 - Light/dark palette for Scottland's halos, Ghostty and GTK apps (VM), subject to the Sunlight
   policy above.

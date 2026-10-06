@@ -32,12 +32,12 @@ What you get:
 | Audio | PipeWire with WirePlumber; the volume keys work, with no on-screen indicator |
 | Defaults | tmux titles read "session on host", mosh adds no title prefix, touchpad tap and tap-and-drag on, Print saves into your Pictures folder, Claude Code and Codex set to ring the terminal bell (Scottland shows a bell as attention) |
 
-Foot preparation is on this branch alongside Ghostty. The software-rendered VM comparison passed
+Foot preparation is on this branch alongside Ghostty. The software and virgl VM comparisons each passed
 30 of 31 Foot checks, including plain/tmux/SSH bells and clearing, live themes, folder shortcuts,
 touch scrolling, glyphs and ordinary clipboard operations. A program's OSC 52 inside tmux failed
 with both terminals under tmux’s inherited `set-clipboard external` policy, which
 [blocks applications’ clipboard writes](https://github.com/tmux/tmux/wiki/Clipboard). Ghostty
-also failed tmux’s own copy (29 of 31). The virgl comparison is still pending. Ghostty remains the default until the terminal gates are resolved. The comparison runs
+also failed tmux’s own copy (29 of 31 in each mode). Ghostty remains the default until the terminal gates are resolved. The comparison runs
 with `tests/vm/run.sh terminal-check` inside an already installed test VM; its seeded agent-bell
 checks exercise BEL and read configuration, without running either agent.
 
