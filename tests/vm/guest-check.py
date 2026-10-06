@@ -330,6 +330,54 @@ def save_session_log(name):
 
 # ---- the checks -----------------------------------------------------------------------------
 
+def check_solar_schedule():
+    # The guest may already be dark and may have network access. Establish a
+    # no-location fixture rather than assuming an untouched light preference.
+    solar = f"{HOME}/.config/scottland/solar.ini"
+    saved = None
+    if os.path.exists(solar):
+        with open(solar, "rb") as stream:
+            saved = (stream.read(), os.stat(solar).st_mode & 0o7777)
+    os.makedirs(os.path.dirname(solar), exist_ok=True)
+    try:
+        with open(solar, "w") as stream:
+            stream.write("[solar]\nenabled = true\nallow_ip = false\nlocation_set = false\n")
+        before = color_scheme()
+        mode = run("/usr/lib/scottland/libexec/scottland-solar-theme", "once", timeout=30)
+        after = color_scheme()
+        observe("Sunlight with no configured location or IP lookup", mode)
+        check("with no location, Sunlight preserves the existing color scheme",
+              mode == "off" and after == before, f"{before} -> {after}; solar mode {mode}")
+        run("gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-light")
+        light = wait_for(lambda: color_scheme() == "prefer-light", timeout=15)
+        with open(solar, "w") as f:
+            f.write(f"[solar]\nenabled = true\nallow_ip = false\nlocation_set = true\nlatitude = 0\n"
+                    f"longitude = {night_longitude():.2f}\n")
+        # The schedule re-reads its location when its settings change; asking GeoClue (absent here)
+        # first can take its D-Bus timeout, so allow two minutes.
+        dark = wait_for(lambda: color_scheme() == "prefer-dark", timeout=120)
+        check("with a location where it's night, Sunlight switches to dark",
+              light and dark, f"light setup {bool(light)}; final {color_scheme()}")
+        shot("11-sunlight-dark.png")
+        warning = subprocess.run(["gooarchy-theme", "light"], capture_output=True, text=True).stderr
+        check("gooarchy-theme warns that Sunlight is on", "Sunlight" in warning, warning.strip()[:100])
+        back = wait_for(lambda: color_scheme() == "prefer-dark", timeout=30)
+        check("Sunlight overrides a manual light choice at night (documented)", back, color_scheme())
+        with open(solar, "w") as f:
+            f.write("[solar]\nenabled = false\n")
+        run("gooarchy-theme", "light")
+        stays = not wait_for(lambda: color_scheme() == "prefer-dark", timeout=25)
+        check("with Sunlight off, a manual light choice stays", stays and color_scheme() == "prefer-light", color_scheme())
+    finally:
+        if saved is None:
+            if os.path.exists(solar):
+                os.unlink(solar)
+        else:
+            with open(solar, "wb") as stream:
+                stream.write(saved[0])
+            os.chmod(solar, saved[1])
+
+
 def main():
     log("waiting for the Scottland session on tty1")
     env = wait_for(session_env, timeout=180, interval=2)
@@ -482,9 +530,13 @@ def main():
     for option in ("input/tap_to_click", "input/tap_and_drag", "input/drag_lock"):
         value = ipc("wayfire/get-config-option", {"option": option}).get("value")
         check(f"config: touchpad {option} on", str(value).lower() in ("true", "1"), value)
-    scheme = run("busctl", "--user", "call", "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
-                 "org.freedesktop.portal.Settings", "ReadOne", "ss", "org.freedesktop.appearance", "color-scheme")
-    check("the settings portal reports the color scheme (2 = light)", scheme.endswith("2"), scheme)
+    def portal_matches_scheme():
+        expected = "1" if color_scheme() == "prefer-dark" else "2"
+        scheme = run("busctl", "--user", "call", "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+                     "org.freedesktop.portal.Settings", "ReadOne", "ss", "org.freedesktop.appearance", "color-scheme")
+        return scheme if scheme.endswith(expected) else None
+    scheme = wait_for(portal_matches_scheme, timeout=15)
+    check("the settings portal reports the current color scheme", scheme, scheme or color_scheme())
     folder = run("xdg-mime", "query", "default", "inode/directory")
     check("config: folders open in Strata", "Strata" in folder, folder)
     claude = json.load(open(f"{HOME}/.claude.json")).get("preferredNotifChannel")
@@ -577,31 +629,7 @@ def main():
           "; ".join(steps) + (f"; lit after {rings} ring(s)" if lit else ""))
     shot("10-bell-attention.png")
 
-    # Scottland's Sunlight schedule, as inherited (README, DEFICIT.md): with no location it leaves
-    # the mode alone; with one, it follows the sun and overrides a manual choice.
-    observe("Sunlight with no location (this guest has no direct internet for its IP lookup)",
-            run("/usr/lib/scottland/libexec/scottland-solar-theme", "once", timeout=30))
-    check("with no location, the color scheme stays as set (light)", color_scheme() == "prefer-light", color_scheme())
-    solar = f"{HOME}/.config/scottland/solar.ini"
-    os.makedirs(os.path.dirname(solar), exist_ok=True)
-    with open(solar, "w") as f:
-        f.write(f"[solar]\nenabled = true\nallow_ip = false\nlocation_set = true\nlatitude = 0\n"
-                f"longitude = {night_longitude():.2f}\n")
-    # The schedule re-reads its location when its settings change; asking GeoClue (absent here)
-    # first can take its D-Bus timeout, so allow two minutes.
-    dark = wait_for(lambda: color_scheme() == "prefer-dark", timeout=120)
-    check("with a location where it's night, Sunlight switches to dark", dark, color_scheme())
-    shot("11-sunlight-dark.png")
-    warning = subprocess.run(["gooarchy-theme", "light"], capture_output=True, text=True).stderr
-    check("gooarchy-theme warns that Sunlight is on", "Sunlight" in warning, warning.strip()[:100])
-    back = wait_for(lambda: color_scheme() == "prefer-dark", timeout=30)
-    check("Sunlight overrides a manual light choice at night (documented)", back, color_scheme())
-    with open(solar, "w") as f:
-        f.write("[solar]\nenabled = false\n")
-    run("gooarchy-theme", "light")
-    stays = not wait_for(lambda: color_scheme() == "prefer-dark", timeout=25)
-    check("with Sunlight off, a manual light choice stays", stays and color_scheme() == "prefer-light", color_scheme())
-    os.unlink(solar)
+    check_solar_schedule()
 
     # Calibration: the wallpaper check must reject a desktop without its wallpaper.
     run("pkill", "-f", "gooarchy-wallpaper")
