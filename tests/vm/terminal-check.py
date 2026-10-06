@@ -21,6 +21,7 @@ import base64
 import importlib.util
 import json
 import os
+from pathlib import Path
 import secrets
 import shutil
 import signal
@@ -44,6 +45,9 @@ TMP = f"/tmp/gooarchy-terminal-check/{TERMINAL}"
 HOST = socket.gethostname()
 results, observations, metrics = [], [], {}
 procs = []
+solar_path = Path(HOME) / '.config/scottland/solar.ini'
+solar_backup = None
+solar_fixture = False
 
 
 class HangDeadline(BaseException):
@@ -245,7 +249,19 @@ def bells():
         pane = Pane(how)
         if not check(f"{how}: the terminal starts and runs the test shell", pane.ok, pane.view and pane.view.get("title")):
             continue
-        holder.present()  # setup: another window has focus
+        # Setup only: two separated client geometries. A center click on overlapping windows
+        # would hit the covering holder instead of the window whose attention must clear.
+        for fixture, x in ((holder, 100), (pane, 1200)):
+            g.ipc('window-rules/configure-view', {'id': fixture.view['id'],
+                  'geometry': {'x': x, 'y': 250, 'width': 600, 'height': 500}})
+        def separate():
+            left, right = holder.frame(), pane.frame()
+            return left['x'] + left['width'] < right['x'] and (left, right)
+        if not g.wait_for(separate, timeout=15):
+            raise RuntimeError('bell fixture windows did not become nonoverlapping')
+        click(holder.frame())
+        if not g.wait_for(lambda: (holder.state() or {}).get('focused'), timeout=10):
+            raise RuntimeError('the holder did not receive the setup click')
         unfocused = g.wait_for(lambda: not (pane.state() or {}).get("focused"), timeout=10)
         pane.send("printf '\\a'")
         lit = g.wait_for(lambda: (pane.state() or {}).get("attention"), timeout=15)
@@ -285,7 +301,8 @@ def identity():
     before_output = ppm(pane.frame())[2]
     pane.completed("seq 1 4000")
     f = pane.frame()
-    before = settled_pixels(pane, previous=before_output)[2]
+    before_image = settled_pixels(pane, previous=before_output)
+    before = before_image[2]
     x, y = f["x"] + f["width"] // 2, f["y"] + f["height"] // 3
     probe = g.ipc("stipc/touch", {"finger": 0, "x": x, "y": y})
     if isinstance(probe, dict) and probe.get("error"):
@@ -300,11 +317,19 @@ def identity():
         changed = 0
         def scrolled_pixels():
             nonlocal changed
-            after = ppm(pane.frame())[2]
-            changed = sum(a != b for a, b in zip(before[::31], after[::31])) / max(1, len(before[::31]))
-            return changed > 0.05
-        check("a finger dragged down the window scrolls back (screen changes)",
-              g.wait_for(scrolled_pixels, timeout=15), f"{changed:.1%} of samples changed")
+            after_image = ppm(pane.frame())
+            w, h = before_image[:2]
+            if after_image[:2] != (w, h):
+                return False
+            after = after_image[2]
+            # Compare the text region, excluding border effects and the cursor on the final
+            # output line. Sparse digits need not change five percent of the whole background.
+            changed = sum(any(abs(before[(y * w + x) * 3 + c] - after[(y * w + x) * 3 + c]) > 12
+                              for c in range(3))
+                          for y in range(40, int(h * .6)) for x in range(40, w - 40))
+            return changed >= 50
+        check("a finger dragged down the window scrolls back (text-region pixels change)",
+              g.wait_for(scrolled_pixels, timeout=15), f"{changed} text-region pixels changed")
         g.shot(f"{TERMINAL}-touch-scroll.png")
     pane.proc.terminate()
     # tmux set-titles: "session on host" as the window title.
@@ -531,12 +556,21 @@ def performance():
 
 
 def main():
+    global solar_backup, solar_fixture
     shutil.rmtree(TMP, ignore_errors=True)
     os.makedirs(TMP)
     os.makedirs(OUT, exist_ok=True)
     if not g.enter_session():
         check("the session is reachable with virtual input", False)
         return
+    # This terminal comparison exercises manual light/dark switching. Keep the independent
+    # solar scheduler from changing the theme during it, and restore its file afterward.
+    solar_backup = (solar_path.read_bytes(), solar_path.stat().st_mode & 0o777) if solar_path.exists() else None
+    solar_path.parent.mkdir(parents=True, exist_ok=True)
+    solar_fixture = True
+    solar_path.write_text('[solar]\nenabled = false\n')
+    g.run('gooarchy-theme', 'light')
+    observe('theme fixture', 'Sunlight disabled for the comparison; its configuration is restored on exit')
     observe("version", g.run(TERMINAL, "--version").splitlines()[0] if shutil.which(TERMINAL) else "not installed")
     for part in (bells, identity, colors, folders, glyphs, copy_paste, performance):
         try:
@@ -561,6 +595,12 @@ if __name__ == "__main__":
                 pass
         g.run("gooarchy-theme", "light")
         g.run("tmux", "-L", "gooarchy-terminal-check", "kill-server")
+        if solar_fixture:
+            if solar_backup is None:
+                solar_path.unlink(missing_ok=True)
+            else:
+                solar_path.write_bytes(solar_backup[0])
+                solar_path.chmod(solar_backup[1])
         for p in procs:
             try:
                 p.wait(timeout=5)
