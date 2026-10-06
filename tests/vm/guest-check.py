@@ -343,11 +343,12 @@ def check_solar_schedule():
         with open(solar, "w") as stream:
             stream.write("[solar]\nenabled = true\nallow_ip = false\nlocation_set = false\n")
         before = color_scheme()
-        mode = run("/usr/lib/scottland/libexec/scottland-solar-theme", "once", timeout=30)
+        rc, mode = run_rc("/usr/lib/scottland/libexec/scottland-solar-theme", "once", timeout=30)
         after = color_scheme()
         observe("Sunlight with no configured location or IP lookup", mode)
         check("with no location, Sunlight preserves the existing color scheme",
-              mode == "off" and after == before, f"{before} -> {after}; solar mode {mode}")
+              rc == 0 and mode == "off" and after == before,
+              f"{before} -> {after}; solar mode {mode}; exit {rc}")
         run("gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-light")
         light = wait_for(lambda: color_scheme() == "prefer-light", timeout=15)
         with open(solar, "w") as f:
