@@ -78,11 +78,17 @@ def launch(argv=None, cwd=None, env=None):
 
 
 def window_of(pid, timeout=30):
-    return g.wait_for(lambda: next((v for v in g.views() if v.get("pid") == pid), None), timeout=timeout)
+    return g.wait_for(lambda: next((v for v in views() if v.get("pid") == pid), None), timeout=timeout)
+
+
+def views():
+    """Scottland presentation plus Wayfire's independent client PID metadata, joined by view ID."""
+    clients = {v["id"]: v for v in g.ipc("window-rules/list-views")}
+    return [dict(v, pid=clients.get(v["id"], {}).get("pid")) for v in g.views()]
 
 
 def ids():
-    return {v["id"] for v in g.views()}
+    return {v["id"] for v in views()}
 
 
 class Pane:
@@ -360,7 +366,7 @@ def folders():
     pane.present()
     before = ids()
     g.press("KEY_LEFTMETA", "KEY_LEFTALT", "KEY_ENTER")
-    new = g.wait_for(lambda: [v for v in g.views() if v["id"] not in before and v.get("app_id") == APP_ID], timeout=20)
+    new = g.wait_for(lambda: [v for v in views() if v["id"] not in before and v.get("app_id") == APP_ID], timeout=20)
     cwds = []
     def correct_cwd():
         nonlocal cwds
@@ -378,14 +384,14 @@ def folders():
     strata = subprocess.Popen(["strata", folder], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                               start_new_session=True)
     procs.append(strata)
-    sv = g.wait_for(lambda: next((v for v in g.views() if "strata" in (v.get("app_id") or "").lower()), None), timeout=30)
+    sv = g.wait_for(lambda: next((v for v in views() if "strata" in (v.get("app_id") or "").lower()), None), timeout=30)
     if sv:
         g.ipc("scottland/present", {"window": sv["id"]})
         if not g.wait_for(lambda: (g.view(sv["id"]) or {}).get("focused"), timeout=10):
             raise RuntimeError("Strata did not receive focus before the folder shortcut")
         before = ids()
         g.press("KEY_LEFTCTRL", "KEY_T")
-        new = g.wait_for(lambda: [v for v in g.views() if v["id"] not in before and v.get("app_id") == APP_ID], timeout=20)
+        new = g.wait_for(lambda: [v for v in views() if v["id"] not in before and v.get("app_id") == APP_ID], timeout=20)
         cwd_ok = new and g.wait_for(correct_cwd, timeout=10)
         check("Strata's Ctrl+T opens this terminal in the folder Strata shows", cwd_ok,
               f"new window: {bool(new)}, its shells' folders: {cwds}")
