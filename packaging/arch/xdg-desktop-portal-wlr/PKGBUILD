@@ -1,7 +1,9 @@
-# xdg-desktop-portal-wlr 0.8.4 with two screen-sharing fixes that upstream hasn't released yet.
-# A stopgap: Arch's own package (same version, same release tarball) loses shared streams under
-# Wayfire. Drop this package once an upstream release contains both fixes; until then it stands in
-# for Arch's (provides/conflicts), so packages that depend on xdg-desktop-portal-wlr take it.
+# xdg-desktop-portal-wlr 0.8.4 with two proposed screen-sharing fixes. They are not in any upstream
+# release, and as of 2026-10-06 they have not been submitted upstream either (no pull request or
+# issue); see docs/xdg-desktop-portal-wlr.md for their status, the upstream links and the
+# retirement rule. A stopgap: Arch's own package (same version, same release tarball) loses shared
+# streams under Wayfire. It stands in for Arch's (provides/conflicts), so packages that depend on
+# xdg-desktop-portal-wlr take it; drop it once an upstream release contains both fixes.
 #   0001  A pause while a capture is in flight (GStreamer consumers do this at start) made the
 #         portal start a second ext-image-copy-capture frame (a protocol error that ends the
 #         stream) or hand the consumer an unfinished buffer with a zero timestamp, after which
@@ -13,7 +15,7 @@ pkgname=xdg-desktop-portal-wlr-gooarchy
 _pkgname=xdg-desktop-portal-wlr
 pkgver=0.8.4
 pkgrel=1
-pkgdesc='xdg-desktop-portal backend for wlroots, with unreleased screen-sharing fixes'
+pkgdesc='xdg-desktop-portal backend for wlroots, with two proposed screen-sharing fixes'
 arch=('x86_64' 'aarch64')
 url="https://github.com/emersion/xdg-desktop-portal-wlr"
 license=('MIT')
