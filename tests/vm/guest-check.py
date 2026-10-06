@@ -566,7 +566,11 @@ def main():
     check("the system's keyboard layout (localectl set-x11-keymap de) reaches the session", layout == "de", layout)
     run("sudo", "localectl", "set-x11-keymap", "us")
     run(build)
-    wait_for(lambda: ipc("wayfire/get-config-option", {"option": "input/xkb_layout"}).get("value") == "us", timeout=15)
+    if not wait_for(lambda: ipc("wayfire/get-config-option", {"option": "input/xkb_layout"}).get("value") == "us", timeout=15):
+        raise RuntimeError("the fixture did not restore the US keyboard layout")
+    # Config reload can recreate stipc's keyboard. Prime it again before the
+    # next modifier chord, as we do when the virtual keyboard first appears.
+    prime_keyboard()
 
     # Keys Scottland's shipped config binds.
     rc1, before = run_rc("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@")
@@ -584,8 +588,10 @@ def main():
     saved = open(dirs).read()
     with open(dirs, "w") as f:
         f.write(saved.replace('XDG_PICTURES_DIR="$HOME/Pictures"', 'XDG_PICTURES_DIR="$HOME/Bilder"'))
+    moved_dir = f"{HOME}/Bilder"
+    moved_before = set(os.listdir(moved_dir)) if os.path.isdir(moved_dir) else set()
     press("KEY_PRINT")
-    moved = wait_for(lambda: os.listdir(f"{HOME}/Bilder"), timeout=10)
+    moved = wait_for(lambda: set(os.listdir(moved_dir)) - moved_before, timeout=10)
     check("Print follows a moved Pictures folder (~/Bilder)", moved, moved)
     with open(dirs, "w") as f:
         f.write(saved)
