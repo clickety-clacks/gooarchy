@@ -35,8 +35,9 @@ What you get:
 Foot preparation is on this branch alongside Ghostty. The software-rendered VM comparison passed
 30 of 31 Foot checks, including plain/tmux/SSH bells and clearing, live themes, folder shortcuts,
 touch scrolling, glyphs and ordinary clipboard operations. A program's OSC 52 inside tmux failed
-with both terminals; Ghostty also failed tmux's own copy (29 of 31). The virgl comparison is still
-pending. Ghostty remains the default until the terminal gates are resolved. The comparison runs
+with both terminals under tmux’s inherited `set-clipboard external` policy, which
+[blocks applications’ clipboard writes](https://github.com/tmux/tmux/wiki/Clipboard). Ghostty
+also failed tmux’s own copy (29 of 31). The virgl comparison is still pending. Ghostty remains the default until the terminal gates are resolved. The comparison runs
 with `tests/vm/run.sh terminal-check` inside an already installed test VM; its seeded agent-bell
 checks exercise BEL and read configuration, without running either agent.
 
