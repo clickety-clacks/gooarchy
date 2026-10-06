@@ -36,7 +36,10 @@ To back out instead:
 
 Everything the installer added from packages hangs off two packages, `gooarchy` and
 `gooarchy-flavorings`. The Arch packages from `install/gooarchy-base.packages` and the
-`scottland` and `strata-bin` packages it built went in as their dependencies. Remove those two
+`scottland`, `strata-bin` and `xdg-desktop-portal-wlr-gooarchy` packages it built went in as their
+dependencies. (`xdg-desktop-portal-wlr-gooarchy` is Gooarchy's patched screen-sharing backend; if it
+replaced Arch's `xdg-desktop-portal-wlr`, install Arch's again after removing Gooarchy if you want
+it back: [xdg-desktop-portal-wlr.md](xdg-desktop-portal-wlr.md).) Remove those two
 packages from a console, not from inside Scottland:
 
 ```sh
