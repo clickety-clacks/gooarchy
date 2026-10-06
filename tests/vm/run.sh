@@ -447,6 +447,9 @@ EOF
 cmd_reboot() {
   running || die "the guest isn't running"
   if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
+    # QMP quit stops the emulator without shutting down the guest. Persist the
+    # just-installed modules and package database before replacing its kernel.
+    guest 'sync'
     cmd_stop
     start_qemu
     local version; version=$(guest 'uname -r')
