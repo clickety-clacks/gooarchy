@@ -452,8 +452,12 @@ def copy_paste():
     pane = Pane()
     token = "paste" + secrets.token_hex(6)
     out = f"{TMP}/pasted"
-    copier = subprocess.Popen(["wl-copy", token], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    copier.wait(timeout=10)
+    # Keep the clipboard owner in an owned process group, instead of leaving wl-copy's daemon.
+    copier = subprocess.Popen(["wl-copy", "--foreground", token], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, start_new_session=True)
+    procs.append(copier)
+    if not g.wait_for(lambda: clipboard() == token, timeout=10):
+        raise RuntimeError("the clipboard owner did not publish the paste token")
     pane.present()
     pane.send(f"head -n1 > {out}")
     if not g.wait_for(lambda: os.path.exists(out), timeout=10):
