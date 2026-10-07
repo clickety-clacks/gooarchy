@@ -8,13 +8,12 @@ NV_KERNELS=()
 NV_REPLACED_PACKAGES=()
 declare -A NV_PKGBASE=()
 declare -A NV_IMAGE_MODULE_SET=()
-declare -A NV_CONFIG_MODULE_OPTIONAL=()
-declare -A NV_CONFIG_MODULE_SOURCE=()
-declare -A NV_USER_EFFECT_NVIDIA=()
-declare -A NV_USER_PRESENT_NVIDIA=()
-declare -A NV_USER_REQUIRED_MISSING=()
-declare -A NV_USER_EFFECT_SOURCE=()
-declare -A NV_USER_VISITED_MODULES=()
+NV_CONFIG_DYNAMIC=0
+NV_USER_CONFIG_SOURCE_FILES=()
+NV_CONFIG_SOURCE_FILES=()
+declare -A NV_CONFIG_SOURCE_SEEN=()
+declare -A NV_CONFIG_PROBE_MODULE_SET=()
+NV_CONFIG_PROBE_ERROR=
 declare -A NV_PACKAGE_HOOK_FAILURES=()
 
 nvidia_fail() {
@@ -346,6 +345,7 @@ nvidia_config_has_all_modules() {
   local -a config_files=() tokens=()
   local file line assignment value token module append active
   local -A present=()
+  NV_CONFIG_DYNAMIC=0
   if (($#)); then
     config_files=("$@")
   else
@@ -361,7 +361,14 @@ nvidia_config_has_all_modules() {
         assignment+=" $line"
         [[ $line == *')'* ]] || continue
       else
-        [[ $line =~ ^[[:space:]]*MODULES[[:space:]]*([+])?[[:space:]]*= ]] || continue
+        if [[ ! $line =~ ^[[:space:]]*MODULES[[:space:]]*([+])?[[:space:]]*= ]]; then
+          if [[ $line =~ (^|[[:space:]])MODULES([[:space:]]|\+?=) ||
+                $line =~ ^[[:space:]]*(source|\.)[[:space:]]+ ]]; then
+            NV_CONFIG_DYNAMIC=1
+            return 1
+          fi
+          continue
+        fi
         assignment=$line
         if [[ $line != *')'* ]]; then active=1; continue; fi
       fi
@@ -370,7 +377,10 @@ nvidia_config_has_all_modules() {
       value=${assignment#*=}
       value=${value#*[(]}
       value=${value%%[)]*}
-      [[ $value != *'$'* ]] || return 1
+      if [[ $value == *'$'* || $value == *'`'* ]]; then
+        NV_CONFIG_DYNAMIC=1
+        return 1
+      fi
       value=${value//\"/}
       value=${value//\'/}
       if [[ -z $append ]]; then present=(); fi
@@ -395,8 +405,9 @@ nvidia_config_has_all_modules() {
 nvidia_user_config_has_all_modules() {
   local file
   local -a config_files=()
+  NV_CONFIG_DYNAMIC=0
   for file in /etc/mkinitcpio.conf /etc/mkinitcpio.conf.d/*.conf; do
-    [[ $file == "$NV_OWNED_CONFIG" ]] && continue
+    if [[ $file == "$NV_OWNED_CONFIG" ]] && nvidia_owned_config_is_valid; then continue; fi
     [[ -f $file ]] && config_files+=("$file")
   done
   (( ${#config_files[@]} > 0 )) || return 1
@@ -420,139 +431,43 @@ nvidia_effective_user_config_files() {
   done
 }
 
-nvidia_parse_user_config_modules() {
-  local file line assignment value append active token module optional
-  NV_CONFIG_MODULES=()
-  NV_CONFIG_MODULE_OPTIONAL=()
-  NV_CONFIG_MODULE_SOURCE=()
-  NV_CONFIG_PARSE_ERROR=
-  for file in "$@"; do
-    [[ -f $file ]] || continue
-    assignment=
-    active=0
-    while IFS= read -r line || [[ -n $line ]]; do
-      line=${line%%#*}
-      if ((active)); then
-        assignment+=" $line"
-        [[ $line == *')'* ]] || continue
-        active=0
-      else
-        [[ $line =~ ^[[:space:]]*MODULES[[:space:]]*([+])?[[:space:]]*= ]] || continue
-        assignment=$line
-        if [[ $line != *')'* ]]; then active=1; continue; fi
-      fi
-      [[ $assignment =~ ^[[:space:]]*MODULES[[:space:]]*([+])?[[:space:]]*= ]] || {
-        NV_CONFIG_PARSE_ERROR="$file has an unrecognized MODULES assignment"
-        assignment=
-        continue
-      }
-      append=${BASH_REMATCH[1]:-}
-      value=${assignment#*=}
-      if [[ $value == *'$'* || $value == *'`'* ]]; then
-        NV_CONFIG_PARSE_ERROR="$file uses a dynamic MODULES value that cannot be checked safely"
-        assignment=
-        continue
-      fi
-      value=${value//\(/ }
-      value=${value//\)/ }
-      value=${value//,/ }
-      value=${value//\"/}
-      value=${value//\'/}
-      if [[ -z $append ]]; then
-        NV_CONFIG_MODULES=()
-        NV_CONFIG_MODULE_OPTIONAL=()
-        NV_CONFIG_MODULE_SOURCE=()
-      fi
-      read -r -a tokens <<<"$value"
-      for token in "${tokens[@]}"; do
-        optional=0
-        if [[ $token == *\? ]]; then
-          optional=1
-          token=${token%\?}
-        fi
-        module=${token//-/_}
-        [[ $module =~ ^[[:alnum:]_+.]+$ ]] || continue
-        if [[ ! ${NV_CONFIG_MODULE_SOURCE[$module]+present} ]]; then
-          NV_CONFIG_MODULES+=("$module")
-          NV_CONFIG_MODULE_OPTIONAL[$module]=$optional
-        elif ((optional == 0)); then
-          NV_CONFIG_MODULE_OPTIONAL[$module]=0
-        fi
-        NV_CONFIG_MODULE_SOURCE[$module]=$file
-      done
-      assignment=
-    done <"$file"
-    if ((active)); then NV_CONFIG_PARSE_ERROR="$file has an unterminated MODULES assignment"; fi
-  done
-  return 0
+nvidia_collect_config_source_files() {
+  local file=$1 depth=${2:-0} line target
+  ((depth < 16)) || return 0
+  [[ -f $file && ! ${NV_CONFIG_SOURCE_SEEN[$file]:-} ]] || return 0
+  NV_CONFIG_SOURCE_SEEN[$file]=1
+  NV_CONFIG_SOURCE_FILES+=("$file")
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    [[ $line =~ ^[[:space:]]*(source|\.)[[:space:]]+(.+)$ ]] || continue
+    target=${BASH_REMATCH[2]}
+    target=${target#\"}; target=${target%\"}
+    target=${target#\'}; target=${target%\'}
+    # Resolve only absolute literal includes. Never evaluate user shell or guess a dynamic path.
+    [[ $target =~ ^/[[:alnum:]_./+-]+$ ]] || continue
+    nvidia_collect_config_source_files "$target" "$((depth + 1))"
+  done <"$file"
 }
 
-nvidia_collect_user_module_dependencies() {
-  local kernel=$1 module=${2//-/_} source=$3 depth=${4:-0} dependencies dependency version filename
-  if ((depth >= 32)); then
-    NV_USER_EFFECT_ERROR="module dependency traversal exceeded its safety limit at $module"
-    return 1
-  fi
-  [[ ${NV_USER_VISITED_MODULES[$module]:-} ]] && return 0
-  NV_USER_VISITED_MODULES[$module]=1
-  dependencies=$(modinfo -k "$kernel" -F depends "$module" 2>/dev/null || true)
-  dependencies=${dependencies//,/ }
-  for dependency in $dependencies; do
-    dependency=${dependency//-/_}
-    [[ -n $dependency ]] || continue
-    if [[ $dependency == nvidia* ]]; then
-      NV_USER_EFFECT_NVIDIA[$dependency]=1
-      NV_USER_EFFECT_SOURCE[$dependency]=$source
-      version=$(modinfo -k "$kernel" -F version "$dependency" 2>/dev/null || true)
-      if [[ -n $version ]]; then
-        NV_USER_PRESENT_NVIDIA[$dependency]=1
-      else
-        NV_USER_REQUIRED_MISSING[$dependency]=1
-      fi
-    fi
-    filename=$(modinfo -k "$kernel" -F filename "$dependency" 2>/dev/null || true)
-    [[ -n $filename ]] || continue
-    nvidia_collect_user_module_dependencies "$kernel" "$dependency" "$source" "$((depth + 1))" || return 1
-  done
-}
-
-nvidia_user_config_effect() {
-  local kernel=$1 preset=$2 module source version filename
+nvidia_user_config_source_files() {
+  local preset=$1 file found=0
+  NV_USER_CONFIG_SOURCE_FILES=()
+  NV_CONFIG_SOURCE_FILES=()
+  NV_CONFIG_SOURCE_SEEN=()
   nvidia_effective_user_config_files "$preset"
-  nvidia_parse_user_config_modules "${NV_EFFECTIVE_CONFIG_FILES[@]}"
-  NV_USER_EFFECT_NVIDIA=()
-  NV_USER_PRESENT_NVIDIA=()
-  NV_USER_REQUIRED_MISSING=()
-  NV_USER_EFFECT_SOURCE=()
-  NV_USER_VISITED_MODULES=()
-  NV_USER_EFFECT_FILE=
-  NV_USER_EFFECT_ERROR=$NV_CONFIG_PARSE_ERROR
-  for module in "${NV_CONFIG_MODULES[@]}"; do
-    source=${NV_CONFIG_MODULE_SOURCE[$module]}
-    if [[ $module == nvidia* ]]; then
-      NV_USER_EFFECT_NVIDIA[$module]=1
-      NV_USER_EFFECT_SOURCE[$module]=$source
-      version=$(modinfo -k "$kernel" -F version "$module" 2>/dev/null || true)
-      if [[ -z $version ]]; then
-        if (( ${NV_CONFIG_MODULE_OPTIONAL[$module]:-0} == 0 )); then
-          NV_USER_REQUIRED_MISSING[$module]=1
-        fi
-        continue
-      fi
-      NV_USER_PRESENT_NVIDIA[$module]=1
-      [[ -n $NV_USER_EFFECT_FILE ]] || NV_USER_EFFECT_FILE=$source
-    else
-      filename=$(modinfo -k "$kernel" -F filename "$module" 2>/dev/null || true)
-      [[ -n $filename ]] || continue
-    fi
-    nvidia_collect_user_module_dependencies "$kernel" "$module" "$source" || return 1
+  for file in "${NV_EFFECTIVE_CONFIG_FILES[@]}"; do
+    nvidia_collect_config_source_files "$file"
   done
-  [[ -z $NV_USER_EFFECT_ERROR ]]
-}
-
-nvidia_user_effect_requires_missing_nvidia() {
-  local module=${1//-/_}
-  [[ $module == nvidia* && ${NV_USER_REQUIRED_MISSING[$module]:-} ]]
+  for file in "${NV_CONFIG_SOURCE_FILES[@]}"; do
+    if awk '{ sub(/[[:space:]]*#.*/, ""); if ($0 ~ /^[[:space:]]*MODULES[[:space:]]*[+]?[[:space:]]*=/) found=1 } END { exit !found }' "$file"; then
+      NV_USER_CONFIG_SOURCE_FILES+=("$file")
+      found=1
+    fi
+  done
+  if ((found == 0)); then
+    NV_USER_CONFIG_SOURCE_FILES=("${NV_EFFECTIVE_CONFIG_FILES[@]}")
+  fi
+  ((${#NV_USER_CONFIG_SOURCE_FILES[@]} > 0))
 }
 
 nvidia_missing_nvidia_module_from_error_line() {
@@ -594,10 +509,7 @@ nvidia_record_package_hook_errors() {
     if [[ -n $module ]] && ! nvidia_kernel_is_covered "$current_kernel" "$NV_DRIVER_MODULE_VERSION"; then
       # The owned drop-in's kernel guard is false for an uncovered kernel, so removing that file
       # has the same module effect for this preset; the user's missing-module error is unchanged.
-      if nvidia_user_config_effect "$current_kernel" "$preset" &&
-         nvidia_user_effect_requires_missing_nvidia "$module"; then
-        continue
-      fi
+      continue
     fi
     existing=${NV_PACKAGE_HOOK_FAILURES[$current_kernel]:-}
     NV_PACKAGE_HOOK_FAILURES[$current_kernel]="${existing:+$existing; }$line"
@@ -606,7 +518,7 @@ nvidia_record_package_hook_errors() {
 }
 
 nvidia_run_pacman_transaction() {
-  local output rc
+  local output rc kernel
   output=$(mktemp "${TMPDIR:-/var/tmp}/gooarchy-nvidia-pacman.XXXXXXXX") || return 1
   if "$@" >"$output" 2>&1; then
     rc=0
@@ -615,21 +527,21 @@ nvidia_run_pacman_transaction() {
   fi
   cat "$output"
   nvidia_record_package_hook_errors "$output"
+  for kernel in "${NV_KERNELS[@]}"; do
+    if nvidia_test_failure "pacman-hook:$kernel"; then
+      NV_PACKAGE_HOOK_FAILURES[$kernel]="Gooarchy test hook simulated a mkinitcpio failure before that preset wrote an image"
+    fi
+  done
   rm -f "$output"
   return "$rc"
 }
 
-nvidia_only_user_missing_nvidia_errors() {
+nvidia_only_missing_nvidia_errors() {
   local output_file=$1 line module errors=0
-  [[ -z $NV_USER_EFFECT_ERROR ]] || return 1
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line == *ERROR:* ]] || continue
-    [[ $line == *"ERROR: module not found: '"* ]] || return 1
-    module=${line#*"ERROR: module not found: '"}
-    module=${module%%\'*}
-    [[ -n $module && $module != *[![:alnum:]_-]* ]] || return 1
-    module=${module//-/_}
-    nvidia_user_effect_requires_missing_nvidia "$module" || return 1
+    module=$(nvidia_missing_nvidia_module_from_error_line "$line") || return 1
+    [[ $module == nvidia* ]] || return 1
     ((errors += 1))
   done <"$output_file"
   ((errors > 0))
@@ -686,6 +598,60 @@ nvidia_image_module_state() {
   [[ -z $NV_IMAGE_ERROR ]]
 }
 
+nvidia_probe_config_modules() {
+  local preset=$1 kernel=$2 expected=$3 allow_missing=${4:-0} config image_status=0 module
+  local -a args=(sudo mkinitcpio -k "$kernel" -g)
+  local image log
+  NV_CONFIG_PROBE_MODULE_SET=()
+  NV_CONFIG_PROBE_ERROR=
+  config=$(nvidia_preset_config "$preset")
+  image=$(mktemp "${TMPDIR:-/var/tmp}/gooarchy-nvidia-config-probe.XXXXXXXX") || {
+    NV_CONFIG_PROBE_ERROR="could not create a temporary mkinitcpio image for $kernel"
+    return 2
+  }
+  rm -f "$image"
+  log=$(mktemp "${TMPDIR:-/var/tmp}/gooarchy-nvidia-config-probe.XXXXXXXX") || {
+    sudo rm -f "$image"
+    NV_CONFIG_PROBE_ERROR="could not capture mkinitcpio output for $kernel"
+    return 2
+  }
+  args+=("$image")
+  [[ -z $config ]] || args+=(-c "$config")
+  if "${args[@]}" >"$log" 2>&1; then
+    image_status=0
+  else
+    image_status=$?
+  fi
+  cat "$log"
+  if ((image_status != 0)) && ! { ((allow_missing)) && nvidia_only_missing_nvidia_errors "$log"; }; then
+    NV_CONFIG_PROBE_ERROR="mkinitcpio reported an error while evaluating $preset for $kernel"
+    rm -f "$log"
+    sudo rm -f "$image"
+    return 2
+  fi
+  rm -f "$log"
+  if ! nvidia_image_listable "$image"; then
+    sudo rm -f "$image"
+    NV_CONFIG_PROBE_ERROR="mkinitcpio did not produce a listable throwaway image for $kernel from ${config:-/etc/mkinitcpio.conf}"
+    return 2
+  fi
+  nvidia_image_module_state "$image" "$expected" || true
+  for module in "${!NV_IMAGE_MODULE_SET[@]}"; do
+    NV_CONFIG_PROBE_MODULE_SET[$module]=1
+  done
+  sudo rm -f "$image"
+  return 0
+}
+
+nvidia_probe_config_has_all_modules() {
+  local preset=$1 kernel=$2 expected=$3
+  nvidia_probe_config_modules "$preset" "$kernel" "$expected" 0 || return 2
+  [[ ${NV_CONFIG_PROBE_MODULE_SET[nvidia]:-} &&
+     ${NV_CONFIG_PROBE_MODULE_SET[nvidia_modeset]:-} &&
+     ${NV_CONFIG_PROBE_MODULE_SET[nvidia_uvm]:-} &&
+     ${NV_CONFIG_PROBE_MODULE_SET[nvidia_drm]:-} ]]
+}
+
 nvidia_kernel_module_state() {
   local kernel=$1 expected=$2 module version file
   NV_KERNEL_MODULES=0
@@ -717,10 +683,15 @@ nvidia_collect_kernel_presets() {
 }
 
 nvidia_space_check() {
-  local only_kernel=${1:-} context=${2:-} preset image parent filesystem bytes need_kb available_kb kernel
+  local only_kernel=${1:-} context=${2:-} only_preset=${3:-} preset image parent filesystem bytes need_kb available_kb kernel
   local -A required=() available=()
   local -a presets=()
-  if [[ -n $only_kernel ]]; then
+  if nvidia_test_failure "space"; then
+    nvidia_fail "not enough free space to keep the existing initramfs images intact while writing NVIDIA images (GOOARCHY_TEST_NVIDIA_FAIL=space). No image or NVIDIA package was changed. Free space and rerun."
+  fi
+  if [[ -n $only_preset ]]; then
+    presets=("$only_preset")
+  elif [[ -n $only_kernel ]]; then
     nvidia_collect_kernel_presets "$only_kernel"
     presets=("${NV_KERNEL_PRESETS[@]}")
   else
@@ -761,21 +732,25 @@ nvidia_space_check() {
 }
 
 nvidia_regenerate_kernel_images() {
-  local kernel=$1 context=${2:-} preset status output preset_name failed_by_test uncovered=0
-  nvidia_collect_kernel_presets "$kernel"
-  ((${#NV_KERNEL_PRESETS[@]})) || return 2
+  local kernel=$1 context=${2:-} only_preset=${3:-} preset status output preset_name failed_by_test uncovered=0
+  local -a presets=()
+  if [[ -n $only_preset ]]; then
+    presets=("$only_preset")
+  else
+    nvidia_collect_kernel_presets "$kernel"
+    presets=("${NV_KERNEL_PRESETS[@]}")
+  fi
+  ((${#presets[@]})) || return 2
   nvidia_kernel_is_covered "$kernel" "${NV_DRIVER_MODULE_VERSION:-unknown}" || uncovered=1
-  nvidia_space_check "$kernel" "$context"
-  for preset in "${NV_KERNEL_PRESETS[@]}"; do
+  nvidia_space_check "$kernel" "$context" "$only_preset"
+  for preset in "${presets[@]}"; do
     status=0
     failed_by_test=0
     preset_name=${preset##*/}
     preset_name=${preset_name%.preset}
-    if ((uncovered)); then
-      nvidia_user_config_effect "$kernel" "$preset" || return 3
-    fi
     output=$(mktemp "${TMPDIR:-/var/tmp}/gooarchy-nvidia-mkinitcpio.XXXXXXXX") || return 1
-    if nvidia_test_failure "mkinitcpio:${kernel}"; then
+    if nvidia_test_failure "mkinitcpio:${kernel}" ||
+       nvidia_test_failure "mkinitcpio-pkgbase:${NV_PKGBASE[$kernel]}"; then
       status=99
       failed_by_test=1
       printf 'Gooarchy test hook failed mkinitcpio for %s\n' "$kernel" >"$output"
@@ -784,7 +759,7 @@ nvidia_regenerate_kernel_images() {
     fi
     cat "$output"
     if ((status != 0)); then
-      if ((uncovered && !failed_by_test)) && nvidia_only_user_missing_nvidia_errors "$output"; then
+      if ((uncovered && !failed_by_test)) && nvidia_only_missing_nvidia_errors "$output"; then
         nvidia_report "mkinitcpio reported only missing NVIDIA modules requested by the user's configuration for uncovered kernel $kernel; the owned drop-in adds no modules for this kernel, and its image still must pass the version, firmware and listability checks."
         rm -f "$output"
         continue
@@ -798,36 +773,51 @@ nvidia_regenerate_kernel_images() {
 }
 
 nvidia_test_failure() {
-  [[ ${GOOARCHY_TEST_NVIDIA_FAIL:-} == "$1" ]]
+  local failures=,${GOOARCHY_TEST_NVIDIA_FAIL:-},
+  [[ $failures == *,$1,* ]]
 }
 
 nvidia_baseline_kernel_state() {
-  local kernel=$1 expected=$2 preset image
+  local kernel=$1 expected=$2 preset image preset_bad
+  local -A bad_presets=()
+  NV_BASELINE_BAD_PRESETS=()
   NV_BASELINE_ERROR=
   nvidia_kernel_module_state "$kernel" "$expected" || NV_BASELINE_ERROR=$NV_KERNEL_ERROR
   nvidia_collect_kernel_presets "$kernel"
   for preset in "${NV_KERNEL_PRESETS[@]}"; do
+    preset_bad=0
     nvidia_preset_images "$preset"
     if ((NV_IMAGES_UNRESOLVED)) || ((${#NV_IMAGES[@]} == 0)); then
       NV_BASELINE_ERROR="could not resolve every image path in ${preset##*/}"
+      bad_presets[$preset]=1
       continue
     fi
     for image in "${NV_IMAGES[@]}"; do
       if [[ ! -e $image ]]; then
         NV_BASELINE_ERROR="image $image is missing"
+        bad_presets[$preset]=1
         continue
       fi
       if ! nvidia_image_listable "$image"; then
         NV_BASELINE_ERROR="image $image is absent or cannot be listed"
+        bad_presets[$preset]=1
         continue
       fi
-      nvidia_image_module_state "$image" "$expected" || NV_BASELINE_ERROR=${NV_IMAGE_ERROR:-image $image has inconsistent NVIDIA modules}
+      if ! nvidia_image_module_state "$image" "$expected"; then
+        NV_BASELINE_ERROR="image $image: ${NV_IMAGE_ERROR:-inconsistent NVIDIA modules}"
+        preset_bad=1
+      fi
     done
+    ((preset_bad)) && bad_presets[$preset]=1
   done
+  NV_BASELINE_BAD_PRESETS=("${!bad_presets[@]}")
 }
 
 nvidia_kernel_user_partial_state() {
-  local kernel=$1 expected=$2 preset image module
+  local kernel=$1 expected=$2 preset image file module probe_done matches
+  local -A seen_files=()
+  local -A image_modules=()
+  local -a source_files=()
   NV_USER_PARTIAL=0
   NV_USER_PARTIAL_UNKNOWN=0
   NV_USER_PARTIAL_FILE=
@@ -835,22 +825,59 @@ nvidia_kernel_user_partial_state() {
   nvidia_collect_kernel_presets "$kernel"
   for preset in "${NV_KERNEL_PRESETS[@]}"; do
     nvidia_preset_images "$preset"
-    if ! nvidia_user_config_effect "$kernel" "$preset"; then
+    if ((NV_IMAGES_UNRESOLVED)) || ((${#NV_IMAGES[@]} == 0)); then
       NV_USER_PARTIAL_UNKNOWN=1
       continue
     fi
+    probe_done=0
     for image in "${NV_IMAGES[@]}"; do
+      if ! nvidia_image_listable "$image"; then
+        NV_USER_PARTIAL_UNKNOWN=1
+        continue
+      fi
       nvidia_image_module_state "$image" "$expected" || true
+      ((NV_IMAGE_HAS_NVIDIA)) || continue
+      image_modules=()
       for module in "${!NV_IMAGE_MODULE_SET[@]}"; do
-        if [[ ${NV_USER_EFFECT_NVIDIA[$module]:-} ]]; then
-          NV_USER_PARTIAL=1
-          NV_USER_PARTIAL_FILE=${NV_USER_EFFECT_SOURCE[$module]:-${NV_USER_EFFECT_FILE:-}}
-          [[ -n $NV_USER_PARTIAL_FILE ]] || NV_USER_PARTIAL_FILE=${NV_EFFECTIVE_CONFIG_FILES[0]:-/etc/mkinitcpio.conf}
-          return 0
+        image_modules[$module]=1
+      done
+      if ((probe_done == 0)); then
+        if nvidia_probe_config_modules "$preset" "$kernel" "$expected" 1; then
+          probe_done=1
+        else
+          probe_done=2
+          NV_USER_PARTIAL_UNKNOWN=1
+          continue
         fi
+      fi
+      ((probe_done == 1)) || continue
+      matches=0
+      for module in "${!image_modules[@]}"; do
+        [[ ${NV_CONFIG_PROBE_MODULE_SET[$module]:-} ]] && { matches=1; break; }
+      done
+      ((matches)) || continue
+      NV_USER_PARTIAL=1
+      nvidia_user_config_source_files "$preset" || true
+      for file in "${NV_USER_CONFIG_SOURCE_FILES[@]}"; do
+        [[ ${seen_files[$file]:-} ]] && continue
+        seen_files[$file]=1
+        source_files+=("$file")
       done
     done
   done
+  if ((NV_USER_PARTIAL_UNKNOWN)); then
+    for preset in "${NV_KERNEL_PRESETS[@]}"; do
+      nvidia_user_config_source_files "$preset" || continue
+      for file in "${NV_USER_CONFIG_SOURCE_FILES[@]}"; do
+        [[ ${seen_files[$file]:-} ]] && continue
+        seen_files[$file]=1
+        source_files+=("$file")
+      done
+    done
+  fi
+  if ((${#source_files[@]})); then
+    NV_USER_PARTIAL_FILE=$(nvidia_list "${source_files[@]}")
+  fi
   return 0
 }
 
@@ -889,7 +916,7 @@ nvidia_stale_recovery_text() {
 }
 
 nvidia_repair_stale_baseline() {
-  local kernel=$1 expected=$2 build_status=0
+  local kernel=$1 expected=$2 build_status=0 preset
   nvidia_baseline_kernel_state "$kernel" "$expected"
   [[ -z $NV_BASELINE_ERROR ]] && return 0
   nvidia_report "found an NVIDIA image baseline out of step for ${NV_PKGBASE[$kernel]} kernel $kernel: $NV_BASELINE_ERROR; attempting to repair it before changing NVIDIA packages."
@@ -907,10 +934,10 @@ nvidia_repair_stale_baseline() {
     fi
   fi
 
-  nvidia_collect_kernel_presets "$kernel"
-  if ((${#NV_KERNEL_PRESETS[@]})); then
-    nvidia_regenerate_kernel_images "$kernel" stale || return 1
-  fi
+  nvidia_baseline_kernel_state "$kernel" "$expected"
+  for preset in "${NV_BASELINE_BAD_PRESETS[@]}"; do
+    nvidia_regenerate_kernel_images "$kernel" stale "$preset" || return 1
+  done
   nvidia_baseline_kernel_state "$kernel" "$expected"
   [[ -z $NV_BASELINE_ERROR ]]
 }
@@ -938,8 +965,8 @@ nvidia_report_suspend_overrides() {
     awk '
       { sub(/[[:space:]]*#.*/, "") }
       /^[[:space:]]*$/ { next }
-      /NVreg_UseKernelSuspendNotifiers[[:space:]]*=[[:space:]]*0/ { found=1 }
-      /NVreg_PreserveVideoMemoryAllocations[[:space:]]*=[[:space:]]*1/ { found=1 }
+      /^[[:space:]]*options[[:space:]]+nvidia([[:space:]]|$).*NVreg_UseKernelSuspendNotifiers[[:space:]]*=[[:space:]]*0/ { found=1 }
+      /^[[:space:]]*options[[:space:]]+nvidia([[:space:]]|$).*NVreg_PreserveVideoMemoryAllocations[[:space:]]*=[[:space:]]*1/ { found=1 }
       END { exit !found }
     ' "$file" && nvidia_report "left the user's NVIDIA suspend configuration in $file unchanged; kernel suspend notifiers or video-memory preservation are user-configured, and Gooarchy does not change the NVIDIA sleep services."
   done
@@ -998,8 +1025,57 @@ nvidia_owned_config_is_valid() {
   [[ -n $actual_hash && $actual_hash == "$expected_hash" ]]
 }
 
+nvidia_any_covered_kernel() {
+  local expected=$1 kernel
+  for kernel in "${NV_KERNELS[@]}"; do
+    if nvidia_kernel_is_covered "$kernel" "$expected"; then
+      printf '%s\n' "$kernel"
+      return 0
+    fi
+  done
+  return 1
+}
+
+nvidia_covered_kernel_for_preset() {
+  local preset=$1 expected=$2 kernel base=${1##*/}
+  base=${base%.preset}
+  for kernel in "${NV_KERNELS[@]}"; do
+    [[ ${NV_PKGBASE[$kernel]} == "$base" ]] || continue
+    if nvidia_kernel_is_covered "$kernel" "$expected"; then
+      printf '%s\n' "$kernel"
+      return 0
+    fi
+  done
+  return 1
+}
+
+nvidia_preset_has_all_modules() {
+  local preset=$1 kernel=$2 expected=$3 config status
+  config=$(nvidia_preset_config "$preset")
+  if [[ -n $config ]]; then
+    if [[ $config == "$NV_OWNED_CONFIG" ]] && nvidia_owned_config_is_valid; then
+      nvidia_kernel_is_covered "$kernel" "$expected"
+      return $?
+    fi
+    nvidia_config_has_all_modules "$config" && return 0
+  else
+    if ((NV_OWNED_CONFIG_VALID)) && nvidia_kernel_is_covered "$kernel" "$expected"; then
+      return 0
+    fi
+    nvidia_user_config_has_all_modules && return 0
+  fi
+  ((NV_CONFIG_DYNAMIC)) || return 1
+  if nvidia_probe_config_has_all_modules "$preset" "$kernel" "$expected"; then
+    return 0
+  else
+    status=$?
+  fi
+  return "$status"
+}
+
 nvidia_set_early_kms_config() {
   local module_version=$1 existing_version tmp preset config old_content expected_hash actual_hash
+  local probe_kernel probe_status probe_error
   NV_OWNED_CONFIG_VALID=0
   if ! command -v mkinitcpio >/dev/null 2>&1; then
     for preset in $(nvidia_preset_files); do
@@ -1029,11 +1105,51 @@ nvidia_set_early_kms_config() {
   for preset in $(nvidia_preset_files); do
     config=$(nvidia_preset_config "$preset")
     if [[ -z $config ]]; then
-      if ! nvidia_user_config_has_all_modules; then need_config=1; fi
-    elif [[ -f $config ]] && ! nvidia_config_has_all_modules "$config"; then
-      # This preset bypasses drop-ins. Its chosen config and image stay untouched.
-      nvidia_report "the ${preset##*/} preset reads $config directly, so NVIDIA was not added to its initramfs (the driver still loads later in boot). To load it early, add nvidia nvidia_modeset nvidia_uvm nvidia_drm to that file, then run sudo mkinitcpio -P."
-    elif [[ ! -f $config && ! nvidia_user_config_has_all_modules ]]; then
+      if nvidia_user_config_has_all_modules; then
+        continue
+      elif ((NV_CONFIG_DYNAMIC)); then
+        probe_kernel=$(nvidia_any_covered_kernel "$module_version" || true)
+        # An uncovered-only installation has no safe kernel on which to evaluate the user's
+        # dynamic list. Leave it alone; a later run can decide when a kernel becomes covered.
+        [[ -n $probe_kernel ]] || continue
+        if nvidia_probe_config_has_all_modules "$preset" "$probe_kernel" "$module_version"; then
+          continue
+        else
+          probe_status=$?
+          if ((probe_status != 1)); then
+            probe_error=${NV_CONFIG_PROBE_ERROR:-}
+            [[ -n $probe_error ]] || probe_error="could not determine whether the dynamic mkinitcpio MODULES configuration already supplies all four NVIDIA modules"
+            nvidia_fail "$probe_error; the configuration and images were left unchanged. Inspect mkinitcpio, then rerun."
+          fi
+          need_config=1
+        fi
+      else
+        need_config=1
+      fi
+    elif [[ -f $config ]]; then
+      if nvidia_config_has_all_modules "$config"; then
+        continue
+      elif ((NV_CONFIG_DYNAMIC)); then
+        probe_kernel=$(nvidia_covered_kernel_for_preset "$preset" "$module_version" || true)
+        [[ -n $probe_kernel ]] || continue
+        if nvidia_probe_config_has_all_modules "$preset" "$probe_kernel" "$module_version"; then
+          continue
+        else
+          probe_status=$?
+          if ((probe_status == 2)); then
+            nvidia_report "${NV_CONFIG_PROBE_ERROR:-could not inspect the dynamic configuration used by ${preset##*/}}; left $config and its images unchanged and did not set up NVIDIA early KMS for that preset."
+          else
+            nvidia_report "the ${preset##*/} preset reads $config directly, so NVIDIA was not added to its initramfs (the driver still loads later in boot). To load it early, add nvidia nvidia_modeset nvidia_uvm nvidia_drm to that file, then run sudo mkinitcpio -P."
+          fi
+        fi
+      else
+        # This preset bypasses drop-ins. Its chosen config and image stay untouched.
+        nvidia_report "the ${preset##*/} preset reads $config directly, so NVIDIA was not added to its initramfs (the driver still loads later in boot). To load it early, add nvidia nvidia_modeset nvidia_uvm nvidia_drm to that file, then run sudo mkinitcpio -P."
+      fi
+    else
+      if nvidia_user_config_has_all_modules; then
+        continue
+      fi
       nvidia_report "the ${preset##*/} preset selects $config, which is unavailable for inspection; NVIDIA was not added to its initramfs."
     fi
   done
@@ -1059,7 +1175,7 @@ nvidia_set_early_kms_config() {
 
 nvidia_report_uncovered_kernel() {
   local kernel=$1 reason=$2 log=/var/lib/dkms/nvidia/${NV_DRIVER_MODULE_VERSION:-unknown}/build/make.log
-  local undo=
+  local undo= source_detail=${NV_USER_PARTIAL_FILE:-the effective mkinitcpio configuration}
   if ((${#NV_REPLACED_PACKAGES[@]})); then
     undo=" The replaced prebuilt driver can be restored with sudo pacman -S ${NV_REPLACED_PACKAGES[*]}."
   fi
@@ -1068,7 +1184,9 @@ nvidia_report_uncovered_kernel() {
     reason+=". DKMS build log: $log"
   fi
   if (( ${NV_USER_PARTIAL:-0} )); then
-    nvidia_report "${NV_PKGBASE[$kernel]} kernel $kernel is an uncovered user partial kernel: $reason. Its images contain NVIDIA modules requested by $NV_USER_PARTIAL_FILE, which install.sh left unchanged. Gooarchy does not promise this kernel reaches the desktop. Fix: remove the NVIDIA modules from $NV_USER_PARTIAL_FILE and run sudo mkinitcpio -P, or rerun install.sh once this kernel can be covered; its module versions, firmware and image consistency remain checked.${undo}"
+    nvidia_report "${NV_PKGBASE[$kernel]} kernel $kernel is an uncovered user partial kernel: $reason. Its images contain NVIDIA modules produced by the user's mkinitcpio configuration in $NV_USER_PARTIAL_FILE, which install.sh left unchanged. Gooarchy does not promise this kernel reaches the desktop. Fix: remove the NVIDIA module settings from those files and run sudo mkinitcpio -P, or rerun install.sh once this kernel can be covered; its module versions, firmware and image consistency remain checked.${undo}"
+  elif (( ${NV_USER_PARTIAL_UNKNOWN:-0} )); then
+    nvidia_report "${NV_PKGBASE[$kernel]} kernel $kernel is uncovered: $reason. Gooarchy could not classify the NVIDIA module effect in its initramfs using $source_detail; inspect it and remove any NVIDIA module settings if the kernel should reach the desktop. A8 fallback on real NVIDIA hardware is UNEXERCISED.${undo}"
   else
     nvidia_report "${NV_PKGBASE[$kernel]} kernel $kernel is uncovered: $reason. Its images contain no user-configured NVIDIA modules; A8 fallback on real NVIDIA hardware is UNEXERCISED.${undo}"
   fi
@@ -1082,19 +1200,10 @@ nvidia_report_partial_failure_if_present() {
   fi
 }
 
-nvidia_image_matches_user_effect() {
-  local module
-  for module in "${!NV_USER_PRESENT_NVIDIA[@]}"; do
-    [[ ${NV_IMAGE_MODULE_SET[$module]:-} ]] || return 1
-  done
-  for module in "${!NV_IMAGE_MODULE_SET[@]}"; do
-    [[ ${NV_USER_PRESENT_NVIDIA[$module]:-} ]] || return 1
-  done
-  return 0
-}
-
 nvidia_ensure_uncovered_images() {
-  local kernel=$1 reason=$2 preset image module needs_regeneration=0 partial_before=0 partial_file_before=
+  local kernel=$1 reason=$2 preset image config preset_early_kms r11_preset needs_regeneration=0
+  local -a regenerate_presets=()
+  local -A regenerate_seen=()
   nvidia_collect_kernel_presets "$kernel"
   if ((${#NV_KERNEL_PRESETS[@]} == 0)); then
     NV_USER_PARTIAL=0
@@ -1103,77 +1212,76 @@ nvidia_ensure_uncovered_images() {
     return 0
   fi
   for preset in "${NV_KERNEL_PRESETS[@]}"; do
+    if nvidia_preset_has_all_modules "$preset" "$kernel" "$NV_DRIVER_MODULE_VERSION"; then
+      preset_early_kms=1
+    else
+      preset_early_kms=0
+    fi
+    config=$(nvidia_preset_config "$preset")
+    if ((preset_early_kms == 0)) && [[ -n $config ]]; then r11_preset=1; else r11_preset=0; fi
     nvidia_preset_images "$preset"
     if ((NV_IMAGES_UNRESOLVED)) || ((${#NV_IMAGES[@]} == 0)); then
+      if ((r11_preset)); then
+        nvidia_report "could not resolve every image path in ${preset##*/}; the preset bypasses Gooarchy's drop-in and the step left its image unchanged. Repair the user's preset, then rerun."
+        nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason; image paths in ${preset##*/} are unresolved or absent"
+        return 1
+      fi
       nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason; image paths in ${preset##*/} are unresolved or absent"
-      return 1
-    fi
-    if ! nvidia_user_config_effect "$kernel" "$preset"; then
-      nvidia_report "could not safely inspect the effective MODULES list for ${preset##*/} on uncovered kernel $kernel: ${NV_USER_EFFECT_ERROR:-configuration could not be parsed}. The user configuration and images were left unchanged."
       return 1
     fi
     for image in "${NV_IMAGES[@]}"; do
       if ! nvidia_image_listable "$image"; then
+        if ((r11_preset)); then
+          nvidia_report "image $image for ${preset##*/} is absent or cannot be listed; the preset bypasses Gooarchy's drop-in and the step left it unchanged. Repair the user's preset image, then rerun."
+          nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason; image $image is absent or cannot be listed"
+          return 1
+        fi
         needs_regeneration=1
+        if [[ ! ${regenerate_seen[$preset]:-} ]]; then
+          regenerate_seen[$preset]=1
+          regenerate_presets+=("$preset")
+        fi
         continue
       fi
-      if ! nvidia_image_module_state "$image" "$NV_DRIVER_MODULE_VERSION" || ! nvidia_image_matches_user_effect; then
+      if ! nvidia_image_module_state "$image" "$NV_DRIVER_MODULE_VERSION"; then
         needs_regeneration=1
+        if ((r11_preset)); then
+          nvidia_report "image $image for ${preset##*/} has an NVIDIA module version or firmware mismatch; the preset bypasses Gooarchy's drop-in and the step left it unchanged. Repair the user's preset image, then rerun."
+          nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason; image $image has a version or firmware mismatch"
+          return 1
+        fi
+        if [[ ! ${regenerate_seen[$preset]:-} ]]; then
+          regenerate_seen[$preset]=1
+          regenerate_presets+=("$preset")
+        fi
       fi
     done
   done
-  nvidia_kernel_user_partial_state "$kernel" "$NV_DRIVER_MODULE_VERSION"
-  partial_before=$NV_USER_PARTIAL
-  partial_file_before=$NV_USER_PARTIAL_FILE
   if ((needs_regeneration)); then
     command -v mkinitcpio >/dev/null 2>&1 || {
       nvidia_report "uncovered kernel $kernel needs regenerated NVIDIA images, but mkinitcpio is unavailable; the user configuration and images were left unchanged."
       return 1
     }
-    if ! nvidia_regenerate_kernel_images "$kernel" uncovered; then
-      if ((partial_before)); then
-        NV_USER_PARTIAL=1
-        NV_USER_PARTIAL_FILE=$partial_file_before
-        nvidia_report_uncovered_kernel "$kernel" "$reason"
-      else
+    for preset in "${regenerate_presets[@]}"; do
+      if ! nvidia_regenerate_kernel_images "$kernel" uncovered "$preset"; then
         nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason"
+        return 1
       fi
-      return 1
-    fi
+    done
   fi
   for preset in "${NV_KERNEL_PRESETS[@]}"; do
     nvidia_preset_images "$preset"
     if ((NV_IMAGES_UNRESOLVED)) || ((${#NV_IMAGES[@]} == 0)); then
-      if ((partial_before)); then
-        NV_USER_PARTIAL=1
-        NV_USER_PARTIAL_FILE=$partial_file_before
-        nvidia_report_uncovered_kernel "$kernel" "$reason; image paths in ${preset##*/} became unresolved or absent"
-      else
-        nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason; image paths in ${preset##*/} became unresolved or absent"
-      fi
+      nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason; image paths in ${preset##*/} became unresolved or absent"
       return 1
     fi
-    nvidia_user_config_effect "$kernel" "$preset" || return 1
     for image in "${NV_IMAGES[@]}"; do
       if ! nvidia_image_listable "$image"; then
-        if ((partial_before)); then
-          NV_USER_PARTIAL=1
-          NV_USER_PARTIAL_FILE=$partial_file_before
-          nvidia_report_uncovered_kernel "$kernel" "$reason"
-        else
-          nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason"
-        fi
+        nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason"
         return 1
       fi
-      nvidia_image_module_state "$image" "$NV_DRIVER_MODULE_VERSION" || true
-      if [[ -n $NV_IMAGE_ERROR ]] || ! nvidia_image_matches_user_effect; then
-        if ((partial_before)); then
-          NV_USER_PARTIAL=1
-          NV_USER_PARTIAL_FILE=$partial_file_before
-          nvidia_report_uncovered_kernel "$kernel" "$reason"
-        else
-          nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason"
-        fi
+      if ! nvidia_image_module_state "$image" "$NV_DRIVER_MODULE_VERSION"; then
+        nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason"
         return 1
       fi
     done
@@ -1295,6 +1403,9 @@ nvidia_install() {
   if ! pacman -Q nvidia-open-dkms >/dev/null 2>&1; then
     driver_targets+=("extra/nvidia-open-dkms=$dkms_package_version")
   fi
+  if nvidia_test_failure "pacman:force-transaction" && pacman -Q nvidia-open-dkms >/dev/null 2>&1; then
+    driver_targets+=("extra/nvidia-open-dkms=$dkms_package_version")
+  fi
   for package in nvidia-open nvidia-open-lts; do
     if pacman -Q "$package" >/dev/null 2>&1; then
       has_prebuilt=1
@@ -1310,7 +1421,8 @@ nvidia_install() {
     if nvidia_test_failure "pacman:before-commit"; then
       nvidia_fail "the NVIDIA package transaction failed before commit (GOOARCHY_TEST_NVIDIA_FAIL); no NVIDIA package, owned file, or image was changed."
     fi
-    local -a pacman_args=(sudo pacman -S --needed --asexplicit)
+    local -a pacman_args=(sudo pacman -S --asexplicit)
+    nvidia_test_failure "pacman:force-transaction" || pacman_args+=(--needed)
     local prompt_input
     if ((has_prebuilt)); then
       pacman_args+=(--confirm)
@@ -1409,39 +1521,68 @@ nvidia_install() {
         nvidia_fail_if_package_hook_failed "$kernel"
         continue
       fi
-      local regenerate=0 preset_early_kms
+      local regenerate=0 preset_early_kms r11_preset
+      local -a regenerate_presets=()
+      local -A regenerate_seen=()
       for preset in "${NV_KERNEL_PRESETS[@]}"; do
-        config=$(nvidia_preset_config "$preset")
-        if [[ -n $config ]]; then
-          if nvidia_config_has_all_modules "$config"; then preset_early_kms=1; else preset_early_kms=0; fi
+        if nvidia_preset_has_all_modules "$preset" "$kernel" "$expected"; then
+          preset_early_kms=1
         else
-          if ((NV_OWNED_CONFIG_VALID)) || nvidia_user_config_has_all_modules; then preset_early_kms=1; else preset_early_kms=0; fi
+          preset_early_kms=0
+        fi
+        config=$(nvidia_preset_config "$preset")
+        if ((preset_early_kms == 0)) && [[ -n $config ]]; then
+          # R11 leaves a preset that bypasses drop-ins and its image to the user. The step still
+          # verifies that image, but only R15a's stale-baseline repair may regenerate it.
+          r11_preset=1
+        else
+          r11_preset=0
         fi
         nvidia_preset_images "$preset"
         if ((${#NV_IMAGES[@]} == 0)) || ((NV_IMAGES_UNRESOLVED)); then
           nvidia_fail "could not resolve every image path in ${preset##*/}; the NVIDIA image state cannot be verified."
         fi
         for image in "${NV_IMAGES[@]}"; do
-          if ! nvidia_image_listable "$image"; then regenerate=1; break; fi
-          if ! nvidia_image_module_state "$image" "$expected"; then
+          if ! nvidia_image_listable "$image"; then
+            if ((r11_preset)); then
+              nvidia_fail_if_package_hook_failed "$kernel"
+              nvidia_fail "image $image for ${preset##*/} is absent or cannot be listed; the preset bypasses Gooarchy's drop-in and the step did not regenerate it. Repair the user's preset image, then rerun."
+            fi
             regenerate=1
+            if [[ ! ${regenerate_seen[$preset]:-} ]]; then
+              regenerate_seen[$preset]=1
+              regenerate_presets+=("$preset")
+            fi
+            break
+          fi
+          if ! nvidia_image_module_state "$image" "$expected"; then
+            if ((r11_preset)); then
+              nvidia_fail_if_package_hook_failed "$kernel"
+              nvidia_fail "image $image for ${preset##*/} has an NVIDIA module version or firmware mismatch; the preset bypasses Gooarchy's drop-in and the step did not regenerate it. Repair the user's preset image, then rerun."
+            fi
+            regenerate=1
+            if [[ ! ${regenerate_seen[$preset]:-} ]]; then
+              regenerate_seen[$preset]=1
+              regenerate_presets+=("$preset")
+            fi
           elif ((preset_early_kms)) && ((NV_IMAGE_HAS_ALL == 0)); then
             regenerate=1
+            if [[ ! ${regenerate_seen[$preset]:-} ]]; then
+              regenerate_seen[$preset]=1
+              regenerate_presets+=("$preset")
+            fi
           fi
         done
       done
       if ((regenerate)); then
-        if ! nvidia_regenerate_kernel_images "$kernel"; then
-          nvidia_report_other_user_partial_kernels "$kernel"
-          nvidia_fail "mkinitcpio failed while generating early-KMS images for ${NV_PKGBASE[$kernel]} kernel $kernel; the NVIDIA package is installed. Read the step log, restore a complete image, then rerun."
-        fi
-        for preset in "${NV_KERNEL_PRESETS[@]}"; do
-          config=$(nvidia_preset_config "$preset")
-          if [[ -n $config ]]; then
-            if nvidia_config_has_all_modules "$config"; then preset_early_kms=1; else preset_early_kms=0; fi
-          else
-            if ((NV_OWNED_CONFIG_VALID)) || nvidia_user_config_has_all_modules; then preset_early_kms=1; else preset_early_kms=0; fi
+        for preset in "${regenerate_presets[@]}"; do
+          if ! nvidia_regenerate_kernel_images "$kernel" "" "$preset"; then
+            nvidia_report_other_user_partial_kernels "$kernel"
+            nvidia_fail "mkinitcpio failed while generating early-KMS images for ${NV_PKGBASE[$kernel]} kernel $kernel using ${preset##*/}; the NVIDIA package is installed. Read the step log, restore a complete image, then rerun."
           fi
+        done
+        for preset in "${NV_KERNEL_PRESETS[@]}"; do
+          if nvidia_preset_has_all_modules "$preset" "$kernel" "$expected"; then preset_early_kms=1; else preset_early_kms=0; fi
           nvidia_preset_images "$preset"
           ((NV_IMAGES_UNRESOLVED == 0)) && ((${#NV_IMAGES[@]} > 0)) || {
             nvidia_report_other_user_partial_kernels "$kernel"
