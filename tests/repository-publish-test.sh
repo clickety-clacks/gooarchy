@@ -295,7 +295,6 @@ for name in names:
             archive = subprocess.Popen(
                 ["bsdtar", "-C", temporary, "-cf", "-", *archive_entries],
                 stdout=subprocess.PIPE,
-                check=False,
             )
             compressor = subprocess.run(
                 ["zstd", "-q", "-c"], stdin=archive.stdout, stdout=output, check=False
