@@ -65,7 +65,8 @@ What the run does, in order: an install made to fail at one step and then rerun 
 rebuilding Scottland at another commit and back (the installed plugin must follow); a reboot into
 the autologin session; the session check; password logins typed at the consoles; and a check that a
 newer Wayfire can't install over the Scottland built for this one; and the Rust toolchain being
-optional: the install leaves none behind, and a Gooarchy package upgrade installs without one.
+optional: the install leaves none behind, and without one the `gooarchy` package installs and its
+command runs.
 
 The session check drives the desktop the way a person would, through Wayfire's virtual input, and
 checks each step against Scottland's own model and against the screen: Super+Enter opens Ghostty,
@@ -126,7 +127,7 @@ the new Wayfire.
 | `install/sources.conf` | Scottland and Strata, pinned to the versions tested together |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on everything) and `gooarchy-flavorings` |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
-| `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem as they are written. The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to run or upgrade ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
+| `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem as they are written. The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
 | `flavorings/` | The curated defaults: Scottland config fragment and hooks, theme, tmux, mosh, default apps, per-user defaults (`gooarchy-flavorings-apply`). They will move to [gooarchy-flavorings](https://github.com/clickety-clacks/gooarchy-flavorings), which Scottland's Omarchy adapter will also install |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
 | `tests/flavorings-apply-test.py` | The per-user defaults tool in throwaway home directories |

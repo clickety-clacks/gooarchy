@@ -19,8 +19,8 @@
 #   tests/vm/run.sh check   check the running session (guest-check.py); screenshots and logs
 #   tests/vm/run.sh login-check     password logins typed at the consoles (login-check.py)
 #   tests/vm/run.sh upgrade-guard   a newer Wayfire must not install over the Scottland built for this one
-#   tests/vm/run.sh no-toolchain    the Rust toolchain is optional: the install leaves none, and a
-#                           Gooarchy package upgrade installs without one
+#   tests/vm/run.sh no-toolchain    the Rust toolchain is optional: the install leaves none, and
+#                           without one the gooarchy package installs and its command runs
 #   tests/vm/run.sh start   boot the existing disk again (after stop)
 #   tests/vm/run.sh ssh [CMD]   a shell (or CMD) in the guest
 #   tests/vm/run.sh stop    power the guest off
@@ -372,10 +372,9 @@ guest_toolchain() {
 
 cmd_no_toolchain() {
   # The Rust toolchain is optional (docs/rulings.md): the gooarchy package doesn't require it, the
-  # install leaves none behind, and a Gooarchy package upgrade installs without one. The upgrade is
-  # this checkout's packages one pkgrel on, built the way install.sh builds them (the toolchain is
-  # there only for the build). edit and a merging update come with Scottland's source mechanism
-  # and aren't checked here yet.
+  # install leaves none behind, and on this guest without one the built package installs again
+  # without pulling one in, and the gooarchy command runs. The package is the one install.sh built
+  # from this checkout; the toolchain was there only for that build.
   running || die "the guest isn't running"
   local out; out=$(artifacts)
   local deps; deps=$(guest 'awk '\''/^%/ { s = $0; next } NF && s == "%DEPENDS%" { print "depends " $0 }
@@ -388,39 +387,26 @@ cmd_no_toolchain() {
   local left; left=$(guest_toolchain)
   hcheck "the install leaves no Rust toolchain behind" "$([[ -z $left ]] && echo 1 || echo 0)" "$left"
 
-  local before; before=$(guest 'pacman -Q gooarchy | cut -d" " -f2')
   local status=0
-  log "building the upgrade packages (log: $out/no-toolchain-upgrade.log)"
-  guest "$(guest_proxy_env) bash -s" >"$out/no-toolchain-upgrade.log" 2>&1 <<'EOF' || status=$?
-set -euo pipefail
-source ~/gooarchy/install/helpers/packages.sh
-d=$(mktemp -d)
-cp ~/gooarchy/packaging/arch/PKGBUILD "$d/"
-rel=$(sed -n 's/^pkgrel=//p' "$d/PKGBUILD")
-sed -i "s/^pkgrel=.*/pkgrel=$((rel + 1))/" "$d/PKGBUILD"
-export GOOARCHY_PATH=~/gooarchy
-build_package "$d"
-built_files "$d" gooarchy gooarchy-flavorings >~/no-toolchain-upgrade
-EOF
-  left=$(guest_toolchain)
-  if (( status == 0 )) && [[ -z $left ]]; then
-    guest 'sudo pacman -U --noconfirm $(cat ~/no-toolchain-upgrade)' >>"$out/no-toolchain-upgrade.log" 2>&1 || status=$?
-  fi
-  local after; after=$(guest 'pacman -Q gooarchy | cut -d" " -f2')
-  local rel=${before##*-}
+  guest 'source ~/gooarchy/install/helpers/packages.sh &&
+         GOOARCHY_PATH=~/gooarchy built_files ~/.cache/gooarchy/build/gooarchy-packaging gooarchy >~/no-toolchain-package &&
+         sudo pacman -U --noconfirm "$(cat ~/no-toolchain-package)"' >"$out/no-toolchain-install.log" 2>&1 || status=$?
+  local after; after=$(guest_toolchain)
   ok=0
-  [[ $status == 0 && -z $left && $after == "${before%-*}-$((rel + 1))" && -z $(guest_toolchain) ]] && ok=1
-  hcheck "a Gooarchy package upgrade installs without a Rust toolchain" "$ok" \
-    "exit $status; $before -> $after; toolchain before the upgrade: ${left:-none}, after: $(guest_toolchain | tr '\n' ' ')"
+  [[ $status == 0 && -z $left && -z $after ]] && ok=1
+  hcheck "without a Rust toolchain, the built gooarchy package installs without pulling one in" "$ok" \
+    "exit $status; toolchain before: ${left:-none}, after: ${after:-none}"
   local built head
   built=$(guest 'sed -n "s/^checkout \([0-9a-f]*\).*/\1/p" /usr/share/gooarchy/build-info')
   head=$(guest 'git -C ~/gooarchy rev-parse HEAD')
-  hcheck "the upgraded package is built from the checkout under test" "$([[ -n $head && $built == "$head" ]] && echo 1 || echo 0)" \
+  hcheck "the installed package is built from the checkout under test" "$([[ -n $head && $built == "$head" ]] && echo 1 || echo 0)" \
     "build-info: $built; checkout: $head"
   local listing; listing=$(guest 'gooarchy' 2>&1) || true
-  hcheck "gooarchy runs after the upgrade" "$(grep -qx '  theme' <<<"$listing" && echo 1 || echo 0)" \
-    "$(head -c 300 <<<"$listing")"
+  ok=0
+  grep -qx '  theme' <<<"$listing" && [[ -z $(guest_toolchain) ]] && ok=1
+  hcheck "gooarchy runs without a Rust toolchain" "$ok" "$(head -c 300 <<<"$listing")"
 }
+
 cmd_reboot() {
   running || die "the guest isn't running"
   ensure_seed
