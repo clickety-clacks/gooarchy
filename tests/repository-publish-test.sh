@@ -2,13 +2,13 @@
 # Exercise the publisher against a local GitHub Releases-shaped stand-in and a throwaway key.
 set -euo pipefail
 
-stage1_installer=0
+stage1_consumer=0
 if (($#)); then
-  [[ $# == 1 && $1 == --with-stage1-installer ]] || {
-    echo "Usage: tests/repository-publish-test.sh [--with-stage1-installer]" >&2
+  [[ $# == 1 && $1 == --with-stage1-consumer ]] || {
+    echo "Usage: tests/repository-publish-test.sh [--with-stage1-consumer]" >&2
     exit 2
   }
-  stage1_installer=1
+  stage1_consumer=1
 fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -32,13 +32,9 @@ done
 real_pacman=$(command -v pacman)
 original_path=$PATH
 test_wayfire_package_version=0.11.0-1
-if ((stage1_installer)); then
+if ((stage1_consumer)); then
   command -v sudo >/dev/null 2>&1 || {
-    echo "repository-publish-test: sudo is required for stage 1 installer integration" >&2
-    exit 1
-  }
-  command -v makepkg >/dev/null 2>&1 || {
-    echo "repository-publish-test: makepkg is required for stage 1 installer integration" >&2
+    echo "repository-publish-test: sudo is required for stage 1 package integration" >&2
     exit 1
   }
   if ! sudo "$real_pacman" -Syy --noconfirm >"$test_root/arch-refresh.log" 2>&1; then
@@ -195,11 +191,11 @@ chmod 600 "$test_root/test-private-key.asc"
 
 consumer_root=
 consumer_commit=$(git -C "$source_root" rev-parse HEAD)
-if ((stage1_installer)); then
-  for consumer_file in install.sh install/packaging/repository.sh install/packaging/gooarchy.sh \
-    install/packaging/all.sh install/packaging/base.sh install/packaging/scottland.sh \
-    install/packaging/strata.sh install/gooarchy-base.packages packaging/keys/gooarchy.asc \
-    packaging/keys/gooarchy.fingerprint; do
+if ((stage1_consumer)); then
+  for consumer_file in install/helpers/all.sh install/helpers/logging.sh \
+    install/helpers/packages.sh install/helpers/repository.sh install/sources.conf \
+    install/packaging/repository.sh install/packaging/gooarchy.sh \
+    packaging/keys/gooarchy.asc packaging/keys/gooarchy.fingerprint; do
     [[ -f $source_root/$consumer_file ]] || {
       echo "repository-publish-test: landed stage 1 installer file is missing: $consumer_file" >&2
       exit 1
@@ -212,12 +208,10 @@ if ((stage1_installer)); then
   cp -- "$fixture/packaging/keys/gooarchy.asc" "$consumer_root/packaging/keys/gooarchy.asc"
   cp -- "$fixture/packaging/keys/gooarchy.fingerprint" \
     "$consumer_root/packaging/keys/gooarchy.fingerprint"
-  printf 'wayfire\n' >"$consumer_root/install/gooarchy-base.packages"
-  git -C "$consumer_root" add packaging/keys/gooarchy.asc packaging/keys/gooarchy.fingerprint \
-    install/gooarchy-base.packages
+  git -C "$consumer_root" add packaging/keys/gooarchy.asc packaging/keys/gooarchy.fingerprint
   GIT_AUTHOR_NAME='Repository Test' GIT_AUTHOR_EMAIL='repository-test@example.invalid' \
     GIT_COMMITTER_NAME='Repository Test' GIT_COMMITTER_EMAIL='repository-test@example.invalid' \
-    git -C "$consumer_root" commit -qm 'configure disposable repository installer fixture'
+    git -C "$consumer_root" commit -qm 'configure disposable repository key fixture'
   consumer_commit=$(git -C "$consumer_root" rev-parse HEAD)
 fi
 export GOOARCHY_TEST_CONSUMER_COMMIT="$consumer_commit"
@@ -663,7 +657,7 @@ fi
   exit 1
 }
 
-if ((stage1_installer)); then
+if ((stage1_consumer)); then
   if ! sudo pacman-key --init >"$test_root/pacman-key-init.log" 2>&1; then
     cat "$test_root/pacman-key-init.log" >&2
     echo "repository-publish-test: pacman-key could not initialize in the disposable guest" >&2
@@ -674,104 +668,37 @@ if ((stage1_installer)); then
     echo "repository-publish-test: Arch pacman keys could not be populated in the disposable guest" >&2
     exit 1
   fi
-  if ! sudo pacman-key --add "$consumer_root/packaging/keys/gooarchy.asc" \
-    >"$test_root/pacman-key-add-test.log" 2>&1 ||
-    ! sudo pacman-key --lsign-key "$fingerprint" >"$test_root/pacman-key-sign-test.log" 2>&1; then
-    cat "$test_root/pacman-key-add-test.log" "$test_root/pacman-key-sign-test.log" >&2
-    echo "repository-publish-test: pacman could not trust the throwaway integration-test key" >&2
-    exit 1
-  fi
-  consumer_package_dest="$test_root/consumer-packages"
-  mkdir -m 700 -p "$consumer_package_dest" "$test_root/consumer-build" \
-    "$test_root/consumer-sources"
-  consumer_makepkg_conf="$test_root/consumer-makepkg.conf"
-  {
-    printf 'source /etc/makepkg.conf\n'
-    printf 'PKGDEST=%q\n' "$consumer_package_dest"
-    printf 'BUILDDIR=%q\n' "$test_root/consumer-build"
-    printf 'SRCDEST=%q\n' "$test_root/consumer-sources"
-    printf 'SIGNPKG=%q\n' 'yes'
-    printf 'GPGKEY=%q\n' "$fingerprint"
-    printf 'PACKAGER=%q\n' 'Gooarchy stage2 test fixture'
-  } >"$consumer_makepkg_conf"
-
-  install_local_package_fixture() {
-    local name=$1 package_version=$2 version_without_epoch epoch=0 pkgver pkgrel
-    local package_dir="$test_root/local-package-$name"
-    if [[ $package_version == *:* ]]; then
-      epoch=${package_version%%:*}
-      version_without_epoch=${package_version#*:}
-    else
-      version_without_epoch=$package_version
-    fi
-    pkgver=${version_without_epoch%-*}
-    pkgrel=${version_without_epoch##*-}
-    [[ $pkgver != "$version_without_epoch" && -n $pkgver && -n $pkgrel ]] || {
-      echo "repository-publish-test: invalid local fixture version for $name: $package_version" >&2
-      return 1
-    }
-    mkdir -m 700 -p "$package_dir"
-    {
-      printf 'pkgname=%s\npkgver=%s\npkgrel=%s\narch=(any)\n' "$name" "$pkgver" "$pkgrel"
-      ((epoch == 0)) || printf 'epoch=%s\n' "$epoch"
-      cat <<PKG
-package() {
-  install -d "\$pkgdir/usr/share/gooarchy-test"
-  printf '%s\\n' "$name" >"\$pkgdir/usr/share/gooarchy-test/$name"
-}
-PKG
-    } >"$package_dir/PKGBUILD"
-    if ! (cd "$package_dir" && env -u MAKEPKG_CONF PATH="$original_path" \
-      GNUPGHOME="$key_home" makepkg --nodeps --noconfirm --force --clean --sign \
-        --key "$fingerprint") >"$test_root/local-package-$name.log" 2>&1; then
-      cat "$test_root/local-package-$name.log" >&2
-      echo "repository-publish-test: could not build the local $name fixture package" >&2
-      return 1
-    fi
-    local package_file
-    package_file=$(find "$package_dir" -maxdepth 1 -type f \
-      -name "$name-$pkgver-$pkgrel-any.pkg.tar.*" ! -name '*.sig' -print -quit)
-    [[ -n $package_file && -s $package_file.sig ]] || {
-      echo "repository-publish-test: signed local $name fixture package is missing" >&2
-      return 1
-    }
-    if ! sudo "$real_pacman" -U --noconfirm "$package_file" \
-      >"$test_root/local-package-install-$name.log" 2>&1; then
-      cat "$test_root/local-package-install-$name.log" >&2
-      echo "repository-publish-test: pacman could not install the local $name fixture package" >&2
-      return 1
-    fi
-  }
-
-  install_local_package_fixture wayfire "$test_wayfire_package_version"
-  for package_name in quickshell ghostty chromium; do
-    install_local_package_fixture "$package_name" 99.99-1
-  done
 
   consumer_url="http://127.0.0.1:$port"
   if ! (
     export PATH="$original_path"
+    export GOOARCHY_PATH="$consumer_root"
+    export GOOARCHY_INSTALL="$consumer_root/install"
+    export GOOARCHY_STATE="$test_root/consumer-state/gooarchy"
+    export GOOARCHY_BUILD="$test_root/consumer-cache/gooarchy/build"
+    export GOOARCHY_YES=1
+    export GOOARCHY_AUTOLOGIN=0
     export GOOARCHY_REPOSITORY_URL="$consumer_url"
-    export GOOARCHY_SCOTTLAND_REPO="file://$scottland_source"
-    export GOOARCHY_SCOTTLAND_REF="$scottland_ref"
-    export GOOARCHY_STRATA_AUR="file://$strata_source"
-    export GOOARCHY_STRATA_REF="$strata_ref"
-    export GOOARCHY_TEST_FLAVORINGS_APPLY_MARKER="$test_root/flavorings-apply.log"
     export GNUPGHOME="$key_home"
-    export MAKEPKG_CONF="$consumer_makepkg_conf"
     export HOME="$test_root/consumer-home"
     export XDG_CACHE_HOME="$test_root/consumer-cache"
     export XDG_CONFIG_HOME="$test_root/consumer-config"
     export XDG_DATA_HOME="$test_root/consumer-data"
     export XDG_STATE_HOME="$test_root/consumer-state"
     mkdir -m 700 -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" \
-      "$XDG_DATA_HOME" "$XDG_STATE_HOME"
-    "$consumer_root/install.sh" --yes
+      "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$GOOARCHY_STATE" "$GOOARCHY_BUILD"
+    unset GOOARCHY_SCOTTLAND_REF
+    source "$GOOARCHY_INSTALL/helpers/all.sh"
+    start_install_log
+    run_logged "$GOOARCHY_INSTALL/packaging/repository.sh"
+    run_logged "$GOOARCHY_INSTALL/packaging/gooarchy.sh"
+    stop_install_log
   ) >"$test_root/consumer-install.log" 2>&1; then
     cat "$test_root/consumer-install.log" >&2
-    echo "repository-publish-test: stage 1 install.sh did not consume the published stand-in" >&2
+    echo "repository-publish-test: stage 1 repository and Gooarchy package paths did not consume the published stand-in" >&2
     exit 1
   fi
+
   for package_name in gooarchy gooarchy-flavorings; do
     expected_version=$(awk -F '\t' -v package="$package_name" \
       '$1 == package { print $2; exit }' <<<"$upgrade_records")
@@ -786,37 +713,36 @@ PKG
       exit 1
     }
   done
-  for package_name in scottland strata-bin wayfire quickshell ghostty chromium; do
-    "$real_pacman" -Q "$package_name" >/dev/null || {
-      echo "repository-publish-test: full installer did not leave required summary package installed: $package_name" >&2
-      exit 1
-    }
-  done
-  [[ -s $test_root/flavorings-apply.log ]] || {
-    echo "repository-publish-test: install.sh did not run the published flavorings command" >&2
+  grep -Fq "checkout $consumer_commit" /usr/share/gooarchy/build-info || {
+    echo "repository-publish-test: installed gooarchy package did not carry the matching source commit" >&2
     exit 1
   }
   grep -Fq "gooarchy and gooarchy-flavorings are installed from the Gooarchy repository." \
     "$test_root/consumer-install.log" || {
-    echo "repository-publish-test: install.sh did not report repository package consumption" >&2
+    echo "repository-publish-test: the Gooarchy package path did not report repository package consumption" >&2
     exit 1
   }
-  grep -Fq 'Gooarchy is installed:' "$test_root/consumer-install.log" || {
-    echo "repository-publish-test: install.sh did not reach its final installation summary" >&2
+  grep -Fq "Gooarchy: Trusted Gooarchy repository key $fingerprint." \
+    "$test_root/consumer-install.log" &&
+    grep -Fq "Gooarchy: Added [gooarchy] at $consumer_url with package signatures required." \
+      "$test_root/consumer-install.log" || {
+    echo "repository-publish-test: the repository path did not report key trust and repository setup" >&2
     exit 1
   }
   grep -Fq "GOOARCHY_REPOSITORY_SOURCE_COMMIT=$consumer_commit" \
     "$test_root/consumer-state/gooarchy/repository-plan.sh" &&
     grep -Fq 'GOOARCHY_BUILD_LOCAL_GOOARCHY=0' \
       "$test_root/consumer-state/gooarchy/repository-plan.sh" || {
-    echo "repository-publish-test: installer did not select repository packages for its exact clean source commit" >&2
+    echo "repository-publish-test: package path did not select repository packages for its exact clean source commit" >&2
     exit 1
   }
-  grep -Fq "Server = $consumer_url" /etc/pacman.conf || {
-    echo "repository-publish-test: install.sh did not configure the stand-in repository URL" >&2
+  grep -Fq "[gooarchy]" /etc/pacman.conf &&
+    grep -Fq "SigLevel = PackageRequired DatabaseOptional" /etc/pacman.conf &&
+    grep -Fq "Server = $consumer_url" /etc/pacman.conf || {
+    echo "repository-publish-test: the repository path did not configure the signed stand-in" >&2
     exit 1
   }
-  printf 'PASS: stage 1 install.sh consumes signed Gooarchy packages from the published stand-in through real pacman.\n'
+  printf 'PASS: stage 1 repository and Gooarchy package paths consume signed Gooarchy packages through real pacman.\n'
 fi
 
 printf 'x' >>"$upgrade_assets/gooarchy.db"
