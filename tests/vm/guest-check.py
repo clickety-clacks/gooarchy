@@ -386,6 +386,13 @@ def main():
     if xterm:
         run("pkill", "-x", "xterm")
 
+    # linux-firmware: installed for every machine (no vendor detection), so its files are actually
+    # on disk for the kernel to load, not just recorded as an installed package.
+    firmware_rc, _ = run_rc("pacman", "-Q", "linux-firmware")
+    firmware_files = run("sh", "-c", "find /usr/lib/firmware -mindepth 1 -maxdepth 1 | head -1")
+    check("linux-firmware is installed with its files on disk", firmware_rc == 0 and bool(firmware_files),
+          f"pacman -Q rc={firmware_rc}, /usr/lib/firmware has files: {bool(firmware_files)}")
+
     # Strata: Super+Shift+F (flavorings).
     strata, note = open_with(("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_F"), "strata", 20)
     check("Super+Shift+F opens Strata", strata, strata and f"{strata.get('app_id')}{note}")

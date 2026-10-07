@@ -101,7 +101,7 @@ need it" means the severity applies to the people who depend on the feature.
 | Offline install | Medium | Config | Everything is downloaded during install; there's no offline path. |
 | Boot and recovery | Medium | Undecided | No rescue boot entry or recovery tooling of Gooarchy's own. (Root logging in on tty1 gets a plain console, VM.) |
 | Firmware updates | Low | Undecided | No fwupd or firmware update path. |
-| Hardware support | High | Config | Only tested in a QEMU/KVM VM. Gooarchy doesn't install firmware (`linux-firmware`), microcode, GPU drivers beyond Mesa, or anything for NVIDIA, and has no laptop quirks or supported-hardware list. |
+| Hardware support | High | Config | Only tested in a QEMU/KVM VM. Gooarchy installs `linux-firmware` (VM) but no microcode or GPU drivers beyond Mesa, has nothing for NVIDIA (tracked separately until it lands), and has no laptop quirks or supported-hardware list. |
 | Releases, support | Medium | Config | No versions, release channels, changelog, or support and bug-reporting channels. Package versions are `0.0.1.r<commits>.g<hash>`. |
 | Other architectures | Low | Config | x86_64 only (Scottland's package is x86_64). |
 
