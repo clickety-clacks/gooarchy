@@ -28,7 +28,9 @@ to try Scottland without giving up their setup.
 ## Outcomes
 
 1. **Scottland is Mike's daily desktop.** Work that is ready reaches his machine often, rather than
-   waiting on edge cases that can come later.
+   waiting on edge cases that can come later. A deploy or update doesn't cost him his open windows,
+   widgets or session. A change to the running desktop goes in through a reload that was rehearsed
+   first on a test machine, and only with Mike's go.
 2. **Scottland works for everyone, on more than one distro.** "our distro will need to install it so
    it needs to work for everyone." Scottland's core knows nothing about Omarchy. People should be
    able to install it natively on top of another distro, such as Ubuntu.
@@ -50,7 +52,8 @@ to try Scottland without giving up their setup.
    simply works. Its system tools are Rust, one binary per subsystem. Their sources ship with them
    and are tracked in git from the base, so any change shows against what was installed and is
    easy to roll back. Changing one is possible but takes some ceremony; it isn't casual script
-   editing.
+   editing. Updates merge into local changes and stop on a conflict. They never silently overwrite
+   a local change.
 
 ## Non-goals
 
@@ -58,6 +61,8 @@ to try Scottland without giving up their setup.
   to reproduce feature by feature. DEFICIT.md lists what users lack; it isn't a promise to copy.
 - **Filling gaps with borrowed parts.** A missing piece stays missing, and listed, until Gooarchy
   has its own.
+- **Redesigning the spatial model.** "we're not designing anything the design is known and
+  we'll-defined." Work implements the known design.
 - **Anything Mike didn't ask for.** Features "that do not fit within the spirit of the feature" are
   dangerous to the product, however reasonable they look. Build what was asked.
 
