@@ -1,17 +1,15 @@
-# Gooarchy's own packages, built from this repository. install/packaging/gooarchy.sh builds them
+# Gooarchy's own package, built from this repository. install/packaging/gooarchy.sh builds it
 # during install; by hand: cd packaging/arch && makepkg.
-#   gooarchy             the distro: the tty1 session start and its helpers, and dependencies on
-#                        everything Gooarchy is made of (removing it takes them along)
-#   gooarchy-flavorings  the curated defaults (flavorings/), which will move to their own
-#                        repository (gooarchy-flavorings)
+#   gooarchy  the distro: the tty1 session start and its helpers, and dependencies on everything
+#             Gooarchy is made of (removing it takes them along)
+# gooarchy-flavorings, the curated defaults, has its own recipe in packaging/gooarchy-flavorings/.
 #
 # This is a local build of a checkout, not a self-contained source package: package() reads the
 # checkout ($GOOARCHY_PATH, or two levels up) directly, so makepkg --source would not capture it.
-# /usr/share/gooarchy/build-info records exactly what went in (checkout revision, uncommitted
-# changes, Scottland revision of the themes), and a checkout with uncommitted changes gets
-# ".dirty" in its version. A source package that builds anywhere comes with the package repository.
-pkgbase=gooarchy
-pkgname=(gooarchy gooarchy-flavorings)
+# /usr/share/gooarchy/build-info records exactly what went in (checkout revision and uncommitted
+# changes), and a checkout with uncommitted changes gets ".dirty" in its version. A source package
+# that builds anywhere comes with the package repository.
+pkgname=gooarchy
 _repo=${GOOARCHY_PATH:-$startdir/../..}
 _dirty=$(git -C "$_repo" status --porcelain 2>/dev/null | grep -q . && echo .dirty || true)
 pkgver=0.0.1.r$(git -C "$_repo" rev-list --count HEAD 2>/dev/null || echo 0).g$(git -C "$_repo" rev-parse --short HEAD 2>/dev/null || echo none)$_dirty
@@ -20,24 +18,10 @@ pkgdesc="Gooarchy, a desktop Linux distribution built around Scottland"
 arch=('any')
 url="https://github.com/clickety-clacks/gooarchy"
 license=('LicenseRef-unlicensed')
-makedepends=('git' 'python')
+makedepends=('git')
 options=('!debug')
 
-# The Watercolor Dream themes live in Scottland's repository; take them from the Scottland
-# commit Gooarchy builds (install/sources.conf).
-source "$_repo/install/sources.conf"
-source=("scottland::git+${GOOARCHY_SCOTTLAND_REPO}#commit=${GOOARCHY_SCOTTLAND_REF}")
-sha256sums=('SKIP')
-
-build() {
-  local theme
-  for theme in watercolor-dream-light watercolor-dream-dark; do
-    python3 "$_repo/flavorings/themes/ghostty-theme.py" \
-      "$srcdir/scottland/omarchy/themes/$theme/colors.toml" >"$srcdir/$theme.ghostty"
-  done
-}
-
-package_gooarchy() {
+package() {
   depends=('scottland' 'strata-bin' 'gooarchy-flavorings'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
   install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
@@ -46,34 +30,6 @@ package_gooarchy() {
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
 gooarchy $pkgver
 checkout $(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo unknown)${_dirty:+ with uncommitted changes}
-scottland-themes $(git -C "$srcdir/scottland" rev-parse HEAD) from $GOOARCHY_SCOTTLAND_REPO
 built $(date -u +%Y-%m-%dT%H:%M:%SZ)
 INFO
-}
-
-package_gooarchy-flavorings() {
-  pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
-  depends=('scottland' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
-           'xdg-user-dirs' 'grim' 'slurp')
-  optdepends=('ghostty: themed terminal' 'chromium: browser (system title bar)'
-              'strata-bin: file manager' 'tmux: titled terminal sessions')
-  backup=('etc/tmux.conf')
-  local f="$_repo/flavorings" share="$pkgdir/usr/share/gooarchy-flavorings" theme
-  install -Dm644 "$f/scottland/flavorings.ini" "$share/scottland.ini"
-  install -Dm755 "$f/scottland/config.d/40-gooarchy-flavorings" "$pkgdir/usr/lib/scottland/config.d/40-gooarchy-flavorings"
-  install -Dm755 "$f/scottland/autostart.d/40-gooarchy-wallpaper" "$pkgdir/usr/lib/scottland/autostart.d/40-gooarchy-wallpaper"
-  install -Dm755 "$f/scottland/autostart.d/45-gooarchy-flavorings" "$pkgdir/usr/lib/scottland/autostart.d/45-gooarchy-flavorings"
-  install -Dm755 "$f/scottland/accent.d/20-gooarchy-theme" "$pkgdir/usr/lib/scottland/accent.d/20-gooarchy-theme"
-  install -Dm755 "$f/libexec/gooarchy-wallpaper" "$pkgdir/usr/lib/gooarchy-flavorings/gooarchy-wallpaper"
-  install -Dm755 "$f/bin/gooarchy-theme" "$pkgdir/usr/bin/gooarchy-theme"
-  install -Dm755 "$f/bin/gooarchy-flavorings-apply" "$pkgdir/usr/bin/gooarchy-flavorings-apply"
-  install -Dm644 "$f/tmux/tmux.conf" "$pkgdir/etc/tmux.conf"
-  install -Dm644 "$f/profile.d/gooarchy-flavorings.sh" "$pkgdir/etc/profile.d/gooarchy-flavorings.sh"
-  install -Dm644 "$f/xdg/scottland-mimeapps.list" "$pkgdir/etc/xdg/scottland-mimeapps.list"
-  for theme in watercolor-dream-light watercolor-dream-dark; do
-    local from="$srcdir/scottland/omarchy/themes/$theme"
-    install -Dm644 "$from/colors.toml" "$share/themes/$theme/colors.toml"
-    install -Dm644 "$(readlink -f "$from/preview.webp")" "$share/themes/$theme/background.webp"
-    install -Dm644 "$srcdir/$theme.ghostty" "$share/themes/$theme/ghostty"
-  done
 }

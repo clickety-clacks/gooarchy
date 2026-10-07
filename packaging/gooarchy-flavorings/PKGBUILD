@@ -1,0 +1,31 @@
+# gooarchy-flavorings: Gooarchy's curated defaults and the Watercolor Dream themes, built from the
+# gooarchy-flavorings repository at the commit pinned here. Gooarchy and Scottland's Omarchy
+# adapter install this same package. It needs nothing from a gooarchy or Scottland checkout, so
+# this file can be built on its own: makepkg in a directory holding only it.
+#
+# Moving the pin: set _commit to the new gooarchy-flavorings commit and pkgver to match it
+# (r<commit count>.g<short commit>). pkgver starts at 0.0.2 so it sorts above the 0.0.1.r* versions
+# of the package's earlier recipe in gooarchy's packaging/arch/PKGBUILD.
+pkgname=gooarchy-flavorings
+_commit=4dc4e7a5270312dea8a708973fbc45bf3bf30929
+pkgver=0.0.2.r17.g4dc4e7a
+pkgrel=1
+pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
+arch=('any')
+url="https://github.com/clickety-clacks/gooarchy-flavorings"
+license=('LicenseRef-unlicensed')
+# Runtime needs of what it installs. Building needs only git and Python (and base-devel), not
+# Scottland: on a machine without Scottland yet, build with makepkg --nodeps (see the README).
+depends=('scottland' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
+         'xdg-user-dirs' 'grim' 'slurp')
+optdepends=('ghostty: themed terminal' 'chromium: browser (system title bar)'
+            'strata-bin: file manager' 'tmux: titled terminal sessions')
+makedepends=('git' 'python')
+backup=('etc/tmux.conf')
+options=('!debug')
+source=("gooarchy-flavorings::git+https://github.com/clickety-clacks/gooarchy-flavorings.git#commit=$_commit")
+sha256sums=('SKIP')
+
+package() {
+  make -C "$srcdir/gooarchy-flavorings" install DESTDIR="$pkgdir"
+}

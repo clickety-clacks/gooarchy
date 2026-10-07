@@ -77,8 +77,8 @@ shell on tty1 instead of a restart loop. Checks named "config:" only read config
 title bar setting, tmux, touchpad, the agents' bell settings); they don't show the behavior. It also
 records what's missing (notifications, lock, portals, ...) for [DEFICIT.md](DEFICIT.md). On
 2026-10-05, fresh runs passed every check with virgl graphics (65) and with software graphics (66,
-including the login check restoring autologin). `tests/vm/selftest.py` and
-`tests/flavorings-apply-test.py` test the harness and the defaults tool without a VM.
+including the login check restoring autologin). `tests/vm/selftest.py` tests the harness without a
+VM; the defaults tool's own test lives with it in gooarchy-flavorings.
 
 What it doesn't show: it's the Arch cloud image (cloud-init gives it an SSH key and passwordless
 sudo; the harness masks systemd's wait for network time and shares pacman's cache from the host),
@@ -116,6 +116,19 @@ pacman stops ("wayfire=… required by scottland"), because the Scottland plugin
 Wayfire version; run `./install.sh` again from an up-to-date checkout and it rebuilds Scottland for
 the new Wayfire.
 
+### Gooarchy's defaults on stock Omarchy
+
+Scottland's Omarchy adapter uses the same `gooarchy-flavorings` package. On an Omarchy machine,
+without Gooarchy:
+
+1. Build Scottland's packages (`scottland` and `scottland-omarchy`) from Scottland's
+   `packaging/arch/PKGBUILD` with `makepkg`, without installing them yet.
+2. Build `gooarchy-flavorings` from this repository's `packaging/gooarchy-flavorings/PKGBUILD`: copy
+   it into an empty directory and run `makepkg --nodeps` there (`--nodeps` because Scottland, one of
+   its runtime dependencies, isn't installed yet; building needs only git and Python).
+3. Install all three together, in one `sudo pacman -U` with the three package files, so each finds
+   the others.
+
 ## How it is put together
 
 | Path | What |
@@ -123,11 +136,10 @@ the new Wayfire.
 | `install.sh`, `install/` | The installer, in ordered steps like Omarchy's: `preflight/` (checks), `packaging/` (Arch packages, then Scottland, Strata and Gooarchy's own packages), `user/` (per-user defaults), `login/` (tty1 session, optional autologin), `post-install/` |
 | `install/gooarchy-base.packages` | The Arch packages Gooarchy is made of |
 | `install/sources.conf` | Scottland and Strata, pinned to the versions tested together |
-| `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on everything) and `gooarchy-flavorings` |
+| `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on everything) from this checkout |
+| `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from [gooarchy-flavorings](https://github.com/clickety-clacks/gooarchy-flavorings) at a pinned commit: the curated defaults (Scottland config fragment and hooks, Watercolor Dream themes, tmux, mosh, default apps, per-user defaults with `gooarchy-flavorings-apply`). Self-contained; Scottland's Omarchy adapter installs the same package |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
-| `flavorings/` | The curated defaults: Scottland config fragment and hooks, theme, tmux, mosh, default apps, per-user defaults (`gooarchy-flavorings-apply`). They will move to [gooarchy-flavorings](https://github.com/clickety-clacks/gooarchy-flavorings), which Scottland's Omarchy adapter will also install |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
-| `tests/flavorings-apply-test.py` | The per-user defaults tool in throwaway home directories |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
 Gooarchy's programs, hooks, themes and default configuration all come from packages. Outside
@@ -146,8 +158,7 @@ In order:
 2. **Install script**: a fresh Arch install becomes Gooarchy (this repository today).
 3. **Package repository**: Gooarchy's own signed pacman repository with Scottland, Strata and
    Gooarchy's packages, so nothing is built on the user's machine and the AUR isn't needed.
-4. **Defaults**: gooarchy-flavorings as its own package, and Gooarchy's own bar, notifications,
-   launcher, lock screen and the rest of the deficit.
+4. **Defaults**: Gooarchy's own bar, notifications, launcher, lock screen and the rest of the deficit.
 5. **Hardware**: a supported hardware matrix with GPU, firmware, power and laptop quirks.
 6. **ISO**: an installer image (partitioning, encryption, accounts) instead of "install Arch first".
 7. **Updates**: an update command with migrations for user and system configuration.
