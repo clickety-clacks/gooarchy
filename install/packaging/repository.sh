@@ -14,6 +14,9 @@ source "$GOOARCHY_INSTALL/sources.conf"
 repository_url=${GOOARCHY_REPOSITORY_URL%/}
 [[ $repository_url =~ ^(https?://|file://)[^[:space:]#]+$ ]] ||
   fail_repository "the Gooarchy repository address must be a URL using https://, http:// or file://, without spaces or fragments."
+case $repository_url in
+  *\\*) fail_repository "the Gooarchy repository address must not contain backslashes." ;;
+esac
 
 fingerprint_file=$GOOARCHY_PATH/packaging/keys/gooarchy.fingerprint
 key_file=$GOOARCHY_PATH/packaging/keys/gooarchy.asc

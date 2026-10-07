@@ -37,6 +37,7 @@ if ((GOOARCHY_BUILD_LOCAL_GOOARCHY)); then
     "$(pacman -Q gooarchy-flavorings | awk '{print $2}')"
 else
   targets=()
+  replacement_reports=()
   previous_gooarchy_commit=$GOOARCHY_PREVIOUS_GOOARCHY_SOURCE_COMMIT
   for package in gooarchy gooarchy-flavorings; do
     previous_installed=0
@@ -57,7 +58,7 @@ else
     if package_is_repository_copy "$package"; then
       if ((previous_installed && previous_repository_copy == 0)); then
         recovery="restore the previous local checkout and its changes, then rerun install.sh"
-        report "Replaced local $package $previous_version with Gooarchy repository $package $(installed_package_version "$package") because checkout $GOOARCHY_REPOSITORY_SOURCE_COMMIT matches the published source. To go back, $recovery."
+        replacement_reports+=("Replaced local $package $previous_version with Gooarchy repository $package $(installed_package_version "$package") because checkout $GOOARCHY_REPOSITORY_SOURCE_COMMIT matches the published source. To go back, $recovery.")
       fi
     else
       repo_version=$(sync_package_field "$package" Version)
@@ -72,18 +73,27 @@ else
         if [[ -n $previous_gooarchy_commit ]]; then
           recovery="restore a checkout based on $previous_gooarchy_commit with its prior local changes, then rerun install.sh"
         fi
-        report "Replacing local $package $old_version with Gooarchy repository $package $repo_version because checkout $GOOARCHY_REPOSITORY_SOURCE_COMMIT matches the published source. To go back, $recovery."
+        replacement_reports+=("Replaced local $package $old_version with Gooarchy repository $package $repo_version because checkout $GOOARCHY_REPOSITORY_SOURCE_COMMIT matches the published source. To go back, $recovery.")
       fi
     fi
   done
 
-  if ((${#targets[@]})); then sudo pacman -S --noconfirm "${targets[@]}"; fi
+  if ((${#targets[@]})); then
+    repo_cache=$(mktemp -d "$GOOARCHY_BUILD/repository-package.XXXXXX")
+    chmod 755 "$repo_cache"
+    trap 'sudo rm -rf -- "$repo_cache"' EXIT
+    download_repository_packages "$repo_cache" "${targets[@]}"
+    sudo pacman -U --noconfirm "${REPOSITORY_PACKAGE_ARCHIVES[@]}"
+    sudo rm -rf -- "$repo_cache"
+    trap - EXIT
+  fi
   for package in gooarchy gooarchy-flavorings; do
     package_is_repository_copy "$package" || {
       echo "Gooarchy's $package package was not installed as a signed repository copy." >&2
       exit 1
     }
   done
+  for replacement_report in "${replacement_reports[@]}"; do report "$replacement_report"; done
   forget_build gooarchy
   forget_build gooarchy-flavorings
   echo "gooarchy and gooarchy-flavorings are installed from the Gooarchy repository."

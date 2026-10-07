@@ -30,3 +30,33 @@ sync_package_field() {
       sub(/^[^:]*:[[:space:]]*/, ""); print; exit
     }'
 }
+
+download_repository_packages() {
+  local cache=$1 filename_output filename
+  shift
+  local -a filenames=()
+  REPOSITORY_PACKAGE_ARCHIVES=()
+  filename_output=$(pacman -Sp --nodeps --print-format '%f' "$@") || {
+    echo "Gooarchy's repository packages could not be resolved: $*" >&2
+    return 1
+  }
+  mapfile -t filenames <<<"$filename_output"
+  if ((${#filenames[@]} != $#)); then
+    echo "Gooarchy's repository returned an unexpected package list for: $*" >&2
+    return 1
+  fi
+  for filename in "${filenames[@]}"; do
+    if [[ -z $filename || $filename == */* ]]; then
+      echo "Pacman returned an invalid repository package filename for: $*" >&2
+      return 1
+    fi
+  done
+  sudo pacman -Sw --nodeps --noconfirm --cachedir "$cache" "$@" || return 1
+  for filename in "${filenames[@]}"; do
+    if [[ ! -s $cache/$filename ]]; then
+      echo "Pacman did not cache Gooarchy repository package $filename." >&2
+      return 1
+    fi
+    REPOSITORY_PACKAGE_ARCHIVES+=("$cache/$filename")
+  done
+}

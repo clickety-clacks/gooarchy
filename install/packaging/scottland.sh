@@ -33,23 +33,11 @@ if ((GOOARCHY_BUILD_LOCAL_SCOTTLAND)); then
   install_built --asdeps "${files[@]}"
   record_build scottland "$GOOARCHY_SCOTTLAND_REPO" "$rev" "$version"
 else
-  if ! package_is_repository_copy scottland; then
-    sudo pacman -S --noconfirm --asdeps \
-      "gooarchy/scottland=$GOOARCHY_REPOSITORY_SCOTTLAND_VERSION"
-  fi
   package_is_repository_copy scottland || {
     echo "Gooarchy's scottland package was not installed as a signed repository copy." >&2
     exit 1
   }
   sudo pacman -D --asdeps scottland
   forget_build scottland
-
-  if ((GOOARCHY_REPLACE_SCOTTLAND)); then
-    recovery="rerun install.sh with GOOARCHY_SCOTTLAND_REF set to the previous source revision"
-    if [[ $GOOARCHY_PREVIOUS_SCOTTLAND_REF =~ ^[A-Za-z0-9._/-]+$ ]]; then
-      recovery="run GOOARCHY_SCOTTLAND_REF=$GOOARCHY_PREVIOUS_SCOTTLAND_REF ./install.sh"
-    fi
-    report "Replaced local scottland $GOOARCHY_PREVIOUS_SCOTTLAND_VERSION with Gooarchy repository scottland $(pacman -Q scottland | awk '{print $2}') because no source pin was overridden. To go back, $recovery."
-  fi
   echo "Scottland $(pacman -Q scottland | awk '{print $2}') from the Gooarchy repository."
 fi
