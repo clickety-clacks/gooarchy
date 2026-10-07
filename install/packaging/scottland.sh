@@ -5,7 +5,7 @@
 #
 # Scottland's PKGBUILD has a fixed version (0.1.0-1), and its plugin is built against one Wayfire
 # ABI. So the build copy gets a version that names what was built: the Scottland revision and the
-# Wayfire it was compiled for (e.g. 0.1.0.r441.gf325ab1.wf0.11.0), and a dependency on exactly that
+# Wayfire it was compiled for (e.g. 0.1.0.r620.ga875dde.wf0.11.0), and a dependency on exactly that
 # Wayfire version. A rebuild is always installed (not --needed), and when Arch moves Wayfire on,
 # pacman -Syu stops with "wayfire=... required by scottland" instead of breaking the session; running
 # ./install.sh again rebuilds Scottland for the new Wayfire (see install/packaging/base.sh).
