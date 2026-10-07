@@ -16,7 +16,7 @@ if ((GOOARCHY_BUILD_LOCAL_GOOARCHY)); then
   cp "$GOOARCHY_PATH/packaging/arch/PKGBUILD" "$dir/"
   GOOARCHY_PATH=$GOOARCHY_PATH build_package "$dir"
 
-  flavorings_recipe=$GOOARCHY_PATH/packaging/arch/gooarchy-flavorings/PKGBUILD
+  flavorings_recipe=$GOOARCHY_PATH/packaging/gooarchy-flavorings/PKGBUILD
   if [[ -f $flavorings_recipe ]]; then
     mapfile -t files < <(built_files "$dir" gooarchy)
     flavorings_dir=$GOOARCHY_BUILD/gooarchy-flavorings-packaging
