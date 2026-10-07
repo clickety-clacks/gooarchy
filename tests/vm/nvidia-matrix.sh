@@ -5,8 +5,8 @@
 # result file for each at r15-boot-evidence-<row>-<kernel>.tsv, then calls r15-release <row> before
 # recovering the held fixture. Each result records schema, row, stamp, kernel, boot-id, desktop=pass,
 # and nvidia-device=no-device as tab-separated key/value lines.
-# Pacman's in-commit interruption uses a tests/vm inotify watcher and an unsynced guest reset. The
-# runner must validate its serial evidence outside the guest before starting recovery.
+# The pacman-lock R15 row verifies fail-closed behavior with a test-owned stale db.lck; cleanup
+# removes only that exact lock file after the matrix records whether the installer preserved it.
 set -euo pipefail
 
 [[ ${GOOARCHY_VM_GUEST_NVIDIA_MATRIX:-} == 1 ]] || {
@@ -87,104 +87,13 @@ systemctl() {
   command systemctl "$@"
 }
 
-gooarchy_test_start_pacman_payload_watcher() {
-  local root=${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}
-  local repo=${GOOARCHY_INSTALL%/install}
-  local paths=$root/r15-pacman-nvidia-utils-payload-paths.txt
-  local trigger_file=$root/r15-pacman-nvidia-utils-trigger-path
-  local archive_file=$root/r15-pacman-nvidia-utils-archive
-  local package_version_file=$root/r15-pacman-nvidia-utils-package-version
-  local baseline=$root/r15-pacman-commit-baseline.tsv
-  local watcher=$repo/tests/vm/nvidia-pacman-payload-reset.py
-  local pid_file=/run/gooarchy-nvidia-payload-watcher.pid
-  local pacman_pid_file=/run/gooarchy-nvidia-pacman.pid
-  local status_file=/run/gooarchy-nvidia-payload-watcher.status
-  local ready_file=/run/gooarchy-nvidia-payload-watcher.ready
-  local watcher_pid i trigger package_version pacman_version baseline_sha kind kernel image expected_hash
-  [[ -x $watcher && -s $paths && -s $trigger_file && -s $archive_file &&
-     -s $package_version_file && -s $baseline && ! -e $pid_file &&
-     ! -e $pacman_pid_file && ! -e $ready_file && ! -e $status_file ]] || return 1
-  trigger=$(<"$trigger_file")
-  package_version=$(<"$package_version_file")
-  pacman_version=$(<"$root/r15-pacman-version")
-  baseline_sha=$(sha256sum -- "$baseline" | awk '{print $1}') || return 1
-  [[ $trigger == /* && $package_version == "$(pacman -Si extra/nvidia-utils |
-      awk -F ': ' '$1 == "Version" {print $2; exit}')" &&
-     ! -e $trigger && ! -L $trigger ]] || return 1
-  ! pacman -Q nvidia-utils >/dev/null 2>&1 || return 1
-  ! pacman -Q nvidia-open-dkms >/dev/null 2>&1 || return 1
-  ! compgen -G '/var/lib/pacman/local/nvidia-utils-*' >/dev/null || return 1
-  grep -Fxq -- "$trigger" "$paths" || return 1
-  while IFS=$'\t' read -r kind kernel image expected_hash; do
-    [[ $kind == image ]] || continue
-    [[ -f $image && $(sha256sum -- "$image" | awk '{print $1}') == "$expected_hash" ]] || return 1
-    lsinitcpio "$image" >/dev/null 2>&1 || return 1
-  done <"$baseline"
-  command sudo python3 - "$baseline" "$trigger" "$package_version" "$pacman_version" "$baseline_sha" <<'PY'
-import sys, termios, os
-baseline, trigger, package_version, pacman_version, digest = sys.argv[1:]
-def emit(value):
-    fd = os.open('/dev/ttyS0', os.O_WRONLY | os.O_NOCTTY)
-    try:
-        os.write(fd, (value + '\r\n').encode())
-        termios.tcdrain(fd)
-    finally:
-        os.close(fd)
-emit(f'GOOARCHY_NVIDIA_PACMAN_BASELINE sha256={digest} package=nvidia-utils package_version={package_version} pacman_version={pacman_version} trigger_path={trigger} package_installed=absent local_db_directory=absent')
-with open(baseline, encoding='utf-8') as stream:
-    for line in stream:
-        emit('GOOARCHY_NVIDIA_PACMAN_BASELINE_ROW ' + line.rstrip('\n'))
-PY
-  command sudo env -u BASH_ENV bash -c 'printf "%s\n" "$$" >"$1"; exec python3 "$2" --path-list "$3" --ready-file "$4" --pacman-pid-file "$5" --status-file "$6" --package-version "$7" --archive "$8" --trigger-path "$9"' \
-    _ "$pid_file" "$watcher" "$paths" "$ready_file" "$pacman_pid_file" \
-    "$status_file" "$package_version" "$(<"$archive_file")" "$trigger" </dev/null >/dev/null 2>&1 &
-  watcher_pid=$!
-  for ((i = 0; i < 200; i++)); do
-    if command sudo test -f "$ready_file"; then
-      printf '%s\n' "$watcher_pid" >"$root/r15-pacman-watcher-launcher.pid"
-      return 0
-    fi
-    kill -0 "$watcher_pid" 2>/dev/null || break
-    sleep 0.05
-  done
-  if command sudo test -f "$status_file"; then
-    command sudo cat "$status_file" >"$root/r15-pacman-payload-witness-status.tsv" || true
-  fi
-  command sudo kill "$(command sudo cat "$pid_file" 2>/dev/null)" 2>/dev/null || true
-  command sudo rm -f "$pid_file" /run/gooarchy-nvidia-pacman.pid \
-    /run/gooarchy-nvidia-payload-watcher.status "$ready_file"
-  return 1
-}
-
-gooarchy_test_stop_pacman_payload_watcher() {
-  local root=${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}
-  local pid_file=/run/gooarchy-nvidia-payload-watcher.pid
-  local pacman_pid_file=/run/gooarchy-nvidia-pacman.pid
-  local status_file=/run/gooarchy-nvidia-payload-watcher.status
-  local ready_file=/run/gooarchy-nvidia-payload-watcher.ready pid=
-  if [[ -e $pid_file ]]; then pid=$(command sudo cat "$pid_file" 2>/dev/null || true); fi
-  [[ $pid =~ ^[0-9]+$ ]] && command sudo kill "$pid" 2>/dev/null || true
-  if command sudo test -f "$status_file"; then
-    command sudo cat "$status_file" >"$root/r15-pacman-payload-witness-status.tsv" || return 1
-  fi
-  command sudo rm -f "$pid_file" "$pacman_pid_file" "$status_file" "$ready_file" || return 1
-  rm -f "$root/r15-pacman-watcher-launcher.pid"
-}
-
 sudo() {
   local fail_preset= fail_kernel pkgbase rc is_upgrade=0 hook_installed=0
-  local payload_watcher_started=0
-  local payload_pid_file=/run/gooarchy-nvidia-pacman.pid
-  local payload_wrapper=${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/bin/nvidia-pacman-wrapper
   local -a args=("$@")
   if [[ ${args[0]:-} == systemctl ]]; then
     printf '%s\n' "${args[*]}" >>"${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/systemctl.trace"
   fi
-  if [[ ${args[0]:-} == pacman && ${args[1]:-} == -S &&
-        ${GOOARCHY_TEST_NVIDIA_FAIL:-} == interrupt:pacman-payload ]]; then
-    if ! gooarchy_test_start_pacman_payload_watcher; then return 97; fi
-    payload_watcher_started=1
-  elif [[ ${1:-} == pacman && " $* " == *' -Syu '* &&
+  if [[ ${1:-} == pacman && " $* " == *' -Syu '* &&
         ${GOOARCHY_TEST_CAPTURE_ARCH_UPGRADE:-} == 1 ]]; then
     fail_preset=${GOOARCHY_TEST_ARCH_UPGRADE_HOOK_FAIL_PRESET:-}
     is_upgrade=1
@@ -206,20 +115,12 @@ sudo() {
     else
       rc=$?
     fi
-  elif ((payload_watcher_started)); then
-    if command sudo env GOOARCHY_NVIDIA_PACMAN_PID_FILE="$payload_pid_file" \
-      "$payload_wrapper" "${args[@]:1}"; then
-      rc=0
-    else
-      rc=$?
-    fi
   elif command sudo "${args[@]}"; then
     rc=0
   else
     rc=$?
   fi
   if ((hook_installed)) && ! gooarchy_test_restore_mkinitcpio_hook; then rc=98; fi
-  if ((payload_watcher_started)) && ! gooarchy_test_stop_pacman_payload_watcher; then rc=98; fi
   if ((is_upgrade)) && ((rc == 0)); then
     command sudo env -u BASH_ENV bash "$GOOARCHY_VM_NVIDIA_TEST_ROOT/capture-upgrade-state.sh" \
       >"$GOOARCHY_VM_NVIDIA_TEST_ROOT/arch-upgrade-state.tsv" || rc=$?
@@ -294,15 +195,6 @@ fi
 exec /usr/bin/mkinitcpio "$@"
 EOF
 chmod 0755 "$test_root/bin/mkinitcpio"
-cat >"$test_root/bin/nvidia-pacman-wrapper" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-pid_file=${GOOARCHY_NVIDIA_PACMAN_PID_FILE:?}
-printf '%s\n' "$$" >"$pid_file"
-exec /usr/bin/pacman "$@"
-EOF
-chmod 0755 "$test_root/bin/nvidia-pacman-wrapper"
-
 restore_r15a_current_state() {
   local status=0 module_dir kernel pkgbase
   sudo rm -f "$user_config" "$dynamic_modules"
@@ -327,21 +219,29 @@ restore_r15a_current_state() {
 
 cleanup() {
   local status=$? build_link_record build_link_path saved_link partial_kernel
-  if [[ -e $test_root/r15-pacman-commit-lock-owned ]]; then
-    if sudo rm -f /var/lib/pacman/db.lck; then
-      rm -f "$test_root/r15-pacman-commit-lock-owned"
+  local lock_expected lock_identity_expected lock_actual lock_identity_actual
+  if [[ -f $test_root/r15-stale-lock-owned ]]; then
+    IFS=$'\t' read -r lock_expected lock_identity_expected <"$test_root/r15-stale-lock-owned"
+    if [[ ! -e /var/lib/pacman/db.lck && ! -L /var/lib/pacman/db.lck ]]; then
+      rm -f "$test_root/r15-stale-lock-owned"
+    elif [[ -f /var/lib/pacman/db.lck && ! -L /var/lib/pacman/db.lck ]]; then
+      lock_actual=$(sudo sha256sum -- /var/lib/pacman/db.lck 2>/dev/null | awk '{print $1}' || true)
+      lock_identity_actual=$(sudo stat -c '%d:%i' -- /var/lib/pacman/db.lck 2>/dev/null || true)
+      if [[ -n $lock_expected && $lock_actual == "$lock_expected" &&
+            -n $lock_identity_expected && $lock_identity_actual == "$lock_identity_expected" ]] &&
+         sudo rm -f -- /var/lib/pacman/db.lck; then
+        rm -f "$test_root/r15-stale-lock-owned"
+      else
+        printf 'The test-owned pacman lock changed during cleanup; it was left untouched.\n' \
+          >"$test_root/cleanup-failure.txt"
+        status=1
+      fi
     else
+      printf 'The test-owned pacman lock was replaced by a non-regular path; it was left untouched.\n' \
+        >"$test_root/cleanup-failure.txt"
       status=1
     fi
   fi
-  if [[ -e $test_root/r15-pacman-commit-hook-owned ]]; then
-    sudo rm -f /usr/share/libalpm/hooks/zzz-gooarchy-nvidia-test-interrupt.hook \
-      /run/gooarchy-nvidia-test-interrupt-helper \
-      /run/gooarchy-nvidia-test-interrupt-armed \
-      /run/gooarchy-nvidia-test-interrupt-fired 2>/dev/null || true
-    rm -f "$test_root/r15-pacman-commit-hook-owned"
-  fi
-  rm -f "$test_root/r15-pacman-commit-hook-fired"
   if [[ -f $test_root/r15-boot-held ]]; then
     if [[ -f $test_root/90-mkinitcpio-install.hook.saved ]]; then
       sudo mv -f "$test_root/90-mkinitcpio-install.hook.saved" \
@@ -388,8 +288,6 @@ cleanup() {
     printf 'NVIDIA package fixture cleanup could not restore current packages, DKMS modules, and images.\n' \
       >"$test_root/cleanup-failure.txt"
     status=1
-  else
-    rm -f "$test_root/r15-pacman-commit-recovery-needed"
   fi
   exit "$status"
 }
@@ -404,11 +302,6 @@ record() {
     ((failures += 1))
     printf 'FAIL\t%s\t%s\n' "$name" "$detail" | tee -a "$test_root/results.tsv"
   fi
-}
-
-mark_unexercised() {
-  local row=$1 reason=$2
-  printf 'UNEXERCISED\t%s\t%s\n' "$row" "$reason" | tee -a "$test_root/unexercised.tsv"
 }
 
 tree_hash() {
@@ -439,12 +332,6 @@ PY
 }
 
 package_manifest() { pacman -Q | sort; }
-
-capture_pacman_query() {
-  local output=$1 status_file=$2 status=0
-  if pacman -Q >"$output" 2>&1; then status=0; else status=$?; fi
-  printf '%s\n' "$status" >"$status_file"
-}
 
 capture_repository_pair_mismatch() {
   local evidence=$test_root/nvidia-repository-pair-mismatch.txt repository directive servers package info
@@ -1558,7 +1445,9 @@ test_r15_linux_gooarchy_dkms_failure() {
 
 test_r15_interrupted_after_commit() {
   local module_dir kernel pkgbase package_version module_version repo_utils repo_dkms status=0 image modules module
-  local images_ok=1 modules_ok=1 report_ok=0
+  local images_ok=1 modules_ok=1 report_ok=0 image_hashes_ok=1
+  local image_hashes_before=$test_root/r15-after-commit-images-before.sha256
+  local image_hashes_after=$test_root/r15-after-commit-images-after.sha256
   local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
   if [[ -e $owned ]] && ! grep -Fxq \
       '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
@@ -1591,9 +1480,22 @@ test_r15_interrupted_after_commit() {
     "$([[ $status == 0 && $images_ok == 1 ]] && echo 1 || echo 0)" \
     'driver packages removed; every kernel image listable without NVIDIA modules'
   if ((status != 0 || images_ok == 0)); then return; fi
+  if ! capture_all_kernel_image_hashes >"$image_hashes_before"; then
+    record 'R15 after-commit matrix captures pre-transaction image hashes' 0 \
+      'could not hash every image before the package transaction'
+    return
+  fi
 
   run_nvidia_step r15-interrupted-after-commit "$supported" interrupt:after-commit
   status=$last_status
+  if ! capture_all_kernel_image_hashes >"$image_hashes_after"; then image_hashes_ok=0; fi
+  if ! cmp -s "$image_hashes_before" "$image_hashes_after"; then
+    diff -u "$image_hashes_before" "$image_hashes_after" \
+      >"$test_root/r15-after-commit-image-hash-diff.txt" || true
+  fi
+  record 'R15 existing after-commit matrix run records image hashes around pacman return' \
+    "$image_hashes_ok" \
+    "before=$image_hashes_before after=$image_hashes_after; any difference is recorded for hook attribution"
   package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
   module_version=$(module_version_from_package "$package_version")
   repo_utils=$(pacman -Si extra/nvidia-utils 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
@@ -1618,7 +1520,7 @@ test_r15_interrupted_after_commit() {
     done
   done
   record 'R15 interruption after commit leaves every kernel covered with listable fallback images' \
-    "$([[ $status != 0 && $report_ok == 1 && $modules_ok == 1 && $images_ok == 1 ]] && echo 1 || echo 0)" \
+    "$([[ $status != 0 && $report_ok == 1 && $modules_ok == 1 && $images_ok == 1 && $image_hashes_ok == 1 ]] && echo 1 || echo 0)" \
     "nvidia-utils $package_version; transaction committed; owned early-KMS file and step image setup not reached"
   hold_r15_failure_row interrupt-after-commit
 
@@ -1632,312 +1534,71 @@ test_r15_interrupted_after_commit() {
   fi
 }
 
-cached_package_archive() {
-  local package=$1 expected_version=$2 cache_dir archive actual_version
-  while IFS= read -r cache_dir; do
-    [[ -n $cache_dir ]] || continue
-    for archive in "$cache_dir"/"$package"-*.pkg.tar.*; do
-      [[ -f $archive ]] || continue
-      actual_version=$(pacman -Qp "$archive" 2>/dev/null | awk '{print $2}' || true)
-      if [[ $actual_version == "$expected_version" ]]; then
-        printf '%s\n' "$archive"
-        return 0
-      fi
-    done
-  done < <(pacman-conf CacheDir)
-  return 1
-}
-
-test_r15_interrupted_pacman_commit() {
-  local module_dir kernel pkgbase status=0 image hash baseline_ok=1 modules
-  local package_version repo_utils repo_dkms pacman_version archive archive_sha trigger candidate
-  local baseline=$test_root/r15-pacman-commit-baseline.tsv
-  local paths=$test_root/r15-pacman-nvidia-utils-payload-paths.txt
-  if [[ -e /var/lib/pacman/db.lck ]]; then
-    mark_unexercised 'R15 pacman-commit interruption' \
-      '/var/lib/pacman/db.lck existed before the fixture; it was left untouched'
-    return
-  fi
-  if [[ -e $owned ]] && ! grep -Fxq \
-      '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
-    mark_unexercised 'R15 pacman-commit interruption' "$owned is user-owned"
-    return
-  fi
-  : >"$test_root/driver-recovery-needed"
-  : >"$test_root/r15-pacman-commit-recovery-needed"
-  if [[ -e $owned ]]; then sudo cp -a "$owned" "$test_root/r15-interrupted-owned.saved"; fi
-  sudo rm -f "$owned" "$user_config" "$dynamic_modules"
-  if ! sudo pacman -Rdd --noconfirm nvidia-open-dkms nvidia-utils; then
-    mark_unexercised 'R15 pacman-commit interruption' 'could not remove the NVIDIA packages to establish a fresh install'
-    return
-  fi
+capture_all_kernel_image_hashes() {
+  local module_dir pkgbase
   for module_dir in /usr/lib/modules/*; do
     [[ -f $module_dir/pkgbase ]] || continue
     pkgbase=$(<"$module_dir/pkgbase")
-    sudo mkinitcpio -p "$pkgbase" >/dev/null 2>&1 || status=1
+    kernel_image_hashes "$pkgbase" || return 1
   done
+}
 
-  repo_utils=$(pacman -Si extra/nvidia-utils 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
-  repo_dkms=$(pacman -Si extra/nvidia-open-dkms 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
-  if [[ -z $repo_utils || $repo_utils != "$repo_dkms" ]]; then
-    mark_unexercised 'R15 pacman-commit interruption' \
-      "nvidia-utils ${repo_utils:-unavailable}; nvidia-open-dkms ${repo_dkms:-unavailable}"
+test_r15_pacman_stale_lock() {
+  local lock=/var/lib/pacman/db.lck packages_before database_before etc_before
+  local modules_before boot_before lock_hash lock_identity status lock_ok=1 reports_before
+  local lock_marker=$test_root/r15-stale-lock-owned
+  local image_hashes_before=$test_root/r15-stale-lock-images-before.sha256
+  local image_hashes_after=$test_root/r15-stale-lock-images-after.sha256
+
+  if [[ -e $lock || -L $lock ]]; then
+    record 'R15 stale-lock fixture starts without an existing pacman lock' 0 \
+      'pre-existing db.lck left untouched'
     return
   fi
-  package_version=$repo_utils
-  if ! sudo pacman -Sw --noconfirm nvidia-utils; then
-    mark_unexercised 'R15 pacman-commit interruption' \
-      "pacman -Sw failed for $package_version"
+  if ! command -v pgrep >/dev/null 2>&1 || pgrep -x pacman >/dev/null 2>&1; then
+    record 'R15 stale-lock fixture has no active pacman process' 0 \
+      'could not establish that the lock would be stale'
     return
   fi
-  archive=$(cached_package_archive nvidia-utils "$package_version" || true)
-  if [[ -z $archive || ! -f $archive ]]; then
-    mark_unexercised 'R15 pacman-commit interruption' \
-      "no cached nvidia-utils archive matches $package_version"
+  if ! capture_all_kernel_image_hashes >"$image_hashes_before"; then
+    record 'R15 stale-lock fixture can hash every kernel image' 0 'baseline image inventory failed'
     return
   fi
-  archive_sha=$(sha256sum -- "$archive" | awk '{print $1}') || return
-  if ! bsdtar -tf "$archive" | awk '
-    {
-      path = $0
-      sub(/^\.\//, "", path)
-      if (!path || path == "." || path ~ /\/$/ || path ~ /^\.\.\//) next
-      if (index(path, "/") == 0 && path ~ /^\.(BUILDINFO|CHANGELOG|INSTALL|MTREE|PKGINFO)$/) next
-      print "/" path
+  local lock_contents="gooarchy-nvidia-stale-lock $test_stamp"
+  printf '%s\n' "$lock_contents" |
+    sudo tee "$lock" >/dev/null || {
+      record 'R15 stale-lock fixture creates its own db.lck' 0 'could not create the lock'
+      return
     }
-  ' >"$paths" || [[ ! -s $paths ]]; then
-    mark_unexercised 'R15 pacman-commit interruption' \
-      "could not read payload paths from $archive"
-    return
-  fi
-  trigger=
-  while IFS= read -r candidate; do
-    if [[ ! -e $candidate && ! -L $candidate ]]; then
-      trigger=$candidate
-      break
-    fi
-  done <"$paths"
-  if [[ -z $trigger ]]; then
-    mark_unexercised 'R15 pacman-commit interruption' \
-      'all paths in the cached package already exist'
-    return
-  fi
-  if pacman -Q nvidia-utils >/dev/null 2>&1 || pacman -Q nvidia-open-dkms >/dev/null 2>&1 ||
-     compgen -G '/var/lib/pacman/local/nvidia-utils-*' >/dev/null; then
-    mark_unexercised 'R15 pacman-commit interruption' \
-      'a package version or local database entry remains after fixture preparation'
-    return
-  fi
-  pacman_version=$(pacman -V | sed -n 's/.*Pacman v\([^ ]*\).*/\1/p' | head -1)
-  [[ -n $pacman_version ]] || { mark_unexercised 'R15 pacman-commit interruption' 'pacman -V was unparseable'; return; }
-  printf '%s\n' "$package_version" >"$test_root/r15-pacman-nvidia-utils-package-version"
-  printf '%s\n' "$pacman_version" >"$test_root/r15-pacman-version"
-  printf '%s\n' "$archive" >"$test_root/r15-pacman-nvidia-utils-archive"
-  printf '%s\n' "$trigger" >"$test_root/r15-pacman-nvidia-utils-trigger-path"
-  {
-    printf 'schema\t2\nstep-start-boot-id\t%s\n' "$(cat /proc/sys/kernel/random/boot_id)"
-    printf 'pacman-version\t%s\nnvidia-utils-baseline-version\tabsent\n' "$pacman_version"
-    printf 'nvidia-utils-package-version\t%s\n' "$package_version"
-    printf 'nvidia-utils-archive-sha256\t%s\ntrigger-path\t%s\n' "$archive_sha" "$trigger"
-  } >"$baseline"
-  for module_dir in /usr/lib/modules/*; do
-    [[ -f $module_dir/pkgbase ]] || continue
-    kernel=${module_dir##*/}
-    pkgbase=$(<"$module_dir/pkgbase")
-    if ! kernel_sounds_for_boot "$kernel" "$pkgbase" ''; then
-      record "R15 $kernel sound image baseline before package interruption" 0 \
-        'the package-free kernel tree or one of its listable images is not sound'
-      baseline_ok=0
-      continue
-    fi
-    printf 'kernel\t%s\t%s\n' "$kernel" "$pkgbase" >>"$baseline"
-    for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-      hash=$(sha256sum -- "$image" | awk '{print $1}') || { baseline_ok=0; continue; }
-      printf 'image\t%s\t%s\t%s\n' "$kernel" "$image" "$hash" >>"$baseline"
-      modules=$(image_modules "$image" 2>/dev/null || true)
-      [[ -z $modules ]] || baseline_ok=0
-      printf 'image-modules\t%s\t%s\t%s\n' "$kernel" "$image" "${modules:-none}" >>"$baseline"
-    done
-  done
-  if ((status != 0 || baseline_ok == 0)); then
-    mark_unexercised 'R15 pacman-commit interruption' 'could not establish a listable, NVIDIA-free baseline for every kernel'
-    return
-  fi
-  record 'R15 pacman-commit fixture records each validated sound baseline image' 1 \
-    "baseline driver absent; pacman $pacman_version; cached package $package_version; archive SHA256 $archive_sha"
-
-  printf '%s\n' "$test_stamp" >"$test_root/r15-pacman-commit-test-stamp"
-  # Persist this fixture's complete starting state before the package transaction. The
-  # pre-transaction wrapper revalidates the image hashes and emits this manifest to serial.
-  sync
-  run_nvidia_step r15-pacman-commit-interrupted "$supported" interrupt:pacman-payload
-  status=$last_status
-  if [[ -s $test_root/r15-pacman-payload-witness-status.tsv ]]; then
-    mark_unexercised 'R15 pacman-commit interruption' \
-      "$(<"$test_root/r15-pacman-payload-witness-status.tsv")"
-  else
-    mark_unexercised 'R15 pacman-commit interruption' \
-      "guest command returned without a reset witness (status $status)"
-  fi
-}
-
-test_r15_interrupted_pacman_commit_recover() {
-  local module_dir kernel pkgbase image expected_hash actual_hash
-  local trigger_path=${GOOARCHY_NVIDIA_PACMAN_TRIGGER_PATH:-}
-  local reset_evidence=${GOOARCHY_NVIDIA_PACMAN_RESET_EVIDENCE:-}
-  local witness_confirmed=${GOOARCHY_NVIDIA_PACMAN_WITNESS_CONFIRMED:-}
-  local start_boot_id current_boot_id package_before_status package_after_status lock_hash
-  local status images_ok=1 trigger_ok=0 lock_ok=1 recovery_ok=1 covered=1 early_kms_ok=1
-  local packages_before etc_before boot_before modules_before pacman_db_before reports_before
-  local module_version package_version baseline_module_version baseline_modules current_modules image_differences=
-  local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
-  local baseline=$test_root/r15-pacman-commit-baseline.tsv
-
-  [[ -s $baseline && -f $test_root/r15-pacman-commit-test-stamp ]] || {
-    record 'R15 pacman reset recovery has its persisted pre-transaction baseline' 0 'baseline files are missing'
-    return
-  }
-  if [[ -z $trigger_path && -f $test_root/r15-pacman-nvidia-utils-trigger-path ]]; then
-    trigger_path=$(<"$test_root/r15-pacman-nvidia-utils-trigger-path")
-  fi
-  start_boot_id=$(awk -F '\t' '$1 == "step-start-boot-id" { print $2; exit }' "$baseline")
-  baseline_module_version=$(awk -F '\t' '$1 == "nvidia-utils-baseline-version" { print $2; exit }' "$baseline")
-  current_boot_id=$(cat /proc/sys/kernel/random/boot_id)
-  if [[ $witness_confirmed == 1 && $reset_evidence == sysrq-b-no-sync &&
-        $current_boot_id != "$start_boot_id" &&
-        -n $trigger_path ]] &&
-     grep -Fxq -- "$trigger_path" "$test_root/r15-pacman-nvidia-utils-payload-paths.txt"; then
-    trigger_ok=1
-  fi
-  record 'R15 in-commit reset has an externally verified stopped-pacman payload witness' "$trigger_ok" \
-    "runner-confirmed ${witness_confirmed:-missing}; trigger ${trigger_path:-missing}; reset ${reset_evidence:-missing}; boot $start_boot_id -> $current_boot_id"
-
-  printf 'post-reset package/database state (informational only)\n' >"$test_root/r15-pacman-post-reset-information.txt"
-  { pacman -Q nvidia-utils nvidia-open-dkms 2>&1 || true; } >>"$test_root/r15-pacman-post-reset-information.txt"
-  { find /usr/lib/modules -type f -name 'nvidia*.ko*' -print 2>&1 || true; } \
-    >>"$test_root/r15-pacman-post-reset-information.txt"
-  { [[ -e /var/lib/pacman/db.lck ]] && printf 'db.lck remains\n' || printf 'db.lck absent\n'; } \
-    >>"$test_root/r15-pacman-post-reset-information.txt"
-
-  while IFS=$'\t' read -r kind kernel image expected_hash; do
-    [[ $kind == image ]] || continue
-    if [[ ! -f $image ]] || ! lsinitcpio "$image" >/dev/null 2>&1; then
-      images_ok=0
-      continue
-    fi
-    actual_hash=$(sha256sum -- "$image" | awk '{print $1}') || { images_ok=0; continue; }
-    if [[ $actual_hash != "$expected_hash" ]]; then
-      baseline_modules=$(awk -F '\t' -v k="$kernel" -v i="$image" \
-        '$1 == "image-modules" && $2 == k && $3 == i {print $4; exit}' "$baseline")
-      current_modules=$(image_modules "$image" 2>/dev/null || true)
-      if [[ ${baseline_modules:-none} != "${current_modules:-none}" ]] ||
-         ! check_image_versions_and_firmware "$image" "${baseline_module_version/absent/}"; then
-        images_ok=0
-      fi
-      image_differences+="${kernel}:${image}:${expected_hash}->${actual_hash};"
-    fi
-  done <"$baseline"
-  record 'R15 every sound-baseline image remains present, listable and consistent' "$images_ok" \
-    "changed images were checked against baseline modules/version and firmware: ${image_differences:-none}; package files, module trees and pacman database are informational only"
-
-  if [[ -e /var/lib/pacman/db.lck ]]; then
-    : >"$test_root/r15-pacman-commit-lock-owned"
-    lock_hash=$(sha256sum -- /var/lib/pacman/db.lck | awk '{print $1}')
-    capture_pacman_query "$test_root/r15-pacman-package-query-before.txt" \
-      "$test_root/r15-pacman-package-query-before.status"
-    pacman_db_before=$(tree_hash /var/lib/pacman/local)
-    packages_before=$(package_manifest 2>&1 || true)
-    etc_before=$(tree_hash /etc)
-    boot_before=$(tree_hash /boot)
-    modules_before=$(tree_hash /usr/lib/modules)
-    reports_before=$(report_count)
-    run_nvidia_step r15-pacman-stale-lock "$supported" -
-    status=$last_status
-    capture_pacman_query "$test_root/r15-pacman-package-query-after.txt" \
-      "$test_root/r15-pacman-package-query-after.status"
-    package_after_status=$(<"$test_root/r15-pacman-package-query-after.status")
-    package_before_status=$(<"$test_root/r15-pacman-package-query-before.status")
-    [[ $status != 0 && -e /var/lib/pacman/db.lck &&
-       $(sha256sum -- /var/lib/pacman/db.lck | awk '{print $1}') == "$lock_hash" &&
-       $package_before_status == "$package_after_status" &&
-       $(tree_hash /var/lib/pacman/local) == "$pacman_db_before" &&
-       $packages_before == "$(package_manifest 2>&1 || true)" &&
-       $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" &&
-       $modules_before == "$(tree_hash /usr/lib/modules)" &&
-       $reports_before -lt $(report_count) ]] || lock_ok=0
-    grep -Fq 'stale db.lck' "$test_root/r15-pacman-stale-lock.log" || lock_ok=0
-    record 'R15 stale-lock rerun reports the lock and fails without a package or configuration change' "$lock_ok" \
-      'the lock and pacman package state are unchanged across the rerun'
-  else
-    record 'R15 pacman reset left no database lock' 1 \
-      'recorded; the installer rerun proceeds under its other rules'
-    run_nvidia_step r15-pacman-no-lock-rerun "$supported" -
-    printf 'post-reset installer rerun status: %s\n' "$last_status" \
-      >>"$test_root/r15-pacman-post-reset-information.txt"
-  fi
-
-  if [[ -e /var/lib/pacman/db.lck ]]; then
-    sudo rm -f /var/lib/pacman/db.lck || recovery_ok=0
-  fi
-  if ((recovery_ok)); then
-    if sudo pacman -S --noconfirm --overwrite '*' nvidia-utils; then
-      printf '%s\n' "pacman -S --noconfirm --overwrite '*' nvidia-utils" \
-        >>"$test_root/r15-pacman-recovery-commands.txt"
-    else
-      recovery_ok=0
-    fi
-  fi
-  record 'R15 Arch recovery reinstalls the interrupted nvidia-utils package' "$recovery_ok" \
-    'used the package-specific overwrite recovery for unrecorded payload files when needed'
-
-  if ((recovery_ok)); then
-    run_nvidia_step r15-pacman-commit-recovered "$supported" -
-    status=$last_status
-    package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
-    module_version=$(module_version_from_package "$package_version")
-    [[ -n $package_version && $package_version == "$(pacman -Q nvidia-open-dkms 2>/dev/null | awk '{print $2}' || true)" ]] ||
-      covered=0
-    for module_dir in /usr/lib/modules/*; do
-      [[ -f $module_dir/pkgbase ]] || continue
-      kernel=${module_dir##*/}
-      pkgbase=$(<"$module_dir/pkgbase")
-      for module in "${required[@]}"; do
-        [[ $(modinfo -k "$kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] || covered=0
-      done
-      image_set_for_kernel "$pkgbase" || { early_kms_ok=0; continue; }
-      for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-        image_has_modules_at_version "$image" "$module_version" "${required[@]}" || early_kms_ok=0
-      done
-    done
-  else
-    status=1
-  fi
-  record 'R17 recovery rerun converges to early KMS on every kernel' \
-    "$([[ $status == 0 && $covered == 1 && $early_kms_ok == 1 ]] && echo 1 || echo 0)" \
-    'Arch recovered the interrupted package before the installer rerun'
+  lock_hash=$(printf '%s\n' "$lock_contents" | sha256sum | awk '{print $1}') || return
+  lock_identity=$(sudo stat -c '%d:%i' -- "$lock") || return
+  printf '%s\t%s\n' "$lock_hash" "$lock_identity" >"$lock_marker"
 
   packages_before=$(package_manifest)
+  database_before=$(tree_hash /var/lib/pacman/local)
   etc_before=$(tree_hash /etc)
-  boot_before=$(tree_hash /boot)
   modules_before=$(tree_hash /usr/lib/modules)
-  run_nvidia_step r17-pacman-commit-no-op "$supported" -
-  record 'R17 further pacman recovery rerun makes no package, config, module or image change' \
-    "$([[ $last_status == 0 && $packages_before == "$(package_manifest)" &&
-      $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" &&
-      $modules_before == "$(tree_hash /usr/lib/modules)" ]] && echo 1 || echo 0)" \
-    'same-version convergence is stable after Arch recovery'
+  boot_before=$(tree_hash /boot)
+  reports_before=$(report_count)
 
-  if [[ -f $test_root/r15-interrupted-owned.saved ]]; then
-    sudo mv -f "$test_root/r15-interrupted-owned.saved" "$owned"
-  fi
-  if restore_r15a_current_state; then
-    record 'R17 pacman interruption fixture is restored to the VM reference state' 1 \
-      'current packages, DKMS modules, and images restored after evidence capture'
-    rm -f "$test_root/r15-pacman-commit-recovery-needed" \
-      "$test_root/r15-pacman-commit-lock-owned"
-  else
-    record 'R17 pacman interruption fixture is restored to the VM reference state' 0 'cleanup recovery failed'
-  fi
+  run_nvidia_step r15-pacman-stale-lock "$supported" -
+  status=$last_status
+
+  if ! capture_all_kernel_image_hashes >"$image_hashes_after"; then lock_ok=0; fi
+  [[ $status != 0 && -e $lock && ! -L $lock &&
+     $(sha256sum -- "$lock" | awk '{print $1}') == "$lock_hash" &&
+     $(sudo stat -c '%d:%i' -- "$lock") == "$lock_identity" &&
+     $packages_before == "$(package_manifest)" &&
+     $database_before == "$(tree_hash /var/lib/pacman/local)" &&
+     $etc_before == "$(tree_hash /etc)" &&
+     $modules_before == "$(tree_hash /usr/lib/modules)" &&
+     $boot_before == "$(tree_hash /boot)" &&
+     $reports_before -lt $(report_count) ]] || lock_ok=0
+  grep -Fq 'stale db.lck' "$test_root/r15-pacman-stale-lock.log" || lock_ok=0
+  cmp -s "$image_hashes_before" "$image_hashes_after" || lock_ok=0
+  record 'R15 stale-lock rerun reports the lock and preserves package, configuration, module and image state' \
+    "$lock_ok" \
+    "status $status; lock SHA256 $lock_hash retained; per-image SHA256 lists: $image_hashes_before and $image_hashes_after"
 }
 
 test_user_partial_kernels() {
@@ -2683,8 +2344,7 @@ r15_row() {
       ;;
     pacman-commit-interruption)
       verify_repository_driver_pair || return 1
-      test_r15_interrupted_pacman_commit
-      [[ ! -s $test_root/unexercised.tsv ]] || return 77
+      test_r15_pacman_stale_lock
       ;;
     package-hook-linux-only|package-hook-linux-partial-lts)
       verify_repository_driver_pair || return 1
@@ -2722,9 +2382,5 @@ case $phase in
     [[ ${2:-} == "$held" ]] || { echo 'r15-release row changed during validation.' >&2; exit 2; }
     rm -f "$test_root/r15-boot-held"
     ;;
-  r15-pacman-recover)
-    verify_repository_driver_pair
-    test_r15_interrupted_pacman_commit_recover
-    ;;
-  *) echo "usage: $0 preinstall|postinstall|reference|r15-row <row>|r15-release <row>|r15-pacman-recover" >&2; exit 2 ;;
+  *) echo "usage: $0 preinstall|postinstall|reference|r15-row <row>|r15-release <row>" >&2; exit 2 ;;
 esac
