@@ -50,6 +50,9 @@ check() {
 package_gooarchy() {
   depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'glibc' 'gcc-libs'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
+  # Optional, not required: editing the system tools is the exception, and package upgrades work
+  # without a toolchain (docs/rulings.md).
+  optdepends=('rust: rebuild the system tools from edited source')
   install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
   install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
   install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
