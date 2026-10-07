@@ -2,6 +2,15 @@
 # Exercise the publisher against a local GitHub Releases-shaped stand-in and a throwaway key.
 set -euo pipefail
 
+stage1_consumer=0
+if (($#)); then
+  [[ $# == 1 && $1 == --with-stage1-consumer ]] || {
+    echo "Usage: tests/repository-publish-test.sh [--with-stage1-consumer]" >&2
+    exit 2
+  }
+  stage1_consumer=1
+fi
+
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source_root=$(git -C "$script_dir" rev-parse --show-toplevel)
 test_parent=${TMPDIR:-/tmp}
@@ -20,6 +29,31 @@ for command_name in bsdtar curl gpg git jq pacman python3 repo-add sha256sum ver
   }
 done
 real_pacman=$(command -v pacman)
+original_path=$PATH
+test_wayfire_package_version=0.11.0-1
+if ((stage1_consumer)); then
+  command -v sudo >/dev/null 2>&1 || {
+    echo "repository-publish-test: sudo is required for stage 1 consumer integration" >&2
+    exit 1
+  }
+  if ! sudo "$real_pacman" -Syy --noconfirm >"$test_root/arch-refresh.log" 2>&1; then
+    cat "$test_root/arch-refresh.log" >&2
+    echo "repository-publish-test: could not refresh Arch package databases for consumer integration" >&2
+    exit 1
+  fi
+  test_wayfire_package_version=$("$real_pacman" -Si extra/wayfire |
+    awk -F: '/^[[:space:]]*Version[[:space:]]*:/ { sub(/^[[:space:]]*/, "", $2); print $2; exit }')
+  [[ -n $test_wayfire_package_version ]] || {
+    echo "repository-publish-test: Arch extra has no current wayfire version" >&2
+    exit 1
+  }
+fi
+test_wayfire_version=${test_wayfire_package_version#*:}
+test_wayfire_version=${test_wayfire_version%-*}
+[[ -n $test_wayfire_version ]] || {
+  echo "repository-publish-test: Arch wayfire version is invalid" >&2
+  exit 1
+}
 
 fixture="$test_root/checkout"
 release_root="$test_root/releases"
@@ -94,6 +128,31 @@ gpg --homedir "$key_home" --batch --armor --export-secret-keys "$fingerprint" \
   >"$test_root/test-private-key.asc"
 chmod 600 "$test_root/test-private-key.asc"
 
+consumer_root=
+consumer_commit=$(git -C "$source_root" rev-parse HEAD)
+if ((stage1_consumer)); then
+  for consumer_file in install/packaging/repository.sh install/packaging/gooarchy.sh \
+    packaging/keys/gooarchy.asc packaging/keys/gooarchy.fingerprint; do
+    [[ -f $source_root/$consumer_file ]] || {
+      echo "repository-publish-test: stage 1 consumer file is missing: $consumer_file" >&2
+      exit 1
+    }
+  done
+  consumer_root="$test_root/consumer-checkout"
+  git clone --quiet --shared "$source_root" "$consumer_root"
+  git -C "$consumer_root" config user.name 'Repository Test'
+  git -C "$consumer_root" config user.email 'repository-test@example.invalid'
+  cp -- "$fixture/packaging/keys/gooarchy.asc" "$consumer_root/packaging/keys/gooarchy.asc"
+  cp -- "$fixture/packaging/keys/gooarchy.fingerprint" \
+    "$consumer_root/packaging/keys/gooarchy.fingerprint"
+  git -C "$consumer_root" add packaging/keys/gooarchy.asc packaging/keys/gooarchy.fingerprint
+  GIT_AUTHOR_NAME='Repository Test' GIT_AUTHOR_EMAIL='repository-test@example.invalid' \
+    GIT_COMMITTER_NAME='Repository Test' GIT_COMMITTER_EMAIL='repository-test@example.invalid' \
+    git -C "$consumer_root" commit --allow-empty -qm 'configure throwaway repository test key'
+  consumer_commit=$(git -C "$consumer_root" rev-parse HEAD)
+fi
+export GOOARCHY_TEST_CONSUMER_COMMIT="$consumer_commit"
+
 cat >"$test_bin/op" <<'OP'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -145,10 +204,19 @@ for name in names:
             f"builddate = 0\npackager = Gooarchy\nsize = 0\narch = {architecture}\n"
             + "".join(f"depend = {dependency}\n" for dependency in depends)
         )
+        archive_entries = [".PKGINFO"]
+        if name == "gooarchy":
+            build_info = Path(temporary) / "usr/share/gooarchy/build-info"
+            build_info.parent.mkdir(parents=True)
+            build_info.write_text(
+                "gooarchy repository test fixture\n"
+                f"checkout {os.environ['GOOARCHY_TEST_CONSUMER_COMMIT']}\n"
+            )
+            archive_entries.append("usr")
         destination = Path(package_dest) / filename
         with destination.open("wb") as output:
             archive = subprocess.Popen(
-                ["bsdtar", "-C", temporary, "-cf", "-", ".PKGINFO"],
+                ["bsdtar", "-C", temporary, "-cf", "-", *archive_entries],
                 stdout=subprocess.PIPE,
                 check=False,
             )
@@ -168,8 +236,8 @@ if [[ ${1:-} == -Si && ${2:-} == extra/wayfire ]]; then
   cat <<'INFO'
 Repository      : extra
 Name            : wayfire
-Version         : 0.11.0-1
 INFO
+  printf 'Version         : %s\n' "$GOOARCHY_TEST_WAYFIRE_PACKAGE_VERSION"
   exit 0
 fi
 exec "$GOOARCHY_TEST_REAL_PACMAN" "$@"
@@ -263,6 +331,12 @@ root = Path(sys.argv[1])
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        self._serve(send_body=True)
+
+    def do_HEAD(self):
+        self._serve(send_body=False)
+
+    def _serve(self, send_body):
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if path == "/health":
             self.send_response(200)
@@ -286,7 +360,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if send_body:
+            self.wfile.write(body)
 
     def log_message(self, *_args):
         pass
@@ -313,6 +388,7 @@ export GOOARCHY_TEST_SECRET_KEY="$test_root/test-private-key.asc"
 export GOOARCHY_TEST_RELEASE_ROOT="$release_root"
 export GOOARCHY_PUBLISH_TMPDIR="$test_root"
 export GOOARCHY_TEST_REAL_PACMAN="$real_pacman"
+export GOOARCHY_TEST_WAYFIRE_PACKAGE_VERSION="$test_wayfire_package_version"
 
 publish="$fixture/packaging/repository/publish.sh"
 first_publish_output=$("$publish" --all)
@@ -354,7 +430,7 @@ expected_names=$(printf '%s\n' gooarchy gooarchy-flavorings linux-gooarchy \
 }
 first_scottland_version=$(awk -F '\t' '$1 == "scottland" { print $2 }' <<<"$first_records")
 first_scottland_file=$(awk -F '\t' '$1 == "scottland" { print $3 }' <<<"$first_records")
-[[ $first_scottland_version == *.wf0.11.0-1 ]] || {
+[[ $first_scottland_version == *.wf$test_wayfire_version-1 ]] || {
   echo "repository-publish-test: Scottland version did not include the current Arch Wayfire version" >&2
   exit 1
 }
@@ -503,6 +579,57 @@ fi
   echo "repository-publish-test: an asset-name mismatch advanced latest" >&2
   exit 1
 }
+
+if ((stage1_consumer)); then
+  if ! sudo pacman-key --init >"$test_root/pacman-key-init.log" 2>&1; then
+    cat "$test_root/pacman-key-init.log" >&2
+    echo "repository-publish-test: pacman-key could not initialize in the disposable guest" >&2
+    exit 1
+  fi
+  if ! sudo pacman-key --populate archlinux >"$test_root/pacman-key-populate.log" 2>&1; then
+    cat "$test_root/pacman-key-populate.log" >&2
+    echo "repository-publish-test: Arch pacman keys could not be populated in the disposable guest" >&2
+    exit 1
+  fi
+  consumer_url="http://127.0.0.1:$port"
+  if ! (
+    export PATH="$original_path"
+    export GOOARCHY_PATH="$consumer_root"
+    export GOOARCHY_INSTALL="$consumer_root/install"
+    export GOOARCHY_STATE="$test_root/consumer-state"
+    export GOOARCHY_BUILD="$test_root/consumer-build"
+    export GOOARCHY_REPOSITORY_URL="$consumer_url"
+    export GOOARCHY_YES=1
+    mkdir -p "$GOOARCHY_STATE" "$GOOARCHY_BUILD"
+    source "$GOOARCHY_INSTALL/helpers/logging.sh"
+    start_install_log
+    run_logged "$GOOARCHY_INSTALL/packaging/repository.sh"
+    run_logged "$GOOARCHY_INSTALL/packaging/gooarchy.sh"
+    stop_install_log
+  ) >"$test_root/consumer.log" 2>&1; then
+    cat "$test_root/consumer.log" >&2
+    echo "repository-publish-test: stage 1 did not consume the published stand-in" >&2
+    exit 1
+  fi
+  for package_name in gooarchy gooarchy-flavorings; do
+    expected_version=$(awk -F '\t' -v package="$package_name" \
+      '$1 == package { print $2; exit }' <<<"$upgrade_records")
+    installed_version=$(pacman -Q "$package_name" | awk '{ print $2 }')
+    installed_packager=$(pacman -Qi "$package_name" |
+      awk -F ':[[:space:]]*' '$1 == "Packager" { print $2; exit }')
+    [[ -n $expected_version && $installed_version == "$expected_version" &&
+      $installed_packager == Gooarchy ]] || {
+      echo "repository-publish-test: pacman installed $package_name $installed_version from '$installed_packager', expected signed repository version $expected_version" >&2
+      exit 1
+    }
+  done
+  grep -Fq 'gooarchy and gooarchy-flavorings are installed from the Gooarchy repository.' \
+    "$test_root/consumer.log" || {
+    echo "repository-publish-test: stage 1 did not report repository package consumption" >&2
+    exit 1
+  }
+  printf 'PASS: stage 1 repository and Gooarchy package scripts consume the published stand-in through real pacman.\n'
+fi
 
 printf 'x' >>"$upgrade_assets/gooarchy.db"
 if GOOARCHY_TEST_VERSION_SCOTTLAND=1.3 "$publish" scottland \

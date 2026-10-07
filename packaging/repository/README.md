@@ -35,3 +35,8 @@ Scottland's exact Wayfire dependency, version refusal, package and signature
 retention, lookup through a local redirect, and the filename guard. The real
 1Password read, GitHub upload, and gooarchy.com redirect are separate setup and
 publish steps.
+
+After stage 1 is on Gooarchy main, run
+`tests/repository-publish-test.sh --with-stage1-consumer` in the disposable Arch
+guest to pass that signed release stand-in through stage 1's repository and
+Gooarchy package scripts with the guest's real pacman client.
