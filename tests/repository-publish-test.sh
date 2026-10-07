@@ -321,6 +321,27 @@ grep -Fq 'gooarchy-flavorings 0123456789abcdef0123456789abcdef01234567' \
   echo "repository-publish-test: publish output omitted the flavorings source revision" >&2
   exit 1
 }
+python3 - "$test_root/incomplete.db" <<'PY'
+import io
+import sys
+import tarfile
+
+database = sys.argv[1]
+payload = b"%NAME%\nmissing-metadata\n\n%VERSION%\n1-1\n\n"
+with tarfile.open(database, mode="w:gz") as archive:
+    member = tarfile.TarInfo("missing-metadata/desc")
+    member.size = len(payload)
+    archive.addfile(member, io.BytesIO(payload))
+PY
+if python3 "$fixture/packaging/repository/read-db.py" "$test_root/incomplete.db" \
+  >"$test_root/incomplete.out" 2>"$test_root/incomplete.err"; then
+  echo "repository-publish-test: the database reader accepted a package record missing required fields" >&2
+  exit 1
+fi
+grep -Fq 'must contain exactly one %FILENAME% field' "$test_root/incomplete.err" || {
+  echo "repository-publish-test: malformed database refusal did not identify its missing filename" >&2
+  exit 1
+}
 first_tag=$(cat "$release_root/LATEST")
 first_assets="$release_root/releases/$first_tag/assets"
 first_records=$(python3 "$fixture/packaging/repository/read-db.py" "$first_assets/gooarchy.db")
@@ -483,4 +504,19 @@ fi
   exit 1
 }
 
-printf 'PASS: initial six-package publish, R2 recipe addition, signatures, R8 refusal, R9 retention, redirect lookup, and A3 filename guard.\n'
+printf 'x' >>"$upgrade_assets/gooarchy.db"
+if GOOARCHY_TEST_VERSION_SCOTTLAND=1.3 "$publish" scottland \
+  >"$test_root/tampered-db.log" 2>&1; then
+  echo "repository-publish-test: the publisher accepted a repository database with a broken signature" >&2
+  exit 1
+fi
+grep -Fq 'the latest repository database signature is invalid' "$test_root/tampered-db.log" || {
+  echo "repository-publish-test: tampered database refusal did not identify the invalid signature" >&2
+  exit 1
+}
+[[ $(cat "$release_root/LATEST") == "$upgrade_tag" ]] || {
+  echo "repository-publish-test: a tampered database changed the current repository" >&2
+  exit 1
+}
+
+printf 'PASS: initial six-package publish, R2 recipe addition, signatures, strict database records, R8 refusal, R9 retention, redirect lookup, and A3 filename guard.\n'

@@ -13,30 +13,40 @@ def records(database: Path) -> list[tuple[str, str, str]]:
     found: list[tuple[str, str, str]] = []
     with tarfile.open(database, mode="r:*") as archive:
         for member in archive.getmembers():
-            if not member.isfile() or Path(member.name).name != "desc":
+            if Path(member.name).name != "desc":
                 continue
+            if not member.isfile():
+                raise ValueError(f"{member.name} is not a package record file")
             stream = archive.extractfile(member)
             if stream is None:
-                continue
+                raise ValueError(f"could not read {member.name} from {database}")
             lines = stream.read().decode("utf-8", errors="strict").splitlines()
             fields: dict[str, str] = {}
             for field in ("NAME", "VERSION", "FILENAME"):
                 marker = f"%{field}%"
-                try:
-                    index = lines.index(marker)
-                except ValueError:
-                    continue
-                if index + 1 < len(lines) and not lines[index + 1].startswith("%"):
-                    fields[field] = lines[index + 1]
+                matches = [index for index, line in enumerate(lines) if line == marker]
+                if len(matches) != 1:
+                    raise ValueError(
+                        f"{member.name} must contain exactly one {marker} field"
+                    )
+                index = matches[0]
+                if (
+                    index + 1 >= len(lines)
+                    or not lines[index + 1]
+                    or lines[index + 1].startswith("%")
+                ):
+                    raise ValueError(f"{member.name} has no value for {marker}")
+                fields[field] = lines[index + 1]
             name, version, filename = (
-                fields.get("NAME", ""),
-                fields.get("VERSION", ""),
-                fields.get("FILENAME", ""),
+                fields["NAME"],
+                fields["VERSION"],
+                fields["FILENAME"],
             )
-            if name and version and filename:
-                found.append((name, version, filename))
+            found.append((name, version, filename))
 
     names = [name for name, _, _ in found]
+    if not names:
+        raise ValueError(f"{database} contains no package records")
     if len(names) != len(set(names)):
         raise ValueError(f"{database} contains more than one record for a package")
     return sorted(found)
@@ -48,7 +58,10 @@ def main() -> int:
     args = parser.parse_args()
     try:
         for name, version, filename in records(args.database):
-            if "\t" in name + version + filename or "\n" in name + version + filename:
+            if any(
+                ord(character) < 32 or ord(character) == 127
+                for character in name + version + filename
+            ):
                 raise ValueError("repository database contains an invalid field")
             print(f"{name}\t{version}\t{filename}")
     except (OSError, tarfile.TarError, UnicodeError, ValueError) as error:

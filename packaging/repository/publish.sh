@@ -113,6 +113,8 @@ chmod 700 "$work_dir"
 trap 'rm -rf -- "$work_dir"' EXIT
 mkdir -m 700 "$work_dir/assets" "$work_dir/built" "$work_dir/sources" \
   "$work_dir/build" "$work_dir/gnupg"
+gpg --homedir "$work_dir/gnupg" --batch --import "$public_key_file" >/dev/null 2>&1 ||
+  die "could not load the committed Gooarchy public key into the private publish workspace."
 
 makepkg_config="$work_dir/makepkg.conf"
 {
@@ -134,6 +136,9 @@ if [[ -n $latest_tag ]]; then
   previous_database="$previous_dir/gooarchy.db"
   [[ -s $previous_database ]] || die "the latest release has no gooarchy.db database asset."
   [[ -s $previous_database.sig ]] || die "the latest release has no signature for gooarchy.db."
+  gpg --homedir "$work_dir/gnupg" --batch --verify "$previous_database.sig" \
+    "$previous_database" >/dev/null 2>&1 ||
+    die "the latest repository database signature is invalid."
   previous_records=$(python3 "$read_db" "$previous_database") ||
     die "could not read the current Gooarchy package database."
   while IFS=$'\t' read -r old_name old_ver old_file; do
@@ -292,8 +297,6 @@ done
 
 key_reference=${GOOARCHY_SIGNING_KEY_REF:-}
 [[ $key_reference == op://* ]] || die "GOOARCHY_SIGNING_KEY_REF must point to the approved 1Password signing-key item."
-gpg --homedir "$work_dir/gnupg" --batch --import "$public_key_file" >/dev/null 2>&1 ||
-  die "could not load the committed Gooarchy public key into the private publish workspace."
 if ! op read "$key_reference" 2>/dev/null | \
   gpg --homedir "$work_dir/gnupg" --batch --import >/dev/null 2>&1; then
   die "1Password did not provide the configured Gooarchy signing key."
