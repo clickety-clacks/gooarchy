@@ -3,6 +3,16 @@
 Product decisions that shape Gooarchy, newest first. Each says what was decided, why, and where it
 came from. Mike may overrule any of them.
 
+## The test bed keeps tty1 autologin
+
+2026-10-07, Mike (decision `dr_5a5cc75c`).
+
+The Gooarchy test bed logs in automatically on tty1 with no lock screen, so anyone at its keyboard
+gets a desktop. Turning that off would mean a password at the console before tests that need a
+session. Mike chose "keep-autologin". The test bed keeps its `--autologin` drop-in
+(`gooarchy-autologin.conf`). This covers the test bed only: the installer's defaults don't change,
+and autologin stays opt-in through `--autologin`.
+
 ## Ghostty reads its theme from Scottland on Gooarchy
 
 2026-10-07, Mike (decision `dr_f74a125b`).
