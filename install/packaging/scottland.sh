@@ -1,6 +1,7 @@
 # Scottland, built from its repository with its own PKGBUILD into the scottland package (D1: the
-# desktop's files come from a package). Its PKGBUILD also builds scottland-omarchy, the Omarchy
-# adapter; Gooarchy doesn't install that.
+# desktop's files come from a package), and scottland-sunlight, its standalone day/night theme
+# package (Mike dr_0e88648d, docs/rulings.md): same pkgbase, same build, installed by default.
+# Its PKGBUILD also builds scottland-omarchy, the Omarchy adapter; Gooarchy doesn't install that.
 #
 # Scottland's PKGBUILD has a fixed version (0.1.0-1), and its plugin is built against one Wayfire
 # ABI. So the build copy gets a version that names what was built: the Scottland revision and the
@@ -30,6 +31,7 @@ grep -q "^pkgver=$version\$" "$pkgbuild" && grep -q "depends=('wayfire=$wayfire'
 echo "Scottland ${rev:0:12} ($(git -C "$src" log -1 --format=%s)) for Wayfire $wayfire: scottland $version"
 
 build_package "$src/packaging/arch"
-mapfile -t files < <(built_files "$src/packaging/arch" scottland)
+mapfile -t files < <(built_files "$src/packaging/arch" scottland scottland-sunlight)
 install_built --asdeps "${files[@]}"
 record_build scottland "$GOOARCHY_SCOTTLAND_REPO" "$rev" "$version"
+record_build scottland-sunlight "$GOOARCHY_SCOTTLAND_REPO" "$rev" "$version"
