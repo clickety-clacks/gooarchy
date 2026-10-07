@@ -937,7 +937,7 @@ test_r17_header_repair() {
 
 test_user_partial_kernels() {
   local kernel pkgbase scenario modules remove image config_hash source_hash preset base status expected
-  local expected_report_file
+  local expected_report_file error_lines step_log report_ok
   local -a removals=()
   kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
   if [[ -z $kernel ]]; then
@@ -947,7 +947,7 @@ test_user_partial_kernels() {
   if [[ -z $kernel ]]; then record 'R10 user partial kernel available' 0 'linux-lts module tree not found'; return; fi
   pkgbase=linux-lts
   base=linux-lts
-  for scenario in full-list two-module dependency missing-dependency optional-missing-dependency dynamic-two-module sourced-modules; do
+  for scenario in full-list two-module dependency missing-dependency optional-missing-dependency dynamic-two-module dynamic-missing-dependency sourced-modules; do
     case $scenario in
       full-list)
         modules='nvidia nvidia_modeset nvidia_uvm nvidia_drm'
@@ -973,12 +973,16 @@ test_user_partial_kernels() {
         modules='nvidia_modeset'
         removals=(nvidia_uvm nvidia_drm)
         ;;
+      dynamic-missing-dependency)
+        modules='nvidia_modeset'
+        removals=(nvidia nvidia_uvm nvidia_drm)
+        ;;
       sourced-modules)
         modules='nvidia_modeset'
         removals=(nvidia_uvm nvidia_drm)
         ;;
     esac
-    if [[ $scenario == dynamic-two-module ]]; then
+    if [[ $scenario == dynamic-two-module || $scenario == dynamic-missing-dependency ]]; then
       printf '%s\n' "$modules" | sudo tee "$dynamic_modules" >/dev/null
       printf 'MODULES=($(< %s))\n' "$dynamic_modules" >"$test_root/user-modules.conf"
     elif [[ $scenario == sourced-modules ]]; then
@@ -1007,7 +1011,23 @@ test_user_partial_kernels() {
     sudo rm -f "$image"
     run_nvidia_step "r10-user-partial-$scenario" "$supported" "dkms:$kernel"
     status=$last_status
-    record "R10/R16 $scenario leaves user partial kernel and succeeds" "$([[ $status == 0 && $(grep -c "$kernel.*user partial kernel" "$state/reports.log") -ge 1 && $(grep -c "$expected_report_file" "$state/reports.log") -ge 1 && $(grep -c 'does not promise this kernel reaches the desktop' "$state/reports.log") -ge 1 ]] && echo 1 || echo 0)" "kernel $kernel; source $expected_report_file"
+    step_log=$test_root/r10-user-partial-$scenario.log
+    report_ok=1
+    if [[ $status != 0 ]] ||
+       ! grep -Fq "$kernel is an uncovered user partial kernel" "$step_log" ||
+       ! grep -Fq "$expected_report_file" "$step_log" ||
+       ! grep -Fq 'does not promise this kernel reaches the desktop' "$step_log"; then
+      report_ok=0
+    fi
+    record "R10/R16 $scenario leaves user partial kernel and succeeds" "$report_ok" "kernel $kernel; source $expected_report_file"
+    if [[ $scenario == dynamic-missing-dependency ]]; then
+      error_lines=$(grep -E 'ERROR:' "$step_log" | sed -E 's/^.*ERROR: /ERROR: /' | sort -u || true)
+      if [[ $status == 0 && $error_lines == "ERROR: module not found: 'nvidia'" ]]; then
+        record 'R9/R10 dynamic MODULES accepts only the missing nvidia dependency' 1 "$error_lines"
+      else
+        record 'R9/R10 dynamic MODULES accepts only the missing nvidia dependency' 0 "$error_lines"
+      fi
+    fi
     record "R10/R16 $scenario preserves user config bytes" "$([[ $config_hash == "$(sha256sum "$user_config" | awk '{print $1}')" && ( -z $source_hash || $source_hash == "$(sha256sum "$dynamic_modules" | awk '{print $1}')" ) ]] && echo 1 || echo 0)" "$user_config${source_hash:+; $dynamic_modules}"
     if image_set_for_kernel "$pkgbase"; then
       local image_ok modules_in_image module_version
@@ -1156,7 +1176,14 @@ test_prebuilt_replacement() {
   sudo mv "$build_link_path" "$test_root/linux-build-link.saved"
   run_nvidia_step r15-prebuilt-dkms-failure "$supported" "dkms:$kernel"
   status=$last_status
-  record 'R15 prebuilt replacement survives a failed DKMS build on the fallback path' "$([[ $status == 0 && $(pacman -Q nvidia-open-dkms >/dev/null 2>&1; echo $?) == 0 && $(pacman -Q nvidia-open >/dev/null 2>&1; echo $?) != 0 && grep -Fq "$kernel" "$state/reports.log" && grep -Fq 'make.log' "$state/reports.log" && [[ -e $test_root/linux-build-link.saved ]] ]] && echo 1 || echo 0)" "kernel $kernel; DKMS hook and installer retry ran without its build link"
+  if [[ $status == 0 ]] && pacman -Q nvidia-open-dkms >/dev/null 2>&1 &&
+     ! pacman -Q nvidia-open >/dev/null 2>&1 &&
+     grep -Fq "$kernel" "$state/reports.log" && grep -Fq 'make.log' "$state/reports.log" &&
+     [[ -e $test_root/linux-build-link.saved ]]; then
+    record 'R15 prebuilt replacement survives a failed DKMS build on the fallback path' 1 "kernel $kernel; DKMS hook and installer retry ran without its build link"
+  else
+    record 'R15 prebuilt replacement survives a failed DKMS build on the fallback path' 0 "kernel $kernel; DKMS hook and installer retry ran without its build link"
+  fi
   sudo mv "$test_root/linux-build-link.saved" "$build_link_path"
   rm -f "$test_root/linux-build-link-path"
   run_nvidia_step r15-prebuilt-dkms-retry "$supported" -
@@ -1224,7 +1251,14 @@ test_held_driver() {
   reports_before=$(report_count)
   run_nvidia_step r8-held-driver "$supported" -
   status=$last_status
-  record 'R8 held old driver package versions are left unchanged' "$([[ $status == 0 && $packages_before == "$(package_manifest)" && $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" && $modules_before == "$(tree_hash /usr/lib/modules)" && $(($(report_count) - reports_before)) == 1 && grep -Fq "nvidia-utils $old_version" "$state/reports.log" ]] && echo 1 || echo 0)" "nvidia-utils $old_version"
+  if [[ $status == 0 && $packages_before == "$(package_manifest)" &&
+        $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" &&
+        $modules_before == "$(tree_hash /usr/lib/modules)" && $(($(report_count) - reports_before)) == 1 ]] &&
+     grep -Fq "nvidia-utils $old_version" "$state/reports.log"; then
+    record 'R8 held old driver package versions are left unchanged' 1 "nvidia-utils $old_version"
+  else
+    record 'R8 held old driver package versions are left unchanged' 0 "nvidia-utils $old_version"
+  fi
   sudo mv "$saved_conf" "$pacman_conf"
   sudo pacman -S --noconfirm --needed nvidia-utils nvidia-open-dkms
   run_nvidia_step r8-held-driver-restored "$supported" -
@@ -1327,7 +1361,16 @@ test_r15a_stale_baseline() {
   stale_modules=$(tree_hash /usr/lib/modules)
   run_nvidia_step r15a-stale-baseline-refused "$supported" "mkinitcpio:$kernel"
   status=$last_status
-  record 'R15a refuses inherited stale images before changing packages or its owned file' "$([[ $image_ok == 1 && $status != 0 && $stale_packages == "$(package_manifest)" && $stale_etc == "$(tree_hash /etc)" && $stale_modules == "$(tree_hash /usr/lib/modules)" && $stale_images == "$(kernel_image_hashes linux 2>/dev/null || true)" && grep -Fq "$kernel" "$test_root/r15a-stale-baseline-refused.log" && grep -Fq "$old_module_version" "$test_root/r15a-stale-baseline-refused.log" && grep -Fq 'may not reach the desktop' "$test_root/r15a-stale-baseline-refused.log" ]] && echo 1 || echo 0)" "linux image $old_module_version; current modules $current_module_version"
+  if [[ $image_ok == 1 && $status != 0 && $stale_packages == "$(package_manifest)" &&
+        $stale_etc == "$(tree_hash /etc)" && $stale_modules == "$(tree_hash /usr/lib/modules)" &&
+        $stale_images == "$(kernel_image_hashes linux 2>/dev/null || true)" ]] &&
+     grep -Fq "$kernel" "$test_root/r15a-stale-baseline-refused.log" &&
+     grep -Fq "$old_module_version" "$test_root/r15a-stale-baseline-refused.log" &&
+     grep -Fq 'may not reach the desktop' "$test_root/r15a-stale-baseline-refused.log"; then
+    record 'R15a refuses inherited stale images before changing packages or its owned file' 1 "linux image $old_module_version; current modules $current_module_version"
+  else
+    record 'R15a refuses inherited stale images before changing packages or its owned file' 0 "linux image $old_module_version; current modules $current_module_version"
+  fi
 
   image_ok=1
   run_nvidia_step r15a-stale-baseline-repair "$supported" -
