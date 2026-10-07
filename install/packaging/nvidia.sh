@@ -25,6 +25,12 @@ nvidia_report() {
   report "$*"
 }
 
+nvidia_refuse_if_pacman_lock_exists() {
+  local lock=/var/lib/pacman/db.lck
+  [[ -e $lock || -L $lock ]] || return 0
+  nvidia_fail "pacman's database lock is present at $lock. If pacman was interrupted, this is a stale db.lck; Gooarchy left it untouched and made no NVIDIA package, configuration, module, or image change. Confirm no package manager is active, remove the stale lock with sudo rm -f $lock, reinstall the named driver pair with sudo pacman -S nvidia-open-dkms nvidia-utils, then rerun ./install.sh to converge kernel headers and images."
+}
+
 nvidia_detect_devices() {
   local path vendor class device boot row
   if [[ ${GOOARCHY_TEST_NVIDIA_DEVICES+x} ]]; then
@@ -1357,6 +1363,8 @@ nvidia_install() {
     nvidia_report "left the existing NVIDIA driver unchanged because $(nvidia_list "${NV_EXISTING_VERSIONS[@]}") is installed without its matching nvidia-utils package. Repair that package set from Arch's repositories, then rerun."
     return 0
   fi
+
+  nvidia_refuse_if_pacman_lock_exists
 
   nvidia_collect_kernels
   local utils_version installed_utils module_version kernel pkgbase headers_target kernel_package_version

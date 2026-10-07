@@ -5,6 +5,8 @@
 # result file for each at r15-boot-evidence-<row>-<kernel>.tsv, then calls r15-release <row> before
 # recovering the held fixture. Each result records schema, row, stamp, kernel, boot-id, desktop=pass,
 # and nvidia-device=no-device as tab-separated key/value lines.
+# The pacman-commit-interruption row uses image, stale-lock and recovery evidence without a desktop
+# reboot, per the r7 spec-writer interpretation of that row.
 set -euo pipefail
 
 [[ ${GOOARCHY_VM_GUEST_NVIDIA_MATRIX:-} == 1 ]] || {
@@ -85,13 +87,59 @@ systemctl() {
   command systemctl "$@"
 }
 
+gooarchy_test_install_pacman_interrupt_hook() {
+  local hook=/usr/share/libalpm/hooks/zzz-gooarchy-nvidia-test-interrupt.hook
+  local helper=/run/gooarchy-nvidia-test-interrupt-helper
+  [[ -d /usr/share/libalpm/hooks && ! -e $hook && ! -e $helper && ! -e /run/gooarchy-nvidia-test-interrupt-armed &&
+     ! -e /run/gooarchy-nvidia-test-interrupt-fired ]] || return 1
+  : >"${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/r15-pacman-commit-hook-owned" || return 1
+  command sudo tee "$helper" >/dev/null <<'GOOARCHY_INTERRUPT_SCRIPT' || return 1
+#!/bin/bash
+set -u
+armed=/run/gooarchy-nvidia-test-interrupt-armed
+fired=/run/gooarchy-nvidia-test-interrupt-fired
+[[ -e $armed ]] || exit 0
+rm -f "$armed" || exit 97
+parent=$PPID
+[[ -r /proc/$parent/comm && $(</proc/$parent/comm) == pacman ]] || exit 97
+: >"$fired" || exit 97
+kill -KILL "$parent" 2>/dev/null || exit 97
+GOOARCHY_INTERRUPT_SCRIPT
+  command sudo chmod 0755 "$helper" || return 1
+  command sudo tee "$hook" >/dev/null <<'GOOARCHY_INTERRUPT_HOOK' || return 1
+[Trigger]
+Operation = Install
+Type = Package
+Target = nvidia-utils
+
+[Action]
+Description = Gooarchy NVIDIA VM test interruption before pacman releases its lock
+When = PostTransaction
+Exec = /run/gooarchy-nvidia-test-interrupt-helper
+GOOARCHY_INTERRUPT_HOOK
+  command sudo touch /run/gooarchy-nvidia-test-interrupt-armed || return 1
+}
+
+gooarchy_test_remove_pacman_interrupt_hook() {
+  command sudo rm -f /usr/share/libalpm/hooks/zzz-gooarchy-nvidia-test-interrupt.hook \
+    /run/gooarchy-nvidia-test-interrupt-helper \
+    /run/gooarchy-nvidia-test-interrupt-armed \
+    /run/gooarchy-nvidia-test-interrupt-fired || return 1
+  rm -f "${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/r15-pacman-commit-hook-owned"
+}
+
 sudo() {
   local fail_preset= fail_kernel pkgbase rc is_upgrade=0 hook_installed=0
+  local interrupt_hook_installed=0
   local -a args=("$@")
   if [[ ${args[0]:-} == systemctl ]]; then
     printf '%s\n' "${args[*]}" >>"${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/systemctl.trace"
   fi
-  if [[ ${1:-} == pacman && " $* " == *' -Syu '* &&
+  if [[ ${args[0]:-} == pacman && ${args[1]:-} == -S &&
+        ${GOOARCHY_TEST_NVIDIA_FAIL:-} == interrupt:pacman-commit ]]; then
+    if ! gooarchy_test_install_pacman_interrupt_hook; then return 97; fi
+    interrupt_hook_installed=1
+  elif [[ ${1:-} == pacman && " $* " == *' -Syu '* &&
         ${GOOARCHY_TEST_CAPTURE_ARCH_UPGRADE:-} == 1 ]]; then
     fail_preset=${GOOARCHY_TEST_ARCH_UPGRADE_HOOK_FAIL_PRESET:-}
     is_upgrade=1
@@ -113,12 +161,25 @@ sudo() {
     else
       rc=$?
     fi
+  elif ((interrupt_hook_installed)); then
+    if command sudo "${args[@]}"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    if [[ -e /run/gooarchy-nvidia-test-interrupt-fired ]]; then
+      : >"${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/r15-pacman-commit-hook-fired"
+    fi
+    if [[ -e /var/lib/pacman/db.lck ]]; then
+      : >"${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/r15-pacman-commit-lock-owned"
+    fi
   elif command sudo "${args[@]}"; then
     rc=0
   else
     rc=$?
   fi
   if ((hook_installed)) && ! gooarchy_test_restore_mkinitcpio_hook; then rc=98; fi
+  if ((interrupt_hook_installed)) && ! gooarchy_test_remove_pacman_interrupt_hook; then rc=98; fi
   if ((is_upgrade)) && ((rc == 0)); then
     command sudo env -u BASH_ENV bash "$GOOARCHY_VM_NVIDIA_TEST_ROOT/capture-upgrade-state.sh" \
       >"$GOOARCHY_VM_NVIDIA_TEST_ROOT/arch-upgrade-state.tsv" || rc=$?
@@ -218,6 +279,21 @@ restore_r15a_current_state() {
 
 cleanup() {
   local status=$? build_link_record build_link_path saved_link partial_kernel
+  if [[ -e $test_root/r15-pacman-commit-lock-owned ]]; then
+    if sudo rm -f /var/lib/pacman/db.lck; then
+      rm -f "$test_root/r15-pacman-commit-lock-owned"
+    else
+      status=1
+    fi
+  fi
+  if [[ -e $test_root/r15-pacman-commit-hook-owned ]]; then
+    sudo rm -f /usr/share/libalpm/hooks/zzz-gooarchy-nvidia-test-interrupt.hook \
+      /run/gooarchy-nvidia-test-interrupt-helper \
+      /run/gooarchy-nvidia-test-interrupt-armed \
+      /run/gooarchy-nvidia-test-interrupt-fired 2>/dev/null || true
+    rm -f "$test_root/r15-pacman-commit-hook-owned"
+  fi
+  rm -f "$test_root/r15-pacman-commit-hook-fired"
   if [[ -f $test_root/r15-boot-held ]]; then
     if [[ -f $test_root/90-mkinitcpio-install.hook.saved ]]; then
       sudo mv -f "$test_root/90-mkinitcpio-install.hook.saved" \
@@ -1495,6 +1571,152 @@ test_r15_interrupted_after_commit() {
   fi
 }
 
+test_r15_interrupted_pacman_commit() {
+  local module_dir kernel pkgbase package_version module_version repo_utils repo_dkms
+  local status=0 image modules module module_version_seen hash packages_before etc_before boot_before modules_before
+  local lock_hash reports_before images_ok=1 baseline_ok=1 changed_images=0
+  local lock_refused=0 recovery_ok=1 covered=1 early_kms_ok=1
+  local -A baseline_hashes=()
+  local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+
+  if [[ -e /var/lib/pacman/db.lck ]]; then
+    record 'R15 pacman-commit fixture starts without a pacman database lock' 0 \
+      '/var/lib/pacman/db.lck already exists; refusing to remove an unrelated lock'
+    return
+  fi
+  if [[ -e $owned ]] && ! grep -Fxq \
+      '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
+    record 'R15 pacman-commit fixture can preserve the existing owned path' 0 "$owned is user-owned"
+    return
+  fi
+  : >"$test_root/driver-recovery-needed"
+  : >"$test_root/r15-pacman-commit-recovery-needed"
+  if [[ -e $owned ]]; then sudo cp -a "$owned" "$test_root/r15-interrupted-owned.saved"; fi
+  sudo rm -f "$owned" "$user_config" "$dynamic_modules"
+  if ! sudo pacman -Rdd --noconfirm nvidia-open-dkms nvidia-utils; then
+    record 'R15 pacman-commit fixture removes the driver before the transaction' 0 'pacman removal failed'
+    return
+  fi
+  for module_dir in /usr/lib/modules/*; do
+    [[ -f $module_dir/pkgbase ]] || continue
+    pkgbase=$(<"$module_dir/pkgbase")
+    sudo mkinitcpio -p "$pkgbase" >/dev/null 2>&1 || status=1
+  done
+  for module_dir in /usr/lib/modules/*; do
+    [[ -f $module_dir/pkgbase ]] || continue
+    kernel=${module_dir##*/}
+    pkgbase=$(<"$module_dir/pkgbase")
+    image_set_for_kernel "$pkgbase" || { baseline_ok=0; continue; }
+    for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+      [[ -f $image ]] && lsinitcpio "$image" >/dev/null 2>&1 || baseline_ok=0
+      modules=$(image_modules "$image" 2>/dev/null || true)
+      [[ -z $modules ]] || baseline_ok=0
+      hash=$(sha256sum -- "$image" | awk '{print $1}') || baseline_ok=0
+      baseline_hashes["$image"]=$hash
+    done
+    kernel_sounds_for_boot "$kernel" "$pkgbase" '' || baseline_ok=0
+  done
+  record 'R15 pacman-commit fixture begins with listable NVIDIA-free images for every kernel' \
+    "$([[ $status == 0 && $baseline_ok == 1 ]] && echo 1 || echo 0)" \
+    'the sound baseline image hashes are recorded before the interrupted package transaction'
+  if ((status != 0 || baseline_ok == 0)); then return; fi
+
+  run_nvidia_step r15-pacman-commit-interrupted "$supported" interrupt:pacman-commit
+  status=$last_status
+  package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
+  module_version=$(module_version_from_package "$package_version")
+  repo_utils=$(pacman -Si extra/nvidia-utils 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
+  repo_dkms=$(pacman -Si extra/nvidia-open-dkms 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
+  [[ -e $test_root/r15-pacman-commit-hook-fired &&
+     -e $test_root/r15-pacman-commit-lock-owned && -e /var/lib/pacman/db.lck &&
+     $package_version == "$repo_utils" && $repo_utils == "$repo_dkms" && ! -e $owned ]] ||
+    recovery_ok=0
+  for module_dir in /usr/lib/modules/*; do
+    [[ -f $module_dir/pkgbase ]] || continue
+    kernel=${module_dir##*/}
+    pkgbase=$(<"$module_dir/pkgbase")
+    for module in "${required[@]}"; do
+      module_version_seen=$(modinfo -k "$kernel" -F version "$module" 2>/dev/null || true)
+      [[ -z $module_version_seen || $module_version_seen == "$module_version" ]] || recovery_ok=0
+    done
+    image_set_for_kernel "$pkgbase" || { images_ok=0; continue; }
+    for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+      [[ -f $image ]] && lsinitcpio "$image" >/dev/null 2>&1 || images_ok=0
+      check_image_versions_and_firmware "$image" "$module_version" || images_ok=0
+      hash=$(sha256sum -- "$image" | awk '{print $1}') || images_ok=0
+      [[ $hash == "${baseline_hashes[$image]:-}" ]] || ((changed_images += 1))
+    done
+    kernel_sounds_for_boot "$kernel" "$pkgbase" "$module_version" || images_ok=0
+  done
+  if ((changed_images > 0)) && ! grep -qi 'mkinitcpio' "$test_root/r15-pacman-commit-interrupted.log"; then
+    images_ok=0
+  fi
+  record 'R15 pacman-commit interruption leaves current packages and consistent listable kernel images' \
+    "$([[ $status != 0 && $recovery_ok == 1 && $images_ok == 1 ]] && echo 1 || echo 0)" \
+    "nvidia-utils $package_version; pacman lock retained; $changed_images images differ from the sound baseline"
+  if ((failures != 0)); then return; fi
+
+  packages_before=$(package_manifest)
+  etc_before=$(tree_hash /etc)
+  boot_before=$(tree_hash /boot)
+  modules_before=$(tree_hash /usr/lib/modules)
+  lock_hash=$(sha256sum -- /var/lib/pacman/db.lck | awk '{print $1}')
+  reports_before=$(report_count)
+  run_nvidia_step r15-pacman-commit-stale-lock "$supported" -
+  status=$last_status
+  if grep -Fq 'stale db.lck' "$test_root/r15-pacman-commit-stale-lock.log" &&
+     (( $(report_count) - reports_before == 1 )); then
+    lock_refused=1
+  fi
+  record 'R15 stale db.lck rerun fails loudly without package, module, image, or configuration changes' \
+    "$([[ $status != 0 && $lock_refused == 1 && -e /var/lib/pacman/db.lck &&
+      $(sha256sum -- /var/lib/pacman/db.lck | awk '{print $1}') == "$lock_hash" &&
+      $packages_before == "$(package_manifest)" && $etc_before == "$(tree_hash /etc)" &&
+      $boot_before == "$(tree_hash /boot)" && $modules_before == "$(tree_hash /usr/lib/modules)" ]] && echo 1 || echo 0)" \
+    'the installer left /var/lib/pacman/db.lck untouched and made no NVIDIA package or owned-file change'
+  if ((failures != 0)); then return; fi
+
+  if sudo rm -f /var/lib/pacman/db.lck &&
+     sudo pacman -S --noconfirm --asexplicit nvidia-open-dkms nvidia-utils; then
+    :
+  else
+    recovery_ok=0
+  fi
+  if ((recovery_ok)); then
+    run_nvidia_step r15-pacman-commit-recovered "$supported" -
+    status=$last_status
+    for module_dir in /usr/lib/modules/*; do
+      [[ -f $module_dir/pkgbase ]] || continue
+      kernel=${module_dir##*/}
+      pkgbase=$(<"$module_dir/pkgbase")
+      for module in "${required[@]}"; do
+        [[ $(modinfo -k "$kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] || covered=0
+      done
+      image_set_for_kernel "$pkgbase" || { early_kms_ok=0; continue; }
+      for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+        image_has_modules_at_version "$image" "$module_version" "${required[@]}" || early_kms_ok=0
+      done
+    done
+  else
+    status=1
+  fi
+  record 'R17 pacman recovery followed by an installer rerun converges to early KMS' \
+    "$([[ $status == 0 && $covered == 1 && $early_kms_ok == 1 ]] && echo 1 || echo 0)" \
+    'Arch removed its own stale lock and reinstalled the named package pair before the installer rerun'
+
+  if [[ -f $test_root/r15-interrupted-owned.saved ]]; then
+    sudo mv -f "$test_root/r15-interrupted-owned.saved" "$owned"
+  fi
+  if restore_r15a_current_state; then
+    record 'R17 pacman-commit fixture is restored to the VM reference state' 1 \
+      'current packages, DKMS modules, and images restored after evidence capture'
+    rm -f "$test_root/r15-pacman-commit-recovery-needed" \
+      "$test_root/r15-pacman-commit-lock-owned" "$test_root/r15-pacman-commit-hook-fired"
+  else
+    record 'R17 pacman-commit fixture is restored to the VM reference state' 0 'cleanup recovery failed'
+  fi
+}
+
 test_user_partial_kernels() {
   local kernel pkgbase scenario modules remove image config_hash source_hash preset base status expected
   local expected_report_file error_lines step_log report_ok
@@ -2235,6 +2457,10 @@ r15_row() {
     interrupt-after-commit)
       verify_repository_driver_pair || return 1
       test_r15_interrupted_after_commit
+      ;;
+    pacman-commit-interruption)
+      verify_repository_driver_pair || return 1
+      test_r15_interrupted_pacman_commit
       ;;
     package-hook-linux-only|package-hook-linux-partial-lts)
       verify_repository_driver_pair || return 1
