@@ -54,6 +54,11 @@ to try Scottland without giving up their setup.
    easy to roll back. Changing one is possible but takes some ceremony; it isn't casual script
    editing. Updates merge into local changes and stop on a conflict. They never silently overwrite
    a local change.
+7. **It runs on the machines people have.**
+   "we need 80-90% of modern machines. no really looking to support the weirdos right now". That
+   means x86_64 with Intel or AMD graphics, or NVIDIA with NVIDIA's own driver. Apple Silicon keeps
+   working. Where no GPU path works, the desktop still runs with plainer effects instead of
+   breaking. Uncommon hardware (Snapdragon, Mali, Raspberry Pi, nouveau) isn't a target for now.
 
 ## Non-goals
 
@@ -65,6 +70,7 @@ to try Scottland without giving up their setup.
   we'll-defined." Work implements the known design.
 - **Anything Mike didn't ask for.** Features "that do not fit within the spirit of the feature" are
   dangerous to the product, however reasonable they look. Build what was asked.
+- **Uncommon hardware.** Supporting it is not a goal right now.
 
 ## Quality stances
 
