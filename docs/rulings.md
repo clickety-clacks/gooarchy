@@ -3,6 +3,14 @@
 Product decisions that shape Gooarchy, newest first. Each says what was decided, why, and where it
 came from. Mike may overrule any of them.
 
+## Ghostty reads its theme from Scottland on Gooarchy
+
+2026-10-07, Mike (decision `dr_f74a125b`).
+
+Mike's Ghostty config pulls in Omarchy theme files, so on Gooarchy it would lose the theme. Mike
+chose a Gooarchy-aware Ghostty over leaving it as is. In his words: "on the adapter version,
+ghostty reads from omarchy. on gooarchy, that needs to read from the scottland equivalent".
+
 ## The Rust toolchain is optional in the Gooarchy package
 
 2026-10-07, root Gooarchy product owner (Q3 in the addendum to the spirit judgment on Scottland's
