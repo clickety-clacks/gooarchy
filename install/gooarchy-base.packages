@@ -6,6 +6,8 @@
 # The desktop session
 wayfire
 xdg-desktop-portal
+# X11-only apps (games, Steam, older Electron and Java apps) run through Xwayland
+xorg-xwayland
 # Settings (light/dark for GTK 4 apps and Scottland) and file chooser portals
 xdg-desktop-portal-gtk
 gsettings-desktop-schemas

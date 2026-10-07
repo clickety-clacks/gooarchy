@@ -375,6 +375,17 @@ def main():
     time.sleep(2)
     shot("02-terminal.png")
 
+    # An X11-only app (no native Wayland support) actually starts, through Xwayland. xterm is the
+    # smallest one available from Arch's repos; test-only, not part of Gooarchy's package list.
+    run("sudo", "pacman", "-S", "--noconfirm", "--needed", "xterm", timeout=120)
+    subprocess.Popen(["xterm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    xterm = wait_for(lambda: find("xterm"), timeout=20)
+    check("Xwayland starts an X11-only app on the desktop (xterm)", xterm, xterm and xterm.get("app_id"))
+    time.sleep(1)
+    shot("02a-xterm-x11-app.png")
+    if xterm:
+        run("pkill", "-x", "xterm")
+
     # Strata: Super+Shift+F (flavorings).
     strata, note = open_with(("KEY_LEFTMETA", "KEY_LEFTSHIFT", "KEY_F"), "strata", 20)
     check("Super+Shift+F opens Strata", strata, strata and f"{strata.get('app_id')}{note}")
@@ -624,7 +635,6 @@ def main():
     observe("portal interfaces", sorted(set(
         w for w in run("busctl", "--user", "introspect", "org.freedesktop.portal.Desktop",
                        "/org/freedesktop/portal/desktop").split() if w.startswith("org.freedesktop.portal."))))
-    observe("Xwayland", run("sh", "-c", "command -v Xwayland || echo 'not installed (X11-only apps cannot run)'"))
     observe("network stack", run("sh", "-c", "for s in NetworkManager iwd systemd-networkd; do "
                                               "printf '%s=%s ' $s $(systemctl is-enabled $s 2>/dev/null || echo absent); done"))
     observe("packages not installed", [p for p in ("bluez", "upower", "power-profiles-daemon", "cups", "networkmanager",
