@@ -737,6 +737,7 @@ postinstall() {
   test_foreign_owned_file
   test_user_full_list
   test_dynamic_full_list
+  test_r15_linux_gooarchy_dkms_failure
   test_pre_enabled_units
   test_custom_preset
   test_r17_header_repair
@@ -1007,6 +1008,180 @@ test_r17_header_repair() {
   before_boot=$(tree_hash /boot)
   run_nvidia_step r17-linux-lts-no-op "$supported" -
   record 'R17 second run after header repair is a no-op' "$([[ $last_status == 0 && $before_packages == "$(package_manifest)" && $before_etc == "$(tree_hash /etc)" && $before_boot == "$(tree_hash /boot)" ]] && echo 1 || echo 0)" "$kernel"
+}
+
+test_r15_linux_gooarchy_dkms_failure() {
+  local kernel linux_kernel build_link_path package_version module_version repo_version status
+  local image image_ok=1 gooarchy_modules_ok=1 other_kernels_ok=1 dir other_kernel pkgbase module file version
+  local headers_version kernel_package_version kernel_covered
+  local linux_covered=1
+  local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+
+  kernel=$(kernel_for_pkgbase linux-gooarchy 2>/dev/null || true)
+  linux_kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
+  if [[ -z $kernel || -z $linux_kernel ]]; then
+    record 'R15 linux-gooarchy-only DKMS failure fixture is available' 0 \
+      'the integrated linux-gooarchy and linux kernels are both required'
+    return
+  fi
+  if [[ $(pacman -Q linux-gooarchy-headers 2>/dev/null | awk '{print $2}' || true) != \
+        "$(pacman -Q linux-gooarchy 2>/dev/null | awk '{print $2}' || true)" ]]; then
+    record 'R15 linux-gooarchy matching headers are installed for the DKMS failure fixture' 0 \
+      'linux-gooarchy-headers does not match linux-gooarchy'
+    return
+  fi
+  build_link_path=/usr/lib/modules/$kernel/build
+  if [[ ! -e $build_link_path && ! -L $build_link_path ]]; then
+    record 'R15 linux-gooarchy DKMS build link exists before failure injection' 0 "$build_link_path is missing"
+    return
+  fi
+  if [[ -e $owned ]] && ! grep -Fxq \
+      '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
+    record 'R15 linux-gooarchy fixture can preserve the pre-existing owned-path state' 0 \
+      "$owned contains user-owned content"
+    return
+  fi
+
+  package_version=$(pacman -Q nvidia-utils | awk '{print $2}')
+  module_version=$(module_version_from_package "$package_version")
+  repo_version=$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')
+  for module in "${required[@]}"; do
+    [[ $(modinfo -k "$linux_kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] ||
+      linux_covered=0
+  done
+  image_set_for_kernel linux || linux_covered=0
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+    image_has_modules_at_version "$image" "$module_version" "${required[@]}" || linux_covered=0
+  done
+  record 'R15 linux begins covered before the linux-gooarchy DKMS failure' "$linux_covered" \
+    "linux $linux_kernel; module version $module_version"
+  if ((linux_covered == 0)); then return; fi
+
+  : >"$test_root/driver-recovery-needed"
+  printf '%s' "$build_link_path" >"$test_root/gooarchy-build-link-path"
+  if ! sudo mv "$build_link_path" "$test_root/gooarchy-build-link.saved"; then
+    record 'R15 linux-gooarchy build link is held for the transaction failure' 0 'could not hold build link'
+    return 1
+  fi
+  if ! sudo pacman -Rdd --noconfirm nvidia-open-dkms nvidia-utils; then
+    record 'R15 driver packages can be removed for a fresh transaction' 0 'pacman removal failed'
+    if ! sudo mv "$test_root/gooarchy-build-link.saved" "$build_link_path" 2>/dev/null; then
+      record 'R15 linux-gooarchy build link is restored after package removal refusal' 0 \
+        "$build_link_path remains missing"
+      return 1
+    fi
+    rm -f "$test_root/gooarchy-build-link-path"
+    restore_r15a_current_state || return 1
+    return
+  fi
+  for dir in /usr/lib/modules/*; do
+    [[ -f $dir/pkgbase ]] || continue
+    pkgbase=$(<"$dir/pkgbase")
+    if ! sudo mkinitcpio -p "$pkgbase" >"$test_root/r15-fresh-image-${dir##*/}.log" 2>&1; then
+      record 'R15 fresh transaction starts with listable fallback images' 0 "mkinitcpio failed for ${dir##*/}"
+      if ! sudo mv "$test_root/gooarchy-build-link.saved" "$build_link_path" 2>/dev/null; then
+        record 'R15 linux-gooarchy build link is restored after image preparation failure' 0 \
+          "$build_link_path remains missing"
+        return 1
+      fi
+      rm -f "$test_root/gooarchy-build-link-path"
+      restore_r15a_current_state || return 1
+      return
+    fi
+  done
+
+  run_nvidia_step r15-linux-gooarchy-dkms-failure "$supported" "dkms:$kernel"
+  status=$last_status
+  package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
+  module_version=$(module_version_from_package "$package_version")
+  repo_version=$(pacman -Si extra/nvidia-utils 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
+  image_set_for_kernel linux-gooarchy || image_ok=0
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+    lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
+    check_image_versions_and_firmware "$image" "$module_version" || image_ok=0
+    [[ -z $(image_modules "$image" 2>/dev/null || true) ]] || image_ok=0
+  done
+  while IFS= read -r -d '' file; do
+    version=$(modinfo -F version "$file" 2>/dev/null || true)
+    [[ $version == "$module_version" ]] || gooarchy_modules_ok=0
+  done < <(find "/usr/lib/modules/$kernel" -type f -name 'nvidia*.ko*' -print0)
+  if [[ $status == 0 && -n $module_version && $package_version == "$repo_version" &&
+        $(pacman -Qe nvidia-open-dkms >/dev/null 2>&1; echo $?) == 0 &&
+        -z $(modinfo -k "$kernel" -F version nvidia_drm 2>/dev/null || true) &&
+        $image_ok == 1 && $gooarchy_modules_ok == 1 &&
+        $(grep -Fq "linux-gooarchy kernel $kernel is uncovered" "$test_root/r15-linux-gooarchy-dkms-failure.log"; echo $?) == 0 &&
+        $(grep -Fq "/var/lib/dkms/nvidia/$module_version/build/make.log" "$test_root/r15-linux-gooarchy-dkms-failure.log"; echo $?) == 0 ]]; then
+    record 'R15 linux-gooarchy DKMS failure is reported while the installer completes' 1 \
+      "linux-gooarchy $kernel; nvidia-utils $package_version; DKMS make.log named"
+  else
+    record 'R15 linux-gooarchy DKMS failure is reported while the installer completes' 0 \
+      "status $status; kernel $kernel; nvidia-utils ${package_version:-missing}; repo $repo_version"
+  fi
+
+  linux_covered=1
+  for module in "${required[@]}"; do
+    [[ $(modinfo -k "$linux_kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] ||
+      linux_covered=0
+  done
+  image_set_for_kernel linux || linux_covered=0
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+    image_has_modules_at_version "$image" "$module_version" "${required[@]}" || linux_covered=0
+  done
+  record 'R15 linux remains covered with current early-KMS images' "$linux_covered" \
+    "linux $linux_kernel; module version $module_version"
+
+  for dir in /usr/lib/modules/*; do
+    [[ -f $dir/pkgbase ]] || continue
+    other_kernel=${dir##*/}
+    [[ $other_kernel == "$kernel" ]] && continue
+    pkgbase=$(<"$dir/pkgbase")
+    while IFS= read -r -d '' file; do
+      version=$(modinfo -F version "$file" 2>/dev/null || true)
+      [[ $version == "$module_version" ]] || other_kernels_ok=0
+    done < <(find "$dir" -type f -name 'nvidia*.ko*' -print0)
+    headers_version=$(pacman -Q "$pkgbase-headers" 2>/dev/null | awk '{print $2}' || true)
+    kernel_package_version=$(pacman -Q "$pkgbase" 2>/dev/null | awk '{print $2}' || true)
+    kernel_covered=0
+    if [[ -n $headers_version && $headers_version == "$kernel_package_version" ]]; then
+      kernel_covered=1
+      for module in "${required[@]}"; do
+        [[ $(modinfo -k "$other_kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] ||
+          other_kernels_ok=0
+      done
+    fi
+    image_set_for_kernel "$pkgbase" || { other_kernels_ok=0; continue; }
+    for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+      lsinitcpio "$image" >/dev/null 2>&1 || other_kernels_ok=0
+      check_image_versions_and_firmware "$image" "$module_version" || other_kernels_ok=0
+      if ((kernel_covered)); then
+        image_has_modules_at_version "$image" "$module_version" "${required[@]}" || other_kernels_ok=0
+      else
+        [[ -z $(image_modules "$image" 2>/dev/null || true) ]] || other_kernels_ok=0
+      fi
+    done
+  done
+  record 'R15 other kernels keep consistent, listable images after the isolated DKMS failure' \
+    "$other_kernels_ok" "linux-gooarchy $kernel is the injected build failure"
+  record 'R15 linux-gooarchy fallback images stay consistent and listable' "$image_ok" \
+    "all ${#NV_TEST_KERNEL_IMAGES[@]} linux-gooarchy images contain no NVIDIA modules"
+
+  if sudo mv "$test_root/gooarchy-build-link.saved" "$build_link_path"; then
+    rm -f "$test_root/gooarchy-build-link-path"
+  else
+    record 'R15 linux-gooarchy DKMS build link is restored' 0 "$build_link_path remains missing"
+    return
+  fi
+  if restore_r15a_current_state; then
+    run_nvidia_step r17-linux-gooarchy-dkms-retry "$supported" -
+    status=$last_status
+    record 'R17 linux-gooarchy rerun retries the failed DKMS build' \
+      "$([[ $status == 0 && $(modinfo -k "$kernel" -F version nvidia_drm 2>/dev/null || true) == "$module_version" ]] && echo 1 || echo 0)" \
+      "linux-gooarchy $kernel; module version $module_version"
+  else
+    record 'R17 linux-gooarchy fixture restores current packages, modules, and images' 0 \
+      'current driver recovery failed'
+    return 1
+  fi
 }
 
 test_user_partial_kernels() {
