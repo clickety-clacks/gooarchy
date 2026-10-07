@@ -266,6 +266,43 @@ PY
 
 package_manifest() { pacman -Q | sort; }
 
+capture_repository_pair_mismatch() {
+  local evidence=$test_root/nvidia-repository-pair-mismatch.txt repository directive servers package info
+  {
+    printf 'Observed UTC: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'Guest: %s\n' "$(uname -a)"
+    printf '\nConfigured repository names and resolved Server values:\n'
+    while IFS= read -r repository; do
+      [[ -n $repository ]] || continue
+      printf '[%s]\n' "$repository"
+      for directive in Server CacheServer; do
+        printf '  %s:\n' "$directive"
+        if servers=$(pacman-conf --repo "$repository" "$directive" 2>/dev/null) && [[ -n $servers ]]; then
+          printf '%s\n' "$servers" |
+            sed -E 's#(://)[^/@[:space:]]+@#\1[credentials-redacted]@#g; s#([?&](token|key|password|passwd|auth|signature|sig|credential|access_token)=)[^&[:space:]]+#\1[redacted]#Ig' |
+            sed 's/^/    /'
+        else
+          printf '    (none)\n'
+        fi
+      done
+    done < <(pacman-conf --repo-list 2>&1 || true)
+
+    printf '\nAvailable candidates from the configured extra repository:\n'
+    for package in nvidia-utils nvidia-open-dkms; do
+      if info=$(LC_ALL=C pacman -Si "extra/$package" 2>&1); then
+        printf '%s\n' "$info" | awk -F ': ' \
+          '$1 == "Repository" || $1 == "Name" || $1 == "Version" || $1 == "Depends On" { print }'
+      else
+        printf '%s: unavailable\n%s\n' "$package" "$info"
+      fi
+    done
+
+    printf '\nInstalled NVIDIA package versions:\n'
+    pacman -Q nvidia-utils nvidia-open-dkms 2>&1 || true
+  } >"$evidence"
+  printf '%s\n' "$evidence"
+}
+
 verify_repository_driver_pair() {
   local utils_version dkms_version
   utils_version=$(LC_ALL=C pacman -Si extra/nvidia-utils 2>/dev/null |
@@ -273,8 +310,10 @@ verify_repository_driver_pair() {
   dkms_version=$(LC_ALL=C pacman -Si extra/nvidia-open-dkms 2>/dev/null |
     awk -F ': ' '$1 == "Version" { print $2; exit }' || true)
   if [[ -z $utils_version || -z $dkms_version || $utils_version != "$dkms_version" ]]; then
+    local evidence
+    evidence=$(capture_repository_pair_mismatch)
     record 'NVIDIA VM repository pair is version-consistent before package mutation' 0 \
-      "nvidia-utils ${utils_version:-unavailable}; nvidia-open-dkms ${dkms_version:-unavailable}"
+      "nvidia-utils ${utils_version:-unavailable}; nvidia-open-dkms ${dkms_version:-unavailable}; source evidence $evidence"
     return 1
   fi
   record 'NVIDIA VM repository pair is version-consistent before package mutation' 1 \
