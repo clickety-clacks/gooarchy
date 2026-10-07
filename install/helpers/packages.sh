@@ -62,3 +62,11 @@ record_build() {
   { grep -v "^$1	" "$file" || true; printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$(date -Iseconds)"; } >"$file.new"
   mv "$file.new" "$file"
 }
+
+# Remove an old local-build record after the repository copy replaces that package.
+forget_build() {
+  local file=$GOOARCHY_STATE/builds.tsv
+  [[ -f $file ]] || return 0
+  { grep -v "^$1	" "$file" || true; } >"$file.new"
+  mv "$file.new" "$file"
+}

@@ -13,10 +13,11 @@ bar. Everything missing is listed in [DEFICIT.md](DEFICIT.md), found by using th
 
 ## Current state: pre-alpha
 
-There is an install script that turns a fresh, minimal Arch Linux install into a working Scottland
-desktop, and a VM test that does this unattended and checks the result. There is no installer ISO,
-no package repository, no update channel and no hardware support beyond what Arch and Mesa give.
-It is for trying the desktop and for building the distro, not for daily use.
+The install script is prepared to consume Gooarchy's signed package repository. Its address and key
+are still placeholders while hosting and key custody are undecided, so it stops before installing or
+upgrading packages until they are configured. There is no public package repository, installer ISO
+or update channel, and no hardware support beyond what Arch and Mesa give. It is for trying the
+desktop and for building the distro, not for daily use.
 
 What you get:
 
@@ -113,8 +114,9 @@ an existing autologin setting; [docs/uninstall.md](docs/uninstall.md) says how t
 
 Keeping it current: `pacman -Syu` updates Arch's packages as usual. When Arch updates Wayfire,
 pacman stops ("wayfire=… required by scottland"), because the Scottland plugin is built for one
-Wayfire version; run `./install.sh` again from an up-to-date checkout and it rebuilds Scottland for
-the new Wayfire.
+Wayfire version. Once a matching Scottland package is published, `pacman -Syu` updates it with
+Wayfire. To deliberately build Scottland locally, set `GOOARCHY_SCOTTLAND_REF` when running
+`./install.sh`.
 
 ## How it is put together
 
@@ -144,8 +146,9 @@ In order:
 1. **Standalone Scottland**: Scottland runs on plain Arch without Omarchy. Done for this install
    path; the Scottland changes it still needs are in DEFICIT.md.
 2. **Install script**: a fresh Arch install becomes Gooarchy (this repository today).
-3. **Package repository**: Gooarchy's own signed pacman repository with Scottland, Strata and
-   Gooarchy's packages, so nothing is built on the user's machine and the AUR isn't needed.
+3. **Package repository**: Gooarchy's own signed pacman repository with Gooarchy's packages,
+   Scottland and the portal and kernel packages. Arch and AUR repositories keep supplying
+   everything else, including Strata.
 4. **Defaults**: gooarchy-flavorings as its own package, and Gooarchy's own bar, notifications,
    launcher, lock screen and the rest of the deficit.
 5. **Hardware**: a supported hardware matrix with GPU, firmware, power and laptop quirks.
