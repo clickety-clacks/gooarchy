@@ -1012,7 +1012,7 @@ test_r17_header_repair() {
 
 test_r15_linux_gooarchy_dkms_failure() {
   local kernel linux_kernel build_link_path package_version module_version repo_version status
-  local image image_ok=1 gooarchy_modules_ok=1 other_kernels_ok=1 dir other_kernel pkgbase module file version
+  local image image_ok=1 gooarchy_modules_ok=1 other_kernels_ok=1 retry_ok=1 dir other_kernel pkgbase module file version
   local headers_version kernel_package_version kernel_covered
   local linux_covered=1
   local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
@@ -1171,16 +1171,21 @@ test_r15_linux_gooarchy_dkms_failure() {
     record 'R15 linux-gooarchy DKMS build link is restored' 0 "$build_link_path remains missing"
     return
   fi
-  if restore_r15a_current_state; then
-    run_nvidia_step r17-linux-gooarchy-dkms-retry "$supported" -
-    status=$last_status
-    record 'R17 linux-gooarchy rerun retries the failed DKMS build' \
-      "$([[ $status == 0 && $(modinfo -k "$kernel" -F version nvidia_drm 2>/dev/null || true) == "$module_version" ]] && echo 1 || echo 0)" \
-      "linux-gooarchy $kernel; module version $module_version"
-  else
-    record 'R17 linux-gooarchy fixture restores current packages, modules, and images' 0 \
-      'current driver recovery failed'
-    return 1
+  run_nvidia_step r17-linux-gooarchy-dkms-retry "$supported" -
+  status=$last_status
+  for module in "${required[@]}"; do
+    [[ $(modinfo -k "$kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] ||
+      retry_ok=0
+  done
+  image_set_for_kernel linux-gooarchy || retry_ok=0
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+    image_has_modules_at_version "$image" "$module_version" "${required[@]}" || retry_ok=0
+  done
+  record 'R17 linux-gooarchy rerun retries the failed DKMS build and restores early KMS' \
+    "$([[ $status == 0 && $retry_ok == 1 ]] && echo 1 || echo 0)" \
+    "linux-gooarchy $kernel; module version $module_version"
+  if [[ $status == 0 && $retry_ok == 1 ]]; then
+    rm -f "$test_root/driver-recovery-needed"
   fi
 }
 
