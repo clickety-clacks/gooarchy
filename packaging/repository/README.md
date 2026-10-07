@@ -36,8 +36,8 @@ retention, lookup through a local redirect, and the filename guard. The real
 1Password read, GitHub upload, and gooarchy.com redirect are separate setup and
 publish steps.
 
-After stage 1 is on Gooarchy main and the integrated commit has an adapter-
-approved disposable Arch guest window, run
+After stage 1 lands and stage 2 is rebased onto that exact main commit, wait
+for an adapter-approved window for the integrated SHA, then run
 `tests/repository-publish-test.sh --with-stage1-installer` to pass that signed
 release stand-in through the full stage 1 `install.sh` flow with the guest's
 real pacman client. The mode uses local Scottland and Strata source fixtures
