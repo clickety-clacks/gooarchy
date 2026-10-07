@@ -9,14 +9,16 @@ and real hardware. Until then it is opt-in, and nothing installs it without bein
 
 VM validation for **7.2.8-2.1-gooarchy** (Omarchy's 7.2.8-2, no Gooarchy patches): a fresh full
 `GOOARCHY_VM_KERNEL=1 tests/vm/run.sh` passed all 71 checks on 2026-10-06, with software graphics.
-The installer built and installed both packages in a fresh Arch guest (its kernel step took about
-3 hours with two jobs). The candidate booted directly in QEMU and passed the desktop and login
-checks on the kernel branch's own userland (Ghostty). Its installed headers built an external module
-with matching version magic. With GRUB's menu regenerated, the disk's GRUB still booted the ordinary
-kernel by default. The Cirrus speaker-ID workaround is in the package (from Omarchy's patch set), but
-a VM can't show its effect on real speakers. Real-hardware audio and bootloader validation remain
-pending. (An earlier 7.2.5-6.1 build, carrying the workaround as Gooarchy's own patch, was checked on
-a guest whose userland came from the Foot branch; it is superseded.)
+The installer built and installed both packages in a fresh Arch guest (its kernel step took about 3
+hours with two jobs). The candidate booted directly in QEMU and passed the desktop and login checks
+on the kernel branch's own userland (Ghostty). Its installed headers built an external module with
+matching version magic. With `GRUB_TOP_LEVEL` set and GRUB's menu regenerated, the disk's GRUB still
+booted the ordinary kernel by default. (In that run the installer set `GRUB_TOP_LEVEL` itself; it
+now only advises it, and that version has not had its VM run yet.) The Cirrus speaker-ID workaround
+is in the package (from Omarchy's patch set), but a VM can't show its effect on real speakers.
+Real-hardware audio and bootloader validation remain pending. (An earlier 7.2.5-6.1 build, carrying
+the workaround as Gooarchy's own patch, was checked on a guest whose userland came from the Foot
+branch; it is superseded.)
 
 | File | What |
 |---|---|
@@ -32,20 +34,22 @@ the default boot. The build takes hours and needs about 35 GB free under `~/.cac
 (the build tree is about 31 GB; less on disk under btrfs compression). The tree is removed after a
 successful install; the packages and downloaded sources stay. GRUB has no entry for the new kernel
 until its menu is regenerated, and a regenerated menu would list linux-gooarchy first and boot it by
-default. So on GRUB the installer sets `GRUB_TOP_LEVEL` in `/etc/default/grub` to the kernel the
-system booted (unless it is already set) and reports that. `sudo grub-mkconfig -o
-/boot/grub/grub.cfg` then adds linux-gooarchy under "Advanced options", with the existing kernel
-still the default. Other bootloaders are left alone: add an entry by hand to try it.
+default. The installer changes no bootloader setting ([docs/rulings.md](../../docs/rulings.md)). On
+GRUB it reports the line to add to `/etc/default/grub` first, `GRUB_TOP_LEVEL` naming the kernel the
+system booted (or says that `GRUB_TOP_LEVEL` is already set). With that line, `sudo grub-mkconfig -o
+/boot/grub/grub.cfg` adds linux-gooarchy under "Advanced options" and the existing kernel stays the
+default. On other bootloaders, add an entry by hand to try it.
 
 `GOOARCHY_VM_KERNEL=1 tests/vm/run.sh` includes the opt-in in a full fresh VM install. It boots the
 candidate's kernel and initramfs directly with QEMU for the desktop checks, builds a module against
-the installed headers, checks that the opt-in left GRUB's menu alone and only added
-`GRUB_TOP_LEVEL`, then regenerates the menu and boots the disk's GRUB to check that the ordinary
-kernel is still the default. This is not real-machine bootloader integration. For an already
-installed test VM, `tests/vm/run.sh kernel-check` runs just the installer kernel step, then the same
-checks. `tests/vm/run.sh kernel-boot-check` boots and checks a candidate already installed
-in the guest, without rebuilding it. Set `GOOARCHY_VM_KERNEL_JOBS=1` when sharing a VM test
-host; for a standalone `build.sh` invocation, set `MAKEFLAGS=-j1`.
+the installed headers, and checks that the opt-in left GRUB's menu and `/etc/default/grub` alone.
+Then it adds the `GRUB_TOP_LEVEL` line the opt-in reported, regenerates the menu and boots the
+disk's GRUB to check that the ordinary kernel is still the default. This is not real-machine
+bootloader integration. For an already installed test VM, `tests/vm/run.sh kernel-check` runs just
+the installer kernel step, then the same checks. `tests/vm/run.sh kernel-boot-check` boots and
+checks a candidate already installed in the guest, without rebuilding it. Set
+`GOOARCHY_VM_KERNEL_JOBS=1` when sharing a VM test host; for a standalone `build.sh` invocation, set
+`MAKEFLAGS=-j1`.
 
 Version: `<kernel>-<Omarchy release>.<Gooarchy release>`, e.g. `7.2.5-6.1`; the running kernel
 reports `7.2.5-6.1-gooarchy`. Gooarchy's release starts at 1 for each Omarchy release and counts

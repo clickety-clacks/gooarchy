@@ -89,11 +89,10 @@ dependencies of `gooarchy`, so section 1 leaves them. Boot your ordinary kernel,
 sudo pacman -Rns linux-gooarchy linux-gooarchy-headers
 ```
 
-On GRUB, the installer also added a commented `GRUB_TOP_LEVEL` line to `/etc/default/grub` (and
-said so in `~/.local/state/gooarchy/reports.log`), which keeps your kernel first in GRUB's menu.
-Remove those lines after the kernel if you like. If you had regenerated GRUB's menu to add
-linux-gooarchy, regenerate it again (`sudo grub-mkconfig -o /boot/grub/grub.cfg`). The kernel's
-built packages and downloaded sources stay in `~/.cache/gooarchy/build/linux-gooarchy`.
+The installer did not change your bootloader. If you added a `GRUB_TOP_LEVEL` line to
+`/etc/default/grub` as it suggested, you may keep it or remove it. If you had regenerated GRUB's
+menu to add linux-gooarchy, regenerate it again (`sudo grub-mkconfig -o /boot/grub/grub.cfg`).
+The kernel's built packages and downloaded sources stay in `~/.cache/gooarchy/build/linux-gooarchy`.
 
 Gooarchy's own state lives in `~/.local/state/gooarchy` (install logs and manifests, build records,
 reports, markers of applied defaults) and its build checkouts in `~/.cache/gooarchy`. Both can be

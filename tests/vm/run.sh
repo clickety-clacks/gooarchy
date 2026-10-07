@@ -29,9 +29,10 @@
 #
 # Configuration (environment):
 #   GOOARCHY_VM_KERNEL      1: install the opt-in kernel and direct-boot it in this test VM for
-#                           the desktop checks; then build a module against its headers,
-#                           regenerate the disk's GRUB menu and check that the ordinary kernel
-#                           still boots from it by default.
+#                           the desktop checks; then build a module against its headers, check
+#                           that the opt-in left GRUB alone, follow its advice, regenerate the
+#                           disk's GRUB menu and check that the ordinary kernel still boots from
+#                           it by default.
 #   GOOARCHY_VM_KERNEL_JOBS kernel build parallelism (default 2; use 1 on a shared host)
 #   GOOARCHY_VM_DIR         work directory (default ~/.cache/gooarchy-vm-test): image, disk, logs
 #   GOOARCHY_VM_IMAGE_URL   Arch cloud image (default: the latest official one; to repeat a run,
@@ -423,28 +424,37 @@ EOF
 }
 
 kernel_bootloader_check() {
-  # The disk bootloader after the opt-in: GRUB's menu untouched and only GRUB_TOP_LEVEL added; then,
-  # with the menu regenerated (how a user adds the candidate to it), the ordinary kernel still
-  # boots by default, through the disk's own GRUB.
+  # The disk bootloader after the opt-in: GRUB's menu and /etc/default/grub exactly as they were.
+  # Then a user's next steps: add the GRUB_TOP_LEVEL line the opt-in printed, regenerate the menu
+  # (how linux-gooarchy gets into it), and the ordinary kernel still boots by default, through the
+  # disk's own GRUB.
   local out; out=$(artifacts)
-  local after=$out/grub-after-kernel.txt before=$run/kernel/grub-before.txt ok=0 added removed
+  local after=$out/grub-after-kernel.txt before=$run/kernel/grub-before.txt ok=0
   guest 'sudo sha256sum /boot/grub/grub.cfg | cut -d" " -f1; cat /etc/default/grub' >"$after"
   if [[ -f $before ]]; then
-    added=$(diff <(tail -n +2 "$before") <(tail -n +2 "$after") | sed -n 's/^> //p' | grep -v -e '^#' -e '^$' || true)
-    removed=$(diff <(tail -n +2 "$before") <(tail -n +2 "$after") | grep -c '^<' || true)
-    [[ $(head -n 1 "$before") == "$(head -n 1 "$after")" && $removed == 0 &&
-       $added =~ ^GRUB_TOP_LEVEL=\"/boot/vmlinuz-[^\"]+\"$ ]] && ok=1
-    hcheck "the kernel opt-in leaves GRUB's menu as it was and only adds GRUB_TOP_LEVEL" "$ok" "added: ${added:-nothing}"
+    cmp -s "$before" "$after" && ok=1
+    hcheck "the kernel opt-in leaves GRUB's menu and /etc/default/grub as they were" "$ok" \
+      "$(diff "$before" "$after" | head -n 5)"
   else
     log "no GRUB state from before the kernel opt-in; not comparing"
   fi
+  # Regenerating as it stands, for comparison only (left in a scratch file).
+  guest 'sudo grub-mkconfig -o /tmp/grub-control.cfg >/dev/null 2>&1; s=$?; sudo cat /tmp/grub-control.cfg; sudo rm -f /tmp/grub-control.cfg; exit $s' \
+    >"$out/grub-control-without-top-level.cfg" || die "control regeneration failed"
+  if guest 'grep -q "^GRUB_TOP_LEVEL=" /etc/default/grub'; then
+    log "/etc/default/grub already sets GRUB_TOP_LEVEL; not adding the opt-in's advice"
+  else
+    local advice
+    advice=$(guest 'grep -o "GRUB_TOP_LEVEL=\"/boot/[^\"]*\"" ~/.local/state/gooarchy/reports.log | tail -n 1')
+    ok=0
+    [[ $advice =~ ^GRUB_TOP_LEVEL=\"/boot/vmlinuz-[^\"]+\"$ && $advice != *vmlinuz-linux-gooarchy* ]] && ok=1
+    hcheck "the kernel opt-in reports the GRUB_TOP_LEVEL line that keeps the booted kernel the default" "$ok" \
+      "advice: ${advice:-none}"
+    (( ok )) || die "no GRUB_TOP_LEVEL advice to follow"
+    guest "printf '%s\\n' '$advice' | sudo tee -a /etc/default/grub >/dev/null"
+  fi
   guest 'sudo grub-mkconfig -o /boot/grub/grub.cfg' >"$out/grub-mkconfig.log" 2>&1 || die "grub-mkconfig failed"
   guest 'sudo cat /boot/grub/grub.cfg' >"$out/grub-regenerated.cfg"
-  # The same regeneration without GRUB_TOP_LEVEL, for comparison only (left in a scratch file).
-  guest 'sudo sed "/^GRUB_TOP_LEVEL=/d" /etc/default/grub >/tmp/grub-control && sudo cp -p /etc/default/grub /tmp/grub-saved &&
-         sudo cp /tmp/grub-control /etc/default/grub && sudo grub-mkconfig -o /tmp/grub-control.cfg >/dev/null 2>&1;
-         s=$?; sudo cp -p /tmp/grub-saved /etc/default/grub; sudo cat /tmp/grub-control.cfg; sudo rm -f /tmp/grub-control /tmp/grub-saved /tmp/grub-control.cfg; exit $s' \
-    >"$out/grub-control-without-top-level.cfg" || die "control regeneration failed"
   local first control offered=0
   first=$(awk '$1 == "linux" {print $2; exit}' "$out/grub-regenerated.cfg")
   control=$(awk '$1 == "linux" {print $2; exit}' "$out/grub-control-without-top-level.cfg")
@@ -457,7 +467,7 @@ kernel_bootloader_check() {
   guest 'cat /proc/cmdline' >"$out/stock-boot-cmdline.txt"
   ok=0
   [[ -n $stock && $version == "$stock" && ${first##*/} == vmlinuz-linux ]] && ok=1
-  hcheck "after regenerating GRUB, the disk bootloader still boots the ordinary kernel by default" "$ok" \
+  hcheck "with that line added and GRUB regenerated, the disk bootloader boots the ordinary kernel by default" "$ok" \
     "booted $version (ordinary: $stock); first entry $first; without GRUB_TOP_LEVEL it would be $control"
 }
 
