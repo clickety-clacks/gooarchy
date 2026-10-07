@@ -32,6 +32,14 @@ What you get:
 | Audio | PipeWire with WirePlumber; the volume keys work, with no on-screen indicator |
 | Defaults | tmux titles read "session on host", mosh adds no title prefix, touchpad tap and tap-and-drag on, Print saves into your Pictures folder, Claude Code and Codex set to ring the terminal bell (Scottland shows a bell as attention) |
 
+Foot was evaluated as the default terminal and is not it. In software and virgl VM comparisons,
+Foot passed 30 of 31 terminal checks and Ghostty 29 of 31. The switch depended on every check
+passing, and copying to the system clipboard from inside tmux did not pass: a program's OSC 52
+copy inside tmux failed with both terminals under tmux's inherited `set-clipboard external` policy
+([upstream behavior](https://github.com/tmux/tmux/wiki/Clipboard)). tmux's own copy worked with
+Foot and failed with Ghostty. Ghostty stays the default. The Foot work and its comparison checks
+are kept on the `foot` branch, which is not merged.
+
 ## Trying it
 
 ### In a VM (recommended)
