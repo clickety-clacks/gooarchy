@@ -610,6 +610,26 @@ def main():
     blank = grab_ppm(int(screen["x"]) + 20, int(screen["y"]) + 20, 240, 240)
     check("calibration: the wallpaper check rejects a desktop whose wallpaper is gone", not looks_drawn(blank))
 
+    # The `gooarchy` front command (system-tools/), from the gooarchy package: it lists the
+    # gooarchy-* tools installed beside it and runs one with its arguments and exit status.
+    # gooarchy-theme with an argument it doesn't take only prints its usage.
+    owner = run("pacman", "-Qqo", "/usr/bin/gooarchy")
+    check("the gooarchy command is installed by the gooarchy package", owner == "gooarchy", owner)
+    rc, listing = run_rc("gooarchy")
+    check("gooarchy lists the installed tools", rc == 0 and "\n  theme\n" in f"{listing}\n"
+          and "\n  flavorings-apply" in listing, listing[-200:])
+    direct = subprocess.run(["gooarchy-theme", "no-such-choice"], capture_output=True, text=True, timeout=20)
+    routed = subprocess.run(["gooarchy", "theme", "no-such-choice"], capture_output=True, text=True, timeout=20)
+    check("gooarchy theme runs gooarchy-theme with its arguments and exit status",
+          (routed.returncode, routed.stderr) == (direct.returncode, direct.stderr) and direct.returncode == 2,
+          f"{routed.returncode} {routed.stderr.strip()[:100]}")
+    unknown = subprocess.run(["gooarchy", "them"], capture_output=True, text=True, timeout=20)
+    check("an unknown gooarchy tool exits 127 and suggests the one meant",
+          unknown.returncode == 127 and "Did you mean: gooarchy theme ?" in unknown.stderr,
+          f"{unknown.returncode} {unknown.stderr.strip()[:120]}")
+    check("Omarchy's MIT notice ships with the system tools",
+          "David Heinemeier Hansson" in run("cat", "/usr/share/licenses/gooarchy/LICENSE-omarchy"))
+
     # What isn't there (DEFICIT.md), recorded from the running system.
     observe("desktop notifications", run("gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
                                          "--object-path", "/org/freedesktop/Notifications", "--method",

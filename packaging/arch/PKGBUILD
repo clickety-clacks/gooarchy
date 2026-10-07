@@ -1,7 +1,8 @@
 # Gooarchy's own packages, built from this repository. install/packaging/gooarchy.sh builds them
 # during install; by hand: cd packaging/arch && makepkg.
-#   gooarchy             the distro: the tty1 session start and its helpers, and dependencies on
-#                        everything Gooarchy is made of (removing it takes them along)
+#   gooarchy             the distro: the tty1 session start and its helpers, the system tools
+#                        (system-tools/, the `gooarchy` command and the gooarchy-* tools), and
+#                        dependencies on everything Gooarchy is made of (removing it takes them along)
 #   gooarchy-flavorings  the curated defaults (flavorings/), which will move to their own
 #                        repository (gooarchy-flavorings)
 #
@@ -17,10 +18,10 @@ _dirty=$(git -C "$_repo" status --porcelain 2>/dev/null | grep -q . && echo .dir
 pkgver=0.0.1.r$(git -C "$_repo" rev-list --count HEAD 2>/dev/null || echo 0).g$(git -C "$_repo" rev-parse --short HEAD 2>/dev/null || echo none)$_dirty
 pkgrel=1
 pkgdesc="Gooarchy, a desktop Linux distribution built around Scottland"
-arch=('any')
+arch=('x86_64')
 url="https://github.com/clickety-clacks/gooarchy"
 license=('LicenseRef-unlicensed')
-makedepends=('git' 'python')
+makedepends=('git' 'python' 'cargo')
 options=('!debug')
 
 # The Watercolor Dream themes live in Scottland's repository; take them from the Scottland
@@ -35,14 +36,27 @@ build() {
     python3 "$_repo/flavorings/themes/ghostty-theme.py" \
       "$srcdir/scottland/omarchy/themes/$theme/colors.toml" >"$srcdir/$theme.ghostty"
   done
+  # The system tools build in $srcdir, so the checkout stays clean. They have no dependencies
+  # outside the workspace, so nothing is fetched.
+  CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release \
+    --manifest-path "$_repo/system-tools/Cargo.toml"
+}
+
+check() {
+  CARGO_TARGET_DIR="$srcdir/target" cargo test --frozen --release \
+    --manifest-path "$_repo/system-tools/Cargo.toml"
 }
 
 package_gooarchy() {
-  depends=('scottland' 'strata-bin' 'gooarchy-flavorings'
+  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'glibc' 'gcc-libs'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
   install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
   install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
   install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
+  # The system tools: each binary the workspace builds is listed here. Parts are derived from
+  # Omarchy, whose MIT notice ships with them.
+  install -Dm755 "$srcdir/target/release/gooarchy" "$pkgdir/usr/bin/gooarchy"
+  install -Dm644 "$_repo/system-tools/LICENSE-omarchy" "$pkgdir/usr/share/licenses/gooarchy/LICENSE-omarchy"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
 gooarchy $pkgver
 checkout $(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo unknown)${_dirty:+ with uncommitted changes}
@@ -52,6 +66,7 @@ INFO
 }
 
 package_gooarchy-flavorings() {
+  arch=('any')
   pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
   depends=('scottland' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
            'xdg-user-dirs' 'grim' 'slurp')
