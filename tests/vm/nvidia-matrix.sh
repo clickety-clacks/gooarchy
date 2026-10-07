@@ -1,6 +1,6 @@
 #!/bin/bash
-# Guest-side checks for the NVIDIA installer. Run only through tests/vm/run.sh on the
-# disposable Plumbus guest; this script changes packages, initramfs images and test config.
+# Guest-side checks for the NVIDIA installer. Run only through tests/vm/run.sh on a
+# disposable guest; this script changes packages, initramfs images and test config.
 # R15 boot rows pause with a per-kernel manifest; the runner reboots its sound kernels, records a
 # result file for each at r15-boot-evidence-<row>-<kernel>.tsv, then calls r15-release <row> before
 # recovering the held fixture. Each result records schema, row, stamp, kernel, boot-id, desktop=pass,
@@ -388,8 +388,38 @@ verify_repository_driver_pair() {
 }
 
 ensure_archive_pair() {
-  local current_version utils_url dkms_url utils_version dkms_version
+  local current_version utils_url dkms_url utils_version dkms_version metadata
+  local saved_current saved_utils saved_utils_version saved_utils_sha saved_dkms saved_dkms_version saved_dkms_sha
   local -a urls=()
+  metadata=$test_root/nvidia-archive-pair.tsv
+  current_version=$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')
+  if [[ -s $metadata && -n $current_version ]]; then
+    saved_current=$(awk -F '\t' '$1 == "current" {print $2; exit}' "$metadata")
+    saved_utils=$(awk -F '\t' '$1 == "nvidia-utils" {print $2; exit}' "$metadata")
+    saved_utils_version=$(awk -F '\t' '$1 == "nvidia-utils" {print $3; exit}' "$metadata")
+    saved_utils_sha=$(awk -F '\t' '$1 == "nvidia-utils" {print $4; exit}' "$metadata")
+    saved_dkms=$(awk -F '\t' '$1 == "nvidia-open-dkms" {print $2; exit}' "$metadata")
+    saved_dkms_version=$(awk -F '\t' '$1 == "nvidia-open-dkms" {print $3; exit}' "$metadata")
+    saved_dkms_sha=$(awk -F '\t' '$1 == "nvidia-open-dkms" {print $4; exit}' "$metadata")
+    if [[ $saved_current == "$current_version" &&
+          $saved_utils =~ ^nvidia-utils-[[:alnum:].+_-]+-x86_64\.pkg\.tar\.zst$ &&
+          $saved_dkms =~ ^nvidia-open-dkms-[[:alnum:].+_-]+-x86_64\.pkg\.tar\.zst$ &&
+          $saved_utils_sha =~ ^[[:xdigit:]]{64}$ && $saved_dkms_sha =~ ^[[:xdigit:]]{64}$ ]]; then
+      old_utils_package=$test_root/$saved_utils
+      old_dkms_package=$test_root/$saved_dkms
+      old_utils_sha=$saved_utils_sha
+      old_dkms_sha=$saved_dkms_sha
+    if [[ -f $old_utils_package && -f $old_dkms_package &&
+          $(sha256sum "$old_utils_package" | awk '{print $1}') == "$old_utils_sha" &&
+          $(sha256sum "$old_dkms_package" | awk '{print $1}') == "$old_dkms_sha" &&
+          $(pacman -Qp "$old_utils_package" | awk '{print $2}') == "$saved_utils_version" &&
+          $(pacman -Qp "$old_dkms_package" | awk '{print $2}') == "$saved_dkms_version" &&
+          $saved_utils_version == "$saved_dkms_version" &&
+            $(vercmp "$saved_utils_version" "$current_version") -lt 0 ]]; then
+        return 0
+      fi
+    fi
+  fi
   if [[ -n $old_utils_package && -n $old_dkms_package &&
         -n $old_utils_sha && -n $old_dkms_sha &&
         -f $old_utils_package && -f $old_dkms_package &&
@@ -399,7 +429,6 @@ ensure_archive_pair() {
   fi
   [[ -z $old_utils_package ]] || rm -f "$old_utils_package"
   [[ -z $old_dkms_package ]] || rm -f "$old_dkms_package"
-  current_version=$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')
   [[ -n $current_version ]] || return 1
   mapfile -t urls < <(python3 - "$current_version" <<'PY'
 from functools import cmp_to_key
@@ -459,7 +488,13 @@ PY
   utils_version=$(pacman -Qp "$old_utils_package" | awk '{print $2}')
   dkms_version=$(pacman -Qp "$old_dkms_package" | awk '{print $2}')
   [[ -n $utils_version && $utils_version == "$dkms_version" &&
-     $(vercmp "$utils_version" "$current_version") -lt 0 ]]
+     $(vercmp "$utils_version" "$current_version") -lt 0 ]] || return 1
+  {
+    printf 'current\t%s\n' "$current_version"
+    printf 'nvidia-utils\t%s\t%s\t%s\n' "${old_utils_package##*/}" "$utils_version" "$old_utils_sha"
+    printf 'nvidia-open-dkms\t%s\t%s\t%s\n' "${old_dkms_package##*/}" "$dkms_version" "$old_dkms_sha"
+  } >"$metadata.tmp"
+  mv "$metadata.tmp" "$metadata"
 }
 
 report_count() {
@@ -896,8 +931,67 @@ check_covered_kernels() {
   done
 }
 
+capture_repository_pair() {
+  local output=$test_root/nvidia-repository-pair.txt repo
+  {
+    printf 'Configured repositories:\n'
+    pacman-conf --repo-list
+    while IFS= read -r repo; do
+      [[ -n $repo ]] || continue
+      printf '\n[%s] Server and CacheServer:\n' "$repo"
+      pacman-conf --repo "$repo" Server 2>/dev/null || true
+      pacman-conf --repo "$repo" CacheServer 2>/dev/null || true
+    done < <(pacman-conf --repo-list)
+    printf '\nRepository package records:\n'
+    pacman -Si extra/nvidia-utils 2>&1 || true
+    pacman -Si extra/nvidia-open-dkms 2>&1 || true
+    printf '\nInstalled NVIDIA package records:\n'
+    pacman -Q nvidia-utils nvidia-open-dkms 2>&1 || true
+    if [[ -s $test_root/nvidia-archive-pair.tsv ]]; then
+      printf '\nVerified older Archive pair and hashes:\n'
+      cat "$test_root/nvidia-archive-pair.tsv"
+    fi
+  } | python3 -c 'import re,sys; s=sys.stdin.read(); s=re.sub(r"(?i)(https?://)[^/\s@]+@", r"\1[REDACTED]@", s); s=re.sub(r"(?i)([?&](?:access_token|token|password|passwd|secret|key|signature|sig|credential|auth)=)[^&\s]+", r"\1[REDACTED]", s); sys.stdout.write(s)' >"$output"
+}
+
+preflight() {
+  verify_repository_driver_pair || { capture_repository_pair; return 1; }
+  if ! ensure_archive_pair; then
+    capture_repository_pair
+    record 'NVIDIA VM has a matching older Archive package pair before package mutation' 0 \
+      'could not download and verify an older matching nvidia-utils/nvidia-open-dkms pair'
+    return 1
+  fi
+  capture_repository_pair
+  record 'NVIDIA VM has a matching older Archive package pair before package mutation' 1 \
+    "nvidia-utils/nvidia-open-dkms $(pacman -Qp "$old_utils_package" | awk '{print $2}'); SHA256s in $test_root/nvidia-archive-pair.tsv"
+  printf 'Repository and Archive evidence: %s\n' "$test_root/nvidia-repository-pair.txt"
+}
+
+test_r15_precommit_failure() {
+  local row=$1 failure name packages_before etc_before boot_before modules_before status ok=0
+  case $row in
+    precommit-download) failure=pacman:before-commit; name=download ;;
+    precommit-space) failure=space; name=space ;;
+    *) echo "unknown pre-commit R15 row: $row" >&2; return 2 ;;
+  esac
+  packages_before=$(package_manifest)
+  etc_before=$(tree_hash /etc)
+  boot_before=$(tree_hash /boot)
+  modules_before=$(tree_hash /usr/lib/modules)
+  run_nvidia_step "r15-precommit-$name" "$supported" "$failure"
+  status=$last_status
+  if [[ $status != 0 && $packages_before == "$(package_manifest)" &&
+        $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" &&
+        $modules_before == "$(tree_hash /usr/lib/modules)" ]]; then
+    ok=1
+  fi
+  record "R15 $name fails before package, module, configuration, or image change" "$ok" "status $status"
+  hold_r15_failure_row "$row"
+}
+
 preinstall() {
-  local packages_before etc_before boot_before modules_before reports_before status failure unit_before units_absent=1 unit
+  local packages_before etc_before boot_before reports_before status unit_before units_absent=1 unit
   verify_repository_driver_pair || return 1
   packages_before=$(package_manifest)
   etc_before=$(tree_hash /etc)
@@ -915,19 +1009,10 @@ preinstall() {
   status=$last_status
   record 'R3 legacy device stays on fallback' "$([[ $status == 0 && $packages_before == "$(package_manifest)" && $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" && $(($(report_count) - reports_before)) == 1 && $(grep -c '10de:1b80' "$state/reports.log") -ge 1 ]] && echo 1 || echo 0)" "status $status"
 
-  for failure in pacman:before-commit space; do
-    packages_before=$(package_manifest)
-    etc_before=$(tree_hash /etc)
-    boot_before=$(tree_hash /boot)
-    modules_before=$(tree_hash /usr/lib/modules)
-    run_nvidia_step "r15-precommit-$failure" "$supported" "$failure"
-    status=$last_status
-    record "R15 $failure fails before package, module, config, or image change" "$([[ $status != 0 && $packages_before == "$(package_manifest)" && $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" && $modules_before == "$(tree_hash /usr/lib/modules)" && ! -e $owned ]] && echo 1 || echo 0)" "status $status"
-    case $failure in
-      pacman:before-commit) hold_r15_failure_row precommit-download ;;
-      space) hold_r15_failure_row precommit-space ;;
-    esac
-  done
+  if [[ ${GOOARCHY_VM_NVIDIA_SKIP_R15_ROWS:-} != 1 ]]; then
+    test_r15_precommit_failure precommit-download
+    test_r15_precommit_failure precommit-space
+  fi
 
   unit_states >"$test_root/units-before-nvidia-utils.txt"
   unit_before=$(cat "$test_root/units-before-nvidia-utils.txt")
@@ -989,20 +1074,23 @@ postinstall() {
   test_foreign_owned_file
   test_user_full_list
   test_dynamic_full_list
-  test_r15_linux_gooarchy_dkms_failure
   test_pre_enabled_units
   test_custom_preset
   test_r17_header_repair
   test_user_partial_kernels
-  test_pacman_hook_failure_with_partial_kernel
-  test_prebuilt_replacement
   test_foreign_driver
   test_held_driver
-  test_r15_step_regeneration_after_successful_arch_upgrade
   test_r13_full_installer_systemctl_trace
-  test_r15a_stale_baseline
-  test_r15a_arch_upgrade_hook
-  test_r15_interrupted_after_commit
+
+  if [[ ${GOOARCHY_VM_NVIDIA_SKIP_R15_ROWS:-} != 1 ]]; then
+    test_r15_linux_gooarchy_dkms_failure
+    test_pacman_hook_failure_with_partial_kernel
+    test_prebuilt_replacement
+    test_r15_step_regeneration_after_successful_arch_upgrade
+    test_r15a_stale_baseline
+    test_r15a_arch_upgrade_hook
+    test_r15_interrupted_after_commit
+  fi
 
   printf '\nNVIDIA VM matrix: %s/%s checks passed\n' "$((checks - failures))" "$checks"
   printf 'Results: %s/results.tsv\n' "$test_root"
@@ -2332,7 +2420,7 @@ r15_row() {
   export GOOARCHY_NVIDIA_HOLD_R15_ROW
   case $row in
     precommit-download|precommit-space)
-      preinstall
+      test_r15_precommit_failure "$row"
       ;;
     linux-gooarchy-dkms)
       verify_repository_driver_pair || return 1
@@ -2372,6 +2460,7 @@ r15_row() {
 }
 
 case $phase in
+  preflight) preflight ;;
   preinstall) preinstall ;;
   postinstall) postinstall ;;
   reference) reference ;;
@@ -2382,5 +2471,5 @@ case $phase in
     [[ ${2:-} == "$held" ]] || { echo 'r15-release row changed during validation.' >&2; exit 2; }
     rm -f "$test_root/r15-boot-held"
     ;;
-  *) echo "usage: $0 preinstall|postinstall|reference|r15-row <row>|r15-release <row>" >&2; exit 2 ;;
+  *) echo "usage: $0 preflight|preinstall|postinstall|reference|r15-row <row>|r15-release <row>" >&2; exit 2 ;;
 esac

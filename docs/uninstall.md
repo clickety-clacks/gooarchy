@@ -57,6 +57,26 @@ tty1 session start), `/etc/profile.d/gooarchy-flavorings.sh`, `/etc/tmux.conf`,
 hooks and config fragments under `/usr/lib/scottland/`.
 If you edited `/etc/tmux.conf`, pacman keeps your edited copy as `/etc/tmux.conf.pacsave`.
 
+### NVIDIA packages and initramfs
+
+The NVIDIA installer step installs `nvidia-open-dkms` and `nvidia-utils` explicitly, and may add
+matching kernel-header packages. Remove the two driver packages with:
+
+```sh
+sudo pacman -Rns nvidia-open-dkms nvidia-utils
+```
+
+Only remove a header package if it was absent from `packages-before.txt` for the install attempt.
+If Gooarchy replaced the prebuilt `nvidia-open` package, restore it with
+`sudo pacman -S nvidia-open` before removing the DKMS packages. For a replaced `nvidia-open-lts`,
+use `sudo pacman -S nvidia-open-lts` instead. Remove the early-KMS drop-in and regenerate the
+initramfs images so they no longer contain the Gooarchy-added modules:
+
+```sh
+sudo rm -f /etc/mkinitcpio.conf.d/gooarchy-nvidia.conf
+sudo mkinitcpio -P
+```
+
 ## 2. The package repository and key
 
 If the installer added the repository, remove its `[gooarchy]` section from `/etc/pacman.conf`.
