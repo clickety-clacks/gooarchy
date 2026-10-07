@@ -1,6 +1,8 @@
 #!/bin/bash
 # Guest-side checks for the NVIDIA installer. Run only through tests/vm/run.sh on the
 # disposable Plumbus guest; this script changes packages, initramfs images and test config.
+# R15 boot rows pause with a per-kernel manifest; the runner reboots its sound kernels, then calls
+# r15-release <row> to restore the held fixture.
 set -euo pipefail
 
 [[ ${GOOARCHY_VM_GUEST_NVIDIA_MATRIX:-} == 1 ]] || {
@@ -10,13 +12,10 @@ set -euo pipefail
 
 phase=${1:-postinstall}
 repo=${GOOARCHY_NVIDIA_REPO:-$HOME/gooarchy}
-test_stamp=$(date -u +%Y%m%dT%H%M%SZ)-$$
+test_stamp=${GOOARCHY_NVIDIA_TEST_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 test_root=${GOOARCHY_NVIDIA_ARTIFACTS:-$HOME/gooarchy-nvidia-matrix/$test_stamp}
 state=$HOME/.local/state/gooarchy
 owned=/etc/mkinitcpio.conf.d/gooarchy-nvidia.conf
-user_config=/etc/mkinitcpio.conf.d/gooarchy-nvidia-test-$test_stamp.conf
-dynamic_modules=/etc/gooarchy-nvidia-test-modules-$test_stamp
-r11_config=/etc/mkinitcpio-r11-test-$test_stamp.conf
 supported='10de,0x030000,0x25a2,0'
 legacy='10de,0x030000,0x1b80,0'
 dual_gpu=$'0x8086,0x030000,0x9a49,1\n10de,0x030200,0x25a2,0'
@@ -30,6 +29,29 @@ old_dkms_sha=
 
 mkdir -p "$test_root" "$state"
 test_root=$(realpath "$test_root")
+if [[ $phase == r15-release ]]; then
+  [[ -n ${GOOARCHY_NVIDIA_ARTIFACTS:-} && -f $test_root/r15-boot-held ]] || {
+    echo 'r15-release requires the held row and its NVIDIA artifact directory.' >&2
+    exit 2
+  }
+  IFS=$'\t' read -r held_row held_stamp <"$test_root/r15-boot-held"
+  [[ ${2:-} == "$held_row" && $held_stamp =~ ^[[:alnum:]_.-]+$ ]] || {
+    echo 'r15-release row does not match the held NVIDIA failure state.' >&2
+    exit 2
+  }
+  if [[ -n ${GOOARCHY_NVIDIA_TEST_STAMP:-} && $GOOARCHY_NVIDIA_TEST_STAMP != "$held_stamp" ]]; then
+    echo 'r15-release test stamp does not match the held NVIDIA fixture.' >&2
+    exit 2
+  fi
+  test_stamp=$held_stamp
+fi
+[[ $test_stamp =~ ^[[:alnum:]_.-]+$ ]] || {
+  echo 'GOOARCHY_NVIDIA_TEST_STAMP contains unsupported characters.' >&2
+  exit 2
+}
+user_config=/etc/mkinitcpio.conf.d/gooarchy-nvidia-test-$test_stamp.conf
+dynamic_modules=/etc/gooarchy-nvidia-test-modules-$test_stamp
+r11_config=/etc/mkinitcpio-r11-test-$test_stamp.conf
 mkdir -p "$test_root/bin"
 cat >"$test_root/nvidia-test-bash-env.sh" <<'EOF'
 gooarchy_test_restore_mkinitcpio_hook() {
@@ -169,6 +191,9 @@ chmod 0755 "$test_root/bin/mkinitcpio"
 restore_r15a_current_state() {
   local status=0 module_dir kernel pkgbase
   sudo rm -f "$user_config" "$dynamic_modules"
+  if pacman -Q nvidia-open >/dev/null 2>&1; then
+    sudo pacman -Rns --noconfirm nvidia-open || return 1
+  fi
   sudo pacman -S --noconfirm --needed nvidia-utils nvidia-open-dkms || return 1
   for module_dir in /usr/lib/modules/*; do
     [[ -f $module_dir/pkgbase ]] || continue
@@ -187,6 +212,15 @@ restore_r15a_current_state() {
 
 cleanup() {
   local status=$? build_link_record build_link_path saved_link partial_kernel
+  if [[ -f $test_root/r15-boot-held ]]; then
+    if [[ -f $test_root/90-mkinitcpio-install.hook.saved ]]; then
+      sudo mv -f "$test_root/90-mkinitcpio-install.hook.saved" \
+        /usr/share/libalpm/hooks/90-mkinitcpio-install.hook 2>/dev/null || status=1
+    fi
+    printf 'Preserving the failed R15 state for per-kernel reboot evidence: %s\n' \
+      "$(cut -f1 "$test_root/r15-boot-held")" >&2
+    return "$status"
+  fi
   if [[ -f $test_root/90-mkinitcpio-install.hook.saved ]]; then
     sudo mv -f "$test_root/90-mkinitcpio-install.hook.saved" \
       /usr/share/libalpm/hooks/90-mkinitcpio-install.hook 2>/dev/null || status=1
@@ -564,6 +598,75 @@ kernel_for_pkgbase() {
   return 1
 }
 
+kernel_sounds_for_boot() {
+  local kernel=$1 pkgbase=$2 module_version=$3 module_file file_version image modules
+  while IFS= read -r -d '' module_file; do
+    [[ -n $module_version ]] || return 1
+    file_version=$(modinfo -F version "$module_file" 2>/dev/null || true)
+    [[ $file_version == "$module_version" ]] || return 1
+  done < <(find "/usr/lib/modules/$kernel" -type f -name 'nvidia*.ko*' -print0)
+  image_set_for_kernel "$pkgbase" || return 1
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+    [[ -f $image ]] && lsinitcpio "$image" >/dev/null 2>&1 || return 1
+    modules=$(image_modules "$image") || return 1
+    if [[ -z $module_version ]]; then
+      [[ -z $modules ]] || return 1
+    else
+      check_image_versions_and_firmware "$image" "$module_version" || return 1
+    fi
+  done
+}
+
+hold_r15_failure_row() {
+  local row=$1 partial_kernel= package_version module_version kernel_dir kernel pkgbase
+  local image image_hash image_path plan_tmp plan
+  [[ ${GOOARCHY_NVIDIA_HOLD_R15_ROW:-} == "$row" ]] || return 0
+  [[ $row =~ ^[[:alnum:]_.-]+$ ]] || { echo "invalid R15 row name: $row" >&2; exit 2; }
+  [[ -n ${GOOARCHY_NVIDIA_ARTIFACTS:-} ]] || {
+    echo 'R15 boot evidence needs the runner-owned GOOARCHY_NVIDIA_ARTIFACTS directory.' >&2
+    exit 2
+  }
+  if ((failures != 0)); then
+    echo "R15 row $row cannot be held because an earlier NVIDIA matrix assertion failed." >&2
+    exit 1
+  fi
+  if [[ -f $test_root/partial-kernel-path ]]; then
+    partial_kernel=$(<"$test_root/partial-kernel-path")
+  fi
+  package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
+  module_version=
+  [[ -z $package_version ]] || module_version=$(module_version_from_package "$package_version")
+  plan=$test_root/r15-boot-$row.tsv
+  plan_tmp=$plan.$$
+  {
+    printf 'schema\t1\nrow\t%s\n' "$row"
+    printf 'nvidia-utils\t%s\n' "${package_version:-absent}"
+    for kernel_dir in /usr/lib/modules/*; do
+      [[ -f $kernel_dir/pkgbase ]] || continue
+      kernel=${kernel_dir##*/}
+      pkgbase=$(<"$kernel_dir/pkgbase")
+      if [[ $kernel == "$partial_kernel" ]]; then
+        printf 'kernel\tuser-partial\t%s\t%s\n' "$kernel" "$pkgbase"
+        continue
+      fi
+      if kernel_sounds_for_boot "$kernel" "$pkgbase" "$module_version"; then
+        printf 'kernel\tsound\t%s\t%s\n' "$kernel" "$pkgbase"
+        for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+          image_hash=$(sha256sum "$image" | awk '{print $1}') || exit 1
+          image_path=$image
+          printf 'image\t%s\t%s\t%s\n' "$kernel" "$image_path" "$image_hash"
+        done
+      else
+        printf 'kernel\tnot-sound\t%s\t%s\n' "$kernel" "$pkgbase"
+      fi
+    done
+  } >"$plan_tmp"
+  mv "$plan_tmp" "$plan"
+  printf '%s\t%s\n' "$row" "$test_stamp" >"$test_root/r15-boot-held"
+  printf 'R15 row %s held for reboot checks; eligible kernels are in %s\n' "$row" "$plan"
+  exit 0
+}
+
 remove_kernel_modules() {
   local kernel=$1 module pattern
   shift
@@ -675,6 +778,10 @@ preinstall() {
     run_nvidia_step "r15-precommit-$failure" "$supported" "$failure"
     status=$last_status
     record "R15 $failure fails before package, module, config, or image change" "$([[ $status != 0 && $packages_before == "$(package_manifest)" && $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" && $modules_before == "$(tree_hash /usr/lib/modules)" && ! -e $owned ]] && echo 1 || echo 0)" "status $status"
+    case $failure in
+      pacman:before-commit) hold_r15_failure_row precommit-download ;;
+      space) hold_r15_failure_row precommit-space ;;
+    esac
   done
 
   unit_states >"$test_root/units-before-nvidia-utils.txt"
@@ -1164,6 +1271,7 @@ test_r15_linux_gooarchy_dkms_failure() {
     "$other_kernels_ok" "linux-gooarchy $kernel is the injected build failure"
   record 'R15 linux-gooarchy fallback images stay consistent and listable' "$image_ok" \
     "all ${#NV_TEST_KERNEL_IMAGES[@]} linux-gooarchy images contain no NVIDIA modules"
+  hold_r15_failure_row linux-gooarchy-dkms
 
   if sudo mv "$test_root/gooarchy-build-link.saved" "$build_link_path"; then
     rm -f "$test_root/gooarchy-build-link-path"
@@ -1433,6 +1541,7 @@ test_pacman_hook_failure_with_partial_kernel() {
     "$([[ $status != 0 && $image_ok == 1 && $partial_report_ok == 1 && \
           $config_hash == "$(sha256sum "$user_config" | awk '{print $1}')" ]] && echo 1 || echo 0)" \
     "linux-lts $lts_kernel; images ${lts_images_before:+checked}; config $user_config"
+  hold_r15_failure_row package-hook-linux-partial-lts
 
   sudo mv "$test_root/linux-lts-build-link.saved" "$build_link_path"
   sudo mv "$test_root/linux.preset.saved" "$linux_preset"
@@ -1448,6 +1557,21 @@ test_pacman_hook_failure_with_partial_kernel() {
     run_nvidia_step r15-package-hook-partial-lts-restored "$supported" -
     record 'R17 user-partial package-hook fixture is repaired before later cases' \
       "$([[ $last_status == 0 ]] && echo 1 || echo 0)" "linux-lts $lts_kernel"
+    linux_images_before=$(kernel_image_hashes linux 2>/dev/null || true)
+    run_nvidia_step r15-package-hook-linux-only "$supported" \
+      "pacman:force-transaction,pacman-hook:$linux_kernel"
+    status=$last_status
+    linux_images_after=$(kernel_image_hashes linux 2>/dev/null || true)
+    hook_report_ok=0
+    grep -Fq "post-transaction mkinitcpio hook reported an image-generation error for linux kernel $linux_kernel" \
+      "$test_root/r15-package-hook-linux-only.log" && hook_report_ok=1
+    record 'R15 linux-only package hook failure preserves its sound fallback baseline' \
+      "$([[ $status != 0 && $hook_report_ok == 1 && -n $linux_images_before && $linux_images_before == "$linux_images_after" ]] && echo 1 || echo 0)" \
+      "linux $linux_kernel; package hook error reported after commit"
+    hold_r15_failure_row package-hook-linux-only
+    run_nvidia_step r15-package-hook-linux-only-restored "$supported" -
+    record 'R17 linux package-hook failure is repaired on rerun' \
+      "$([[ $last_status == 0 ]] && echo 1 || echo 0)" "linux $linux_kernel"
   else
     record 'R17 user-partial package-hook fixture is restored' 0 "DKMS recovery failed for $lts_kernel; cleanup will retry"
   fi
@@ -1468,6 +1592,7 @@ test_prebuilt_replacement() {
   run_nvidia_step r7-prebuilt-refused "$supported" pacman:before-commit
   status=$last_status
   record 'R7 refused replacement leaves prebuilt and files untouched' "$([[ $status != 0 && $before_packages == "$(package_manifest)" && $before_etc == "$(tree_hash /etc)" && $before_boot == "$(tree_hash /boot)" && $(pacman -Q nvidia-open >/dev/null 2>&1; echo $?) == 0 ]] && echo 1 || echo 0)" "status $status"
+  hold_r15_failure_row prebuilt-refused
   run_nvidia_step r7-prebuilt-replacement "$supported" -
   record 'R7 replaces same-version prebuilt with explicit DKMS package' "$([[ $last_status == 0 && $(pacman -Qe nvidia-open-dkms >/dev/null 2>&1; echo $?) == 0 && $(pacman -Q nvidia-open >/dev/null 2>&1; echo $?) != 0 && $(grep -c 'replaced nvidia-open' "$state/reports.log") -ge 1 ]] && echo 1 || echo 0)" 'prebuilt package names and replacement report checked'
 
@@ -1492,6 +1617,7 @@ test_prebuilt_replacement() {
   else
     record 'R15 prebuilt replacement survives a failed DKMS build on the fallback path' 0 "kernel $kernel; DKMS hook and installer retry ran without its build link"
   fi
+  hold_r15_failure_row prebuilt-linux-dkms
   sudo mv "$test_root/linux-build-link.saved" "$build_link_path"
   rm -f "$test_root/linux-build-link-path"
   run_nvidia_step r15-prebuilt-dkms-retry "$supported" -
@@ -1679,6 +1805,7 @@ test_r15a_stale_baseline() {
   else
     record 'R15a refuses inherited stale images before changing packages or its owned file' 0 "linux image $old_module_version; current modules $current_module_version"
   fi
+  hold_r15_failure_row stale-baseline-repair-failure
 
   image_ok=1
   run_nvidia_step r15a-stale-baseline-repair "$supported" -
@@ -1764,6 +1891,7 @@ test_r15_step_regeneration_after_successful_arch_upgrade() {
     "$([[ $status != 0 && $state_unchanged == 1 && $hook_ok == 1 && $step_failure == 1 && $image_ok == 1 && -e $owned &&
           $current_package_version == "$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')" ]] && echo 1 || echo 0)" \
     "linux $kernel; nvidia-utils $current_package_version; owned early-KMS file remains for rerun"
+  hold_r15_failure_row arch-upgrade-step-regen
   if restore_r15a_current_state; then
     record 'R15 recovery after the injected step failure restores current early KMS' 1 'current packages, DKMS modules, and images restored'
   else
@@ -1845,6 +1973,7 @@ test_r15a_arch_upgrade_hook() {
   record 'R15a step repairs the inherited stale Linux images and completes' \
     "$([[ $status == 0 && $current_package_version == "$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')" && $image_ok == 1 ]] && echo 1 || echo 0)" \
     "nvidia-utils $current_package_version; module version $current_module_version"
+  hold_r15_failure_row arch-upgrade-hook-repaired
   if ((status != 0 || image_ok == 0)) ||
      [[ $current_package_version != "$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')" ]]; then
     restore_r15a_current_state || true
@@ -1885,6 +2014,7 @@ test_r15a_arch_upgrade_hook() {
   record 'R15a stale-repair failure stops before any further NVIDIA package, module, image, or owned-file change' \
     "$([[ $status != 0 && $state_unchanged == 1 && $old_images == "$(kernel_image_hashes linux 2>/dev/null || true)" && $stale_report == 1 && $recovery_report == 1 ]] && echo 1 || echo 0)" \
     "linux $kernel; stale module version $old_module_version; step regeneration injected to fail"
+  hold_r15_failure_row arch-upgrade-hook-repair-failure
   if restore_r15a_current_state; then
     record 'R15a Arch-upgrade fixture restores current driver and images' 1 'current packages, DKMS modules, and images restored'
   else
@@ -1892,9 +2022,52 @@ test_r15a_arch_upgrade_hook() {
   fi
 }
 
+r15_row() {
+  local row=$1
+  GOOARCHY_NVIDIA_HOLD_R15_ROW=$row
+  export GOOARCHY_NVIDIA_HOLD_R15_ROW
+  case $row in
+    precommit-download|precommit-space)
+      preinstall
+      ;;
+    linux-gooarchy-dkms)
+      verify_repository_driver_pair || return 1
+      test_r15_linux_gooarchy_dkms_failure
+      ;;
+    package-hook-linux-only|package-hook-linux-partial-lts)
+      verify_repository_driver_pair || return 1
+      test_pacman_hook_failure_with_partial_kernel
+      ;;
+    prebuilt-refused|prebuilt-linux-dkms)
+      verify_repository_driver_pair || return 1
+      test_prebuilt_replacement
+      ;;
+    stale-baseline-repair-failure|arch-upgrade-step-regen|arch-upgrade-hook-repaired|arch-upgrade-hook-repair-failure)
+      verify_repository_driver_pair || return 1
+      ensure_archive_pair || { record "R15 row $row has an older matching Archive package pair" 0 'Archive package pair unavailable'; return 1; }
+      case $row in
+        stale-baseline-repair-failure) test_r15a_stale_baseline ;;
+        arch-upgrade-step-regen) test_r15_step_regeneration_after_successful_arch_upgrade ;;
+        *) test_r15a_arch_upgrade_hook ;;
+      esac
+      ;;
+    *)
+      echo "unknown R15 boot-evidence row: $row" >&2
+      return 2
+      ;;
+  esac
+  ((failures == 0))
+}
+
 case $phase in
   preinstall) preinstall ;;
   postinstall) postinstall ;;
   reference) reference ;;
-  *) echo "usage: $0 preinstall|postinstall|reference" >&2; exit 2 ;;
+  r15-row) r15_row "${2:-${GOOARCHY_NVIDIA_HOLD_R15_ROW:-}}" ;;
+  r15-release)
+    held=$(cut -f1 "$test_root/r15-boot-held")
+    [[ ${2:-} == "$held" ]] || { echo 'r15-release row changed during validation.' >&2; exit 2; }
+    rm -f "$test_root/r15-boot-held"
+    ;;
+  *) echo "usage: $0 preinstall|postinstall|reference|r15-row <row>|r15-release <row>" >&2; exit 2 ;;
 esac
