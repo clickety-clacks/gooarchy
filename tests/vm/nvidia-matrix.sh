@@ -1,8 +1,10 @@
 #!/bin/bash
 # Guest-side checks for the NVIDIA installer. Run only through tests/vm/run.sh on the
 # disposable Plumbus guest; this script changes packages, initramfs images and test config.
-# R15 boot rows pause with a per-kernel manifest; the runner reboots its sound kernels, then calls
-# r15-release <row> to restore the held fixture.
+# R15 boot rows pause with a per-kernel manifest; the runner reboots its sound kernels, records a
+# result file for each at r15-boot-evidence-<row>-<kernel>.tsv, then calls r15-release <row> before
+# recovering the held fixture. Each result records schema, row, stamp, kernel, boot-id, desktop=pass,
+# and nvidia-device=no-device as tab-separated key/value lines.
 set -euo pipefail
 
 [[ ${GOOARCHY_VM_GUEST_NVIDIA_MATRIX:-} == 1 ]] || {
@@ -668,6 +670,97 @@ hold_r15_failure_row() {
   printf '%s\t%s\n' "$row" "$test_stamp" >"$test_root/r15-boot-held"
   printf 'R15 row %s held for reboot checks; eligible kernels are in %s\n' "$row" "$plan"
   exit 0
+}
+
+verify_r15_boot_evidence() {
+  local row=$1 stamp=$2 plan=$test_root/r15-boot-$1.tsv
+  local type a b c d kernel path expected_hash actual_hash expected_utils=absent actual_utils
+  local evidence boot_id line schema_count=0 row_count=0 utils_count=0
+  local -A sound_kernels=() image_counts=()
+  local -a expected_lines=()
+  [[ -s $plan ]] || { echo "R15 boot manifest is missing for $row." >&2; return 1; }
+  while IFS=$'\t' read -r type a b c d; do
+    case $type in
+      schema)
+        ((schema_count += 1))
+        [[ $a == 1 ]] || { echo "unsupported R15 manifest schema for $row." >&2; return 1; }
+        ;;
+      row)
+        ((row_count += 1))
+        [[ $a == "$row" ]] || { echo "R15 manifest row mismatch for $row." >&2; return 1; }
+        ;;
+      nvidia-utils)
+        ((utils_count += 1))
+        expected_utils=${a:-absent}
+        ;;
+      kernel)
+        kernel=$b
+        [[ $kernel =~ ^[[:alnum:]_.+-]+$ ]] || { echo "invalid kernel in R15 manifest for $row." >&2; return 1; }
+        case $a in
+          sound) sound_kernels[$kernel]=1 ;;
+          user-partial|not-sound) ;;
+          *) echo "invalid kernel classification in R15 manifest for $row." >&2; return 1 ;;
+        esac
+        ;;
+      image)
+        kernel=$a; path=$b; expected_hash=$c
+        [[ $kernel =~ ^[[:alnum:]_.+-]+$ && $expected_hash =~ ^[[:xdigit:]]{64}$ && $path == /* ]] || {
+          echo "invalid image entry in R15 manifest for $row." >&2
+          return 1
+        }
+        [[ -f $path ]] || { echo "R15 image disappeared before fixture recovery: $path" >&2; return 1; }
+        actual_hash=$(sha256sum -- "$path" | awk '{print $1}') || return 1
+        [[ $actual_hash == "$expected_hash" ]] || {
+          echo "R15 image changed before fixture recovery: $path" >&2
+          return 1
+        }
+        image_counts[$kernel]=$(( ${image_counts[$kernel]:-0} + 1 ))
+        ;;
+      *) echo "unknown R15 manifest record in $plan." >&2; return 1 ;;
+    esac
+  done <"$plan"
+  [[ $schema_count == 1 && $row_count == 1 && $utils_count == 1 ]] || {
+    echo "R15 manifest is incomplete for $row." >&2
+    return 1
+  }
+  [[ -n ${sound_kernels[*]:-} ]] || { echo "R15 manifest has no sound kernels for $row." >&2; return 1; }
+  for kernel in "${!sound_kernels[@]}"; do
+    (( ${image_counts[$kernel]:-0} > 0 )) || {
+      echo "R15 sound kernel $kernel has no image hashes in its manifest." >&2
+      return 1
+    }
+    evidence=$test_root/r15-boot-evidence-$row-$kernel.tsv
+    [[ -s $evidence ]] || { echo "R15 boot evidence is missing for $row kernel $kernel." >&2; return 1; }
+    boot_id=$(awk -F '\t' '$1 == "boot-id" { print $2; exit }' "$evidence")
+    [[ $boot_id =~ ^[[:xdigit:]-]{36}$ ]] || {
+      echo "R15 boot evidence has no valid boot ID for $row kernel $kernel." >&2
+      return 1
+    }
+    expected_lines=(
+      $'schema\t1'
+      $'row\t'"$row"
+      $'stamp\t'"$stamp"
+      $'kernel\t'"$kernel"
+      $'boot-id\t'"$boot_id"
+      $'desktop\tpass'
+      $'nvidia-device\tno-device'
+    )
+    [[ $(wc -l <"$evidence") -eq ${#expected_lines[@]} ]] || {
+      echo "R15 boot evidence has an unexpected record count for $row kernel $kernel." >&2
+      return 1
+    }
+    for line in "${expected_lines[@]}"; do
+      grep -Fqx -- "$line" "$evidence" || {
+        echo "R15 boot evidence lacks '$line' for $row kernel $kernel." >&2
+        return 1
+      }
+    done
+  done
+  actual_utils=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
+  [[ ${actual_utils:-absent} == "$expected_utils" ]] || {
+    echo "NVIDIA package state changed before R15 fixture recovery for $row." >&2
+    return 1
+  }
 }
 
 remove_kernel_modules() {
@@ -2149,6 +2242,7 @@ case $phase in
   reference) reference ;;
   r15-row) r15_row "${2:-${GOOARCHY_NVIDIA_HOLD_R15_ROW:-}}" ;;
   r15-release)
+    verify_r15_boot_evidence "$held_row" "$held_stamp"
     held=$(cut -f1 "$test_root/r15-boot-held")
     [[ ${2:-} == "$held" ]] || { echo 'r15-release row changed during validation.' >&2; exit 2; }
     rm -f "$test_root/r15-boot-held"
