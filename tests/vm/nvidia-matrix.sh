@@ -16,6 +16,7 @@ state=$HOME/.local/state/gooarchy
 owned=/etc/mkinitcpio.conf.d/gooarchy-nvidia.conf
 user_config=/etc/mkinitcpio.conf.d/gooarchy-nvidia-test-$test_stamp.conf
 dynamic_modules=/etc/gooarchy-nvidia-test-modules-$test_stamp
+r11_config=/etc/mkinitcpio-r11-test-$test_stamp.conf
 supported='10de,0x030000,0x25a2,0'
 legacy='10de,0x030000,0x1b80,0'
 dual_gpu=$'0x8086,0x030000,0x9a49,1\n10de,0x030200,0x25a2,0'
@@ -190,7 +191,7 @@ cleanup() {
     sudo mv -f "$test_root/90-mkinitcpio-install.hook.saved" \
       /usr/share/libalpm/hooks/90-mkinitcpio-install.hook 2>/dev/null || status=1
   fi
-  sudo rm -f "$user_config" "$dynamic_modules" "$test_root"/config-probe-*.img 2>/dev/null || true
+  sudo rm -f "$user_config" "$dynamic_modules" "$r11_config" "$test_root"/config-probe-*.img 2>/dev/null || true
   if [[ -f $test_root/owned-original.conf ]]; then sudo mv -f "$test_root/owned-original.conf" "$owned" 2>/dev/null || true; fi
   if [[ -f $test_root/owned-before-dynamic.conf ]]; then sudo mv -f "$test_root/owned-before-dynamic.conf" "$owned" 2>/dev/null || true; fi
   if [[ -f $test_root/owned-held ]]; then sudo mv -f "$test_root/owned-held" "$owned" 2>/dev/null || true; fi
@@ -875,19 +876,53 @@ EOF
 
 test_custom_preset() {
   local preset=/etc/mkinitcpio.d/linux.preset saved=$test_root/linux.preset.saved test_copy=$test_root/linux.preset.custom
-  local before_images after_images before_etc before_packages
+  local before_images after_images before_etc before_packages preset_hash config_hash hook_seen=0 report_seen=0 rerun_report_seen=0
+  local image image_ok=1 module_version modules status
   if [[ ! -f $preset ]]; then record 'R11 custom preset case available' 0 "$preset missing"; return; fi
+  if ! grep -Eq '^[[:space:]]*MODULES[[:space:]]*=[[:space:]]*\(\)[[:space:]]*$' /etc/mkinitcpio.conf; then
+    record 'R11 empty-MODULES config fixture is available' 0 '/etc/mkinitcpio.conf must be the fresh VM empty-MODULES default'
+    return
+  fi
   sudo cp -a "$preset" "$saved"
   sudo cp -a "$preset" "$test_copy"
   printf '\nALL_config="/etc/mkinitcpio.conf"\n' | sudo tee -a "$test_copy" >/dev/null
   sudo cp "$test_copy" "$preset"
   preset_images "$preset" || { sudo mv "$saved" "$preset"; record 'R11 preset paths resolve' 0 'could not parse preset'; return; }
+  preset_hash=$(sha256sum "$preset" | awk '{print $1}')
+  config_hash=$(sha256sum /etc/mkinitcpio.conf | awk '{print $1}')
+  before_etc=$(tree_hash /etc)
+  before_packages=$(package_manifest)
+  run_nvidia_step r11-custom-config-pacman-hook "$supported" pacman:force-transaction
+  status=$last_status
+  grep -Fq "Building image from preset: $preset" "$test_root/r11-custom-config-pacman-hook.log" && hook_seen=1
+  grep -Fq 'linux.preset reads /etc/mkinitcpio.conf directly' "$test_root/r11-custom-config-pacman-hook.log" && report_seen=1
+  module_version=$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")
+  for image in "${NV_TEST_IMAGES[@]}"; do
+    lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
+    check_image_versions_and_firmware "$image" "$module_version" || image_ok=0
+    modules=$(image_modules "$image" 2>/dev/null || true)
+    [[ -z $modules ]] || image_ok=0
+  done
+  record 'R11/R15 Arch package hook may regenerate the custom preset with consistent images' \
+    "$([[ $status == 0 && $hook_seen == 1 && $image_ok == 1 ]] && echo 1 || echo 0)" \
+    "$preset; nvidia-utils $module_version; all images listable with no NVIDIA modules"
+  record 'R11 package hook preserves the named preset and config bytes' \
+    "$([[ $preset_hash == "$(sha256sum "$preset" | awk '{print $1}')" && $config_hash == "$(sha256sum /etc/mkinitcpio.conf | awk '{print $1}')" && $before_etc == "$(tree_hash /etc)" ]] && echo 1 || echo 0)" \
+    "$preset and /etc/mkinitcpio.conf"
+  record 'R11 package-hook run reports missing early KMS for the named preset' \
+    "$([[ $status == 0 && $report_seen == 1 ]] && echo 1 || echo 0)" "$preset"
+
   before_images=$(sha256sum "${NV_TEST_IMAGES[@]}")
   before_etc=$(tree_hash /etc)
   before_packages=$(package_manifest)
   run_nvidia_step r11-custom-config "$supported" -
   after_images=$(sha256sum "${NV_TEST_IMAGES[@]}")
-  record 'R11 bypassed drop-in is left alone and reported' "$([[ $last_status == 0 && $(grep -c 'reads /etc/mkinitcpio.conf directly' "$test_root/r11-custom-config.log") -ge 1 && $before_images == "$after_images" && $before_etc == "$(tree_hash /etc)" && $before_packages == "$(package_manifest)" ]] && echo 1 || echo 0)" "$preset"
+  record 'R11 bypassed drop-in is left alone, reported, and unchanged on rerun' \
+    "$([[ $last_status == 0 && $before_images == "$after_images" && $before_etc == "$(tree_hash /etc)" && $before_packages == "$(package_manifest)" && $preset_hash == "$(sha256sum "$preset" | awk '{print $1}')" && $config_hash == "$(sha256sum /etc/mkinitcpio.conf | awk '{print $1}')" ]] && echo 1 || echo 0)" \
+    "$preset; no package transaction on rerun"
+  grep -Fq 'linux.preset reads /etc/mkinitcpio.conf directly' "$test_root/r11-custom-config.log" && rerun_report_seen=1
+  record 'R11 rerun reports missing early KMS for the named preset' \
+    "$([[ $last_status == 0 && $rerun_report_seen == 1 ]] && echo 1 || echo 0)" "$preset"
   cmp -s "$test_copy" "$preset" || record 'R11 preset bytes are preserved' 0 "$preset changed during the step"
   sudo mv "$saved" "$preset"
   run_nvidia_step r11-restore-default "$supported" -
@@ -1053,7 +1088,8 @@ test_user_partial_kernels() {
 test_pacman_hook_failure_with_partial_kernel() {
   local linux_kernel lts_kernel build_link_path module_version config_hash
   local linux_images_before linux_images_after lts_images_before lts_images_after status image image_ok=1 restore_status=0
-  local module modules step_log hook_report_ok partial_report_ok current_version
+  local module modules step_log hook_report_ok partial_report_ok current_version linux_preset
+  local linux_preset_hash r11_config_hash r11_report_ok=0 r11_image_ok=1 r11_files_unchanged=0
   local -a required_partial=(nvidia nvidia_modeset)
   linux_kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
   lts_kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
@@ -1088,6 +1124,41 @@ test_pacman_hook_failure_with_partial_kernel() {
     if restore_kernel_modules "$lts_kernel"; then rm -f "$test_root/partial-kernel-path"; fi
     return
   fi
+  linux_preset=/etc/mkinitcpio.d/linux.preset
+  if [[ -e $test_root/linux.preset.saved ]] ||
+     ! grep -Eq '^[[:space:]]*MODULES[[:space:]]*=[[:space:]]*\(\)[[:space:]]*$' /etc/mkinitcpio.conf; then
+    record 'R11/R15 custom-preset hook fixture is available' 0 'preset backup exists or the fresh VM config is not MODULES=()'
+    sudo rm -f "$user_config"
+    if restore_kernel_modules "$lts_kernel"; then rm -f "$test_root/partial-kernel-path"; fi
+    return
+  fi
+  sudo cp -a "$linux_preset" "$test_root/linux.preset.saved"
+  sudo cp /etc/mkinitcpio.conf "$r11_config"
+  r11_config_hash=$(sha256sum "$r11_config" | awk '{print $1}')
+  printf '\nALL_config="%s"\n' "$r11_config" >"$test_root/linux.preset.r11"
+  sudo cp "$test_root/linux.preset.r11" "$linux_preset"
+  if ! sudo mkinitcpio -p linux >"$test_root/r15-hook-r11-prepare.log" 2>&1; then
+    record 'R11/R15 custom preset image fixture can be prepared' 0 'mkinitcpio failed using the named config'
+    sudo mv "$test_root/linux.preset.saved" "$linux_preset"
+    sudo rm -f "$r11_config" "$user_config"
+    if restore_kernel_modules "$lts_kernel"; then rm -f "$test_root/partial-kernel-path"; fi
+    return
+  fi
+  image_set_for_kernel linux || r11_image_ok=0
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+    lsinitcpio "$image" >/dev/null 2>&1 || r11_image_ok=0
+    check_image_versions_and_firmware "$image" "$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")" || r11_image_ok=0
+    modules=$(image_modules "$image" 2>/dev/null || true)
+    [[ -z $modules ]] || r11_image_ok=0
+  done
+  if ((r11_image_ok == 0)); then
+    record 'R11/R15 custom preset image fixture is consistent and listable' 0 'linux image contains NVIDIA modules or failed inspection'
+    sudo mv "$test_root/linux.preset.saved" "$linux_preset"
+    sudo rm -f "$r11_config" "$user_config"
+    if restore_kernel_modules "$lts_kernel"; then rm -f "$test_root/partial-kernel-path"; fi
+    return
+  fi
+  linux_preset_hash=$(sha256sum "$linux_preset" | awk '{print $1}')
   module_version=$current_version
   linux_images_before=$(kernel_image_hashes linux 2>/dev/null || true)
   lts_images_before=$(kernel_image_hashes linux-lts 2>/dev/null || true)
@@ -1120,15 +1191,33 @@ test_pacman_hook_failure_with_partial_kernel() {
      grep -Fq 'does not promise this kernel reaches the desktop' "$step_log"; then
     partial_report_ok=1
   fi
+  r11_image_ok=1
+  image_set_for_kernel linux || r11_image_ok=0
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+    lsinitcpio "$image" >/dev/null 2>&1 || r11_image_ok=0
+    check_image_versions_and_firmware "$image" "$module_version" || r11_image_ok=0
+    modules=$(image_modules "$image" 2>/dev/null || true)
+    [[ -z $modules ]] || r11_image_ok=0
+  done
+  if grep -Fq "linux.preset reads $r11_config directly" "$step_log"; then r11_report_ok=1; fi
+  if [[ $linux_preset_hash == "$(sha256sum "$linux_preset" | awk '{print $1}')" &&
+        $r11_config_hash == "$(sha256sum "$r11_config" | awk '{print $1}')" ]]; then
+    r11_files_unchanged=1
+  fi
   record 'R15 failed linux package hook keeps its prior images byte-identical' \
     "$([[ $status != 0 && $hook_report_ok == 1 && -n $linux_images_before && $linux_images_before == "$linux_images_after" ]] && echo 1 || echo 0)" \
     "linux $linux_kernel; hook failure reported after the transaction"
+  record 'R11/R15 failed hook leaves custom preset, config, and consistent image intact' \
+    "$([[ $status != 0 && $hook_report_ok == 1 && $r11_report_ok == 1 && $r11_image_ok == 1 && $r11_files_unchanged == 1 && $linux_images_before == "$linux_images_after" ]] && echo 1 || echo 0)" \
+    "$linux_preset; $r11_config; hook failure remains a step failure"
   record 'R15 other user-partial kernel stays consistent and is reported with its fix' \
     "$([[ $status != 0 && $image_ok == 1 && $partial_report_ok == 1 && \
           $config_hash == "$(sha256sum "$user_config" | awk '{print $1}')" ]] && echo 1 || echo 0)" \
     "linux-lts $lts_kernel; images ${lts_images_before:+checked}; config $user_config"
 
   sudo mv "$test_root/linux-lts-build-link.saved" "$build_link_path"
+  sudo mv "$test_root/linux.preset.saved" "$linux_preset"
+  sudo rm -f "$r11_config"
   sudo rm -f "$user_config"
   if restore_kernel_modules "$lts_kernel"; then
     restore_status=0
