@@ -10,13 +10,24 @@ if ((GOOARCHY_BUILD_LOCAL_GOOARCHY)); then
   checkout_commit=$(git -C "$GOOARCHY_PATH" rev-parse HEAD)
   report "Building gooarchy and gooarchy-flavorings locally from checkout $checkout_commit because it is dirty or differs from repository source $GOOARCHY_REPOSITORY_SOURCE_COMMIT; repository copies are skipped. To return, use a clean checkout at the repository source commit and rerun install.sh."
 
+  flavorings_recipe=$GOOARCHY_PATH/packaging/gooarchy-flavorings/PKGBUILD
+  flavorings_source=$GOOARCHY_PATH
+  flavorings_ref=$checkout_commit
+  if [[ -f $flavorings_recipe ]]; then
+    flavorings_source=$(sed -n 's/^url="\(.*\)"$/\1/p' "$flavorings_recipe")
+    flavorings_ref=$(sed -n 's/^_commit=//p' "$flavorings_recipe")
+    [[ -n $flavorings_source && $flavorings_ref =~ ^[[:xdigit:]]{40}$ ]] || {
+      echo "The distro's gooarchy-flavorings recipe has no valid source URL and commit for the build report." >&2
+      exit 1
+    }
+  fi
+
   dir=$GOOARCHY_BUILD/gooarchy-packaging
   rm -rf -- "$dir"
   mkdir -p "$dir"
   cp "$GOOARCHY_PATH/packaging/arch/PKGBUILD" "$dir/"
   GOOARCHY_PATH=$GOOARCHY_PATH build_package "$dir"
 
-  flavorings_recipe=$GOOARCHY_PATH/packaging/gooarchy-flavorings/PKGBUILD
   if [[ -f $flavorings_recipe ]]; then
     mapfile -t files < <(built_files "$dir" gooarchy)
     flavorings_dir=$GOOARCHY_BUILD/gooarchy-flavorings-packaging
@@ -33,7 +44,7 @@ if ((GOOARCHY_BUILD_LOCAL_GOOARCHY)); then
   install_built "${files[@]}"
   record_build gooarchy "$GOOARCHY_PATH" "$checkout_commit" \
     "$(pacman -Q gooarchy | awk '{print $2}')"
-  record_build gooarchy-flavorings "$GOOARCHY_PATH" "$checkout_commit" \
+  record_build gooarchy-flavorings "$flavorings_source" "$flavorings_ref" \
     "$(pacman -Q gooarchy-flavorings | awk '{print $2}')"
 else
   targets=()
