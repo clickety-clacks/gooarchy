@@ -51,9 +51,17 @@ gooarchy_test_install_mkinitcpio_hook() {
   fi
 }
 
+systemctl() {
+  printf '%s\n' "$*" >>"${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/systemctl.trace"
+  command systemctl "$@"
+}
+
 sudo() {
   local fail_preset= fail_kernel pkgbase rc is_upgrade=0 hook_installed=0
   local -a args=("$@")
+  if [[ ${args[0]:-} == systemctl ]]; then
+    printf '%s\n' "${args[*]}" >>"${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/systemctl.trace"
+  fi
   if [[ ${1:-} == pacman && " $* " == *' -Syu '* &&
         ${GOOARCHY_TEST_CAPTURE_ARCH_UPGRADE:-} == 1 ]]; then
     fail_preset=${GOOARCHY_TEST_ARCH_UPGRADE_HOOK_FAIL_PRESET:-}
@@ -257,6 +265,21 @@ PY
 
 package_manifest() { pacman -Q | sort; }
 
+verify_repository_driver_pair() {
+  local utils_version dkms_version
+  utils_version=$(LC_ALL=C pacman -Si extra/nvidia-utils 2>/dev/null |
+    awk -F ': ' '$1 == "Version" { print $2; exit }' || true)
+  dkms_version=$(LC_ALL=C pacman -Si extra/nvidia-open-dkms 2>/dev/null |
+    awk -F ': ' '$1 == "Version" { print $2; exit }' || true)
+  if [[ -z $utils_version || -z $dkms_version || $utils_version != "$dkms_version" ]]; then
+    record 'NVIDIA VM repository pair is version-consistent before package mutation' 0 \
+      "nvidia-utils ${utils_version:-unavailable}; nvidia-open-dkms ${dkms_version:-unavailable}"
+    return 1
+  fi
+  record 'NVIDIA VM repository pair is version-consistent before package mutation' 1 \
+    "nvidia-utils/nvidia-open-dkms $utils_version"
+}
+
 ensure_archive_pair() {
   local current_version utils_url dkms_url utils_version dkms_version
   local -a urls=()
@@ -362,6 +385,7 @@ run_full_installer() {
   [[ $hook_fail_preset == - ]] || overrides+=("GOOARCHY_TEST_ARCH_UPGRADE_HOOK_FAIL_PRESET=$hook_fail_preset")
   [[ $failpoint == - ]] || overrides+=("GOOARCHY_TEST_NVIDIA_FAIL=$failpoint")
   rm -f "$test_root/arch-upgrade-state.tsv"
+  : >"$test_root/systemctl.trace"
   if (cd "$repo" && env -u GOOARCHY_TEST_NVIDIA_FAIL -u GOOARCHY_TEST_NVIDIA_DEVICES \
     GOOARCHY_TEST_NVIDIA_DEVICES="$supported" BASH_ENV="$test_root/nvidia-test-bash-env.sh" \
     GOOARCHY_VM_NVIDIA_TEST_ROOT="$test_root" "${overrides[@]}" \
@@ -586,6 +610,7 @@ check_covered_kernels() {
 
 preinstall() {
   local packages_before etc_before boot_before modules_before reports_before status failure unit_before units_absent=1 unit
+  verify_repository_driver_pair || return 1
   packages_before=$(package_manifest)
   etc_before=$(tree_hash /etc)
   boot_before=$(tree_hash /boot)
@@ -628,6 +653,7 @@ preinstall() {
 postinstall() {
   local before_packages before_etc before_boot before_reports after_units before_units unit
   local source_hash status output unit_before unit_after
+  verify_repository_driver_pair || return 1
   check_covered_kernels
   if [[ ${GOOARCHY_VM_REQUIRE_LINUX_GOOARCHY:-1} == 1 ]]; then
     local gooarchy_kernel
@@ -680,12 +706,92 @@ postinstall() {
   test_foreign_driver
   test_held_driver
   test_r15_step_regeneration_after_successful_arch_upgrade
+  test_r13_full_installer_systemctl_trace
   test_r15a_stale_baseline
   test_r15a_arch_upgrade_hook
 
   printf '\nNVIDIA VM matrix: %s/%s checks passed\n' "$((checks - failures))" "$checks"
   printf 'Results: %s/results.tsv\n' "$test_root"
   ((failures == 0))
+}
+
+test_r13_full_installer_systemctl_trace() {
+  local before after status=0
+  before=$(cat "$test_root/units-after-nvidia-utils-transaction.txt")
+  after=$(unit_states)
+  [[ $before == "$after" ]] || status=1
+  record 'R13 NVIDIA units retain their state through the full synthetic install' "$((status == 0))" \
+    'states after the nvidia-utils transaction compared with the full installer result'
+  status=0
+  if [[ ! -f $test_root/systemctl.trace ]] ||
+     grep -E '(^|[[:space:]])(enable|disable|mask|unmask|preset)([[:space:]].*)?[[:space:]]nvidia-' \
+       "$test_root/systemctl.trace"; then
+    status=1
+  fi
+  record 'R13 full installer systemctl trace contains no NVIDIA unit state changes' "$((status == 0))" \
+    "trace $test_root/systemctl.trace"
+}
+
+reference() {
+  local kernel pkgbase module_version units_before units_after packages_before etc_before boot_before
+  local image image_ok=1 module status module_dir kernel_count=0
+  local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+  verify_repository_driver_pair || return 1
+  kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
+  if [[ -z $kernel ]]; then
+    record 'R18 Linux reference kernel is available' 0 'linux module tree missing'
+    return 1
+  fi
+  for module_dir in /usr/lib/modules/*; do
+    [[ -f $module_dir/pkgbase ]] || continue
+    pkgbase=$(<"$module_dir/pkgbase")
+    kernel_count=$((kernel_count + 1))
+    if [[ $pkgbase != linux ]]; then
+      record 'R18 reference VM contains only the linux kernel' 0 "found $pkgbase (${module_dir##*/})"
+      return 1
+    fi
+  done
+  if ((kernel_count != 1)); then
+    record 'R18 reference VM contains only the linux kernel' 0 "found $kernel_count installed kernel trees"
+    return 1
+  fi
+  record 'R18 reference VM contains only the linux kernel' 1 "$kernel"
+  units_before=$(unit_states)
+  run_nvidia_step r18-reference-bootstrap "$supported" -
+  status=$last_status
+  if ((status != 0)); then
+    record 'R18 reference state can be established' 0 "installer status $status"
+    return 1
+  fi
+  module_version=$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")
+  for module in "${required[@]}"; do
+    [[ $(modinfo -k "$kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] || image_ok=0
+  done
+  image_set_for_kernel linux || image_ok=0
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+    image_has_modules_at_version "$image" "$module_version" "${required[@]}" || image_ok=0
+  done
+  if ! grep -Eq '^[[:space:]]*options[[:space:]]+nvidia([[:space:]].*)?NVreg_UseKernelSuspendNotifiers=1' /usr/lib/modprobe.d/nvidia-utils.conf ||
+     ! modprobe -c | grep -Eq '^[[:space:]]*options[[:space:]]+nvidia([[:space:]].*)?NVreg_UseKernelSuspendNotifiers=1' ||
+     grep -RqsE 'NVreg_UseKernelSuspendNotifiers|NVreg_PreserveVideoMemoryAllocations' /etc/modprobe.d/gooarchy-nvidia.conf; then
+    image_ok=0
+  fi
+  units_after=$(unit_states)
+  [[ $units_before == "$units_after" ]] || image_ok=0
+  record 'R18 reference state has four current modules, firmware, notifier default and unchanged sleep units' \
+    "$image_ok" "linux $kernel; NVIDIA module version $module_version"
+  if ((image_ok == 0)); then return 1; fi
+
+  packages_before=$(package_manifest)
+  etc_before=$(tree_hash /etc)
+  boot_before=$(tree_hash /boot)
+  units_before=$(unit_states)
+  run_nvidia_step r18-reference-rerun "$supported" -
+  status=$last_status
+  units_after=$(unit_states)
+  record 'R18 reference-state rerun is a no-op' \
+    "$([[ $status == 0 && $packages_before == "$(package_manifest)" && $etc_before == "$(tree_hash /etc)" && $boot_before == "$(tree_hash /boot)" && $units_before == "$units_after" && $(grep -c 'already set up for' "$test_root/r18-reference-rerun.log") -ge 1 ]] && echo 1 || echo 0)" \
+    "linux $kernel; nvidia-utils $(pacman -Q nvidia-utils | awk '{print $2}')"
 }
 
 test_user_full_list() {
@@ -1438,5 +1544,6 @@ test_r15a_arch_upgrade_hook() {
 case $phase in
   preinstall) preinstall ;;
   postinstall) postinstall ;;
-  *) echo "usage: $0 preinstall|postinstall" >&2; exit 2 ;;
+  reference) reference ;;
+  *) echo "usage: $0 preinstall|postinstall|reference" >&2; exit 2 ;;
 esac
