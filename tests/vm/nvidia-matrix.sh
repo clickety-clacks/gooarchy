@@ -36,9 +36,13 @@ if [[ $phase == r15-release ]]; then
     echo 'r15-release requires the held row and its NVIDIA artifact directory.' >&2
     exit 2
   }
-  IFS=$'\t' read -r held_row held_stamp <"$test_root/r15-boot-held"
+  IFS=$'\t' read -r held_row held_stamp held_plan_sha <"$test_root/r15-boot-held"
   [[ ${2:-} == "$held_row" && $held_stamp =~ ^[[:alnum:]_.-]+$ ]] || {
     echo 'r15-release row does not match the held NVIDIA failure state.' >&2
+    exit 2
+  }
+  [[ $held_plan_sha =~ ^[[:xdigit:]]{64}$ ]] || {
+    echo 'r15-release has no valid held-manifest hash.' >&2
     exit 2
   }
   if [[ -n ${GOOARCHY_NVIDIA_TEST_STAMP:-} && $GOOARCHY_NVIDIA_TEST_STAMP != "$held_stamp" ]]; then
@@ -624,7 +628,7 @@ kernel_sounds_for_boot() {
 
 hold_r15_failure_row() {
   local row=$1 partial_kernel= package_version module_version kernel_dir kernel pkgbase
-  local image image_hash image_path plan_tmp plan
+  local image image_hash image_path plan_tmp plan plan_sha boot_id
   [[ ${GOOARCHY_NVIDIA_HOLD_R15_ROW:-} == "$row" ]] || return 0
   [[ $row =~ ^[[:alnum:]_.-]+$ ]] || { echo "invalid R15 row name: $row" >&2; exit 2; }
   [[ -n ${GOOARCHY_NVIDIA_ARTIFACTS:-} ]] || {
@@ -641,10 +645,11 @@ hold_r15_failure_row() {
   package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
   module_version=
   [[ -z $package_version ]] || module_version=$(module_version_from_package "$package_version")
+  boot_id=$(cat /proc/sys/kernel/random/boot_id)
   plan=$test_root/r15-boot-$row.tsv
   plan_tmp=$plan.$$
   {
-    printf 'schema\t1\nrow\t%s\n' "$row"
+    printf 'schema\t1\nrow\t%s\nhold-boot-id\t%s\n' "$row" "$boot_id"
     printf 'nvidia-utils\t%s\n' "${package_version:-absent}"
     for kernel_dir in /usr/lib/modules/*; do
       [[ -f $kernel_dir/pkgbase ]] || continue
@@ -667,18 +672,25 @@ hold_r15_failure_row() {
     done
   } >"$plan_tmp"
   mv "$plan_tmp" "$plan"
-  printf '%s\t%s\n' "$row" "$test_stamp" >"$test_root/r15-boot-held"
+  plan_sha=$(sha256sum -- "$plan" | awk '{print $1}')
+  printf '%s\t%s\t%s\n' "$row" "$test_stamp" "$plan_sha" >"$test_root/r15-boot-held"
   printf 'R15 row %s held for reboot checks; eligible kernels are in %s\n' "$row" "$plan"
   exit 0
 }
 
 verify_r15_boot_evidence() {
-  local row=$1 stamp=$2 plan=$test_root/r15-boot-$1.tsv
+  local row=$1 stamp=$2 manifest_hash=$3 plan=$test_root/r15-boot-$1.tsv
   local type a b c d kernel path expected_hash actual_hash expected_utils=absent actual_utils
-  local evidence boot_id line schema_count=0 row_count=0 utils_count=0
-  local -A sound_kernels=() image_counts=()
+  local evidence boot_id hold_boot_id line schema_count=0 row_count=0 utils_count=0 hold_boot_count=0
+  local current_plan_hash
+  local -A sound_kernels=() image_counts=() seen_boot_ids=()
   local -a expected_lines=()
   [[ -s $plan ]] || { echo "R15 boot manifest is missing for $row." >&2; return 1; }
+  current_plan_hash=$(sha256sum -- "$plan" | awk '{print $1}') || return 1
+  [[ $current_plan_hash == "$manifest_hash" ]] || {
+    echo "R15 boot manifest changed before fixture recovery for $row." >&2
+    return 1
+  }
   while IFS=$'\t' read -r type a b c d; do
     case $type in
       schema)
@@ -688,6 +700,14 @@ verify_r15_boot_evidence() {
       row)
         ((row_count += 1))
         [[ $a == "$row" ]] || { echo "R15 manifest row mismatch for $row." >&2; return 1; }
+        ;;
+      hold-boot-id)
+        ((hold_boot_count += 1))
+        hold_boot_id=$a
+        [[ $hold_boot_id =~ ^[[:xdigit:]-]{36}$ ]] || {
+          echo "R15 manifest has an invalid hold boot ID for $row." >&2
+          return 1
+        }
         ;;
       nvidia-utils)
         ((utils_count += 1))
@@ -719,7 +739,7 @@ verify_r15_boot_evidence() {
       *) echo "unknown R15 manifest record in $plan." >&2; return 1 ;;
     esac
   done <"$plan"
-  [[ $schema_count == 1 && $row_count == 1 && $utils_count == 1 ]] || {
+  [[ $schema_count == 1 && $row_count == 1 && $hold_boot_count == 1 && $utils_count == 1 ]] || {
     echo "R15 manifest is incomplete for $row." >&2
     return 1
   }
@@ -736,6 +756,11 @@ verify_r15_boot_evidence() {
       echo "R15 boot evidence has no valid boot ID for $row kernel $kernel." >&2
       return 1
     }
+    [[ $boot_id != "$hold_boot_id" && -z ${seen_boot_ids[$boot_id]:-} ]] || {
+      echo "R15 boot evidence does not show a distinct reboot for $row kernel $kernel." >&2
+      return 1
+    }
+    seen_boot_ids[$boot_id]=1
     expected_lines=(
       $'schema\t1'
       $'row\t'"$row"
@@ -2242,7 +2267,7 @@ case $phase in
   reference) reference ;;
   r15-row) r15_row "${2:-${GOOARCHY_NVIDIA_HOLD_R15_ROW:-}}" ;;
   r15-release)
-    verify_r15_boot_evidence "$held_row" "$held_stamp"
+    verify_r15_boot_evidence "$held_row" "$held_stamp" "$held_plan_sha"
     held=$(cut -f1 "$test_root/r15-boot-held")
     [[ ${2:-} == "$held" ]] || { echo 'r15-release row changed during validation.' >&2; exit 2; }
     rm -f "$test_root/r15-boot-held"
