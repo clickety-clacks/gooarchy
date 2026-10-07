@@ -1445,6 +1445,10 @@ nvidia_install() {
     done
   fi
 
+  if nvidia_test_failure "interrupt:after-commit"; then
+    nvidia_fail "Gooarchy VM test interrupted the NVIDIA step after the package transaction committed and before step-owned image generation. Rerun install.sh to finish setup."
+  fi
+
   NV_DRIVER_MODULE_VERSION=$(nvidia_module_version_from_package "$utils_version")
 
   if nvidia_config_has_nouveau; then

@@ -250,6 +250,9 @@ cleanup() {
     fi
     rm -f "$test_root/foreign-driver-installed"
   fi
+  if [[ -f $test_root/r15-interrupted-owned.saved ]]; then
+    sudo mv -f "$test_root/r15-interrupted-owned.saved" "$owned" || status=1
+  fi
   if [[ -e $test_root/r15a-recovery-needed || -e $test_root/driver-recovery-needed ]] &&
      ! restore_r15a_current_state; then
     printf 'NVIDIA package fixture cleanup could not restore current packages, DKMS modules, and images.\n' \
@@ -857,6 +860,7 @@ postinstall() {
   test_r13_full_installer_systemctl_trace
   test_r15a_stale_baseline
   test_r15a_arch_upgrade_hook
+  test_r15_interrupted_after_commit
 
   printf '\nNVIDIA VM matrix: %s/%s checks passed\n' "$((checks - failures))" "$checks"
   printf 'Results: %s/results.tsv\n' "$test_root"
@@ -1294,6 +1298,82 @@ test_r15_linux_gooarchy_dkms_failure() {
     "linux-gooarchy $kernel; module version $module_version"
   if [[ $status == 0 && $retry_ok == 1 ]]; then
     rm -f "$test_root/driver-recovery-needed"
+  fi
+}
+
+test_r15_interrupted_after_commit() {
+  local module_dir kernel pkgbase package_version module_version repo_utils repo_dkms status=0 image modules module
+  local images_ok=1 modules_ok=1 report_ok=0
+  local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+  if [[ -e $owned ]] && ! grep -Fxq \
+      '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
+    record 'R15 interruption fixture can preserve the existing owned path' 0 "$owned is user-owned"
+    return
+  fi
+  : >"$test_root/driver-recovery-needed"
+  if [[ -e $owned ]]; then sudo cp -a "$owned" "$test_root/r15-interrupted-owned.saved"; fi
+  sudo rm -f "$owned" "$user_config" "$dynamic_modules"
+  if ! sudo pacman -Rdd --noconfirm nvidia-open-dkms nvidia-utils; then
+    record 'R15 interruption fixture removes the driver before the transaction' 0 'pacman removal failed'
+    return
+  fi
+  for module_dir in /usr/lib/modules/*; do
+    [[ -f $module_dir/pkgbase ]] || continue
+    pkgbase=$(<"$module_dir/pkgbase")
+    sudo mkinitcpio -p "$pkgbase" >/dev/null 2>&1 || status=1
+  done
+  for module_dir in /usr/lib/modules/*; do
+    [[ -f $module_dir/pkgbase ]] || continue
+    pkgbase=$(<"$module_dir/pkgbase")
+    image_set_for_kernel "$pkgbase" || { images_ok=0; continue; }
+    for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+      lsinitcpio "$image" >/dev/null 2>&1 || images_ok=0
+      modules=$(image_modules "$image" 2>/dev/null || true)
+      [[ -z $modules ]] || images_ok=0
+    done
+  done
+  record 'R15 interruption fixture starts from complete fallback images' \
+    "$([[ $status == 0 && $images_ok == 1 ]] && echo 1 || echo 0)" \
+    'driver packages removed; every kernel image listable without NVIDIA modules'
+  if ((status != 0 || images_ok == 0)); then return; fi
+
+  run_nvidia_step r15-interrupted-after-commit "$supported" interrupt:after-commit
+  status=$last_status
+  package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
+  module_version=$(module_version_from_package "$package_version")
+  repo_utils=$(pacman -Si extra/nvidia-utils 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
+  repo_dkms=$(pacman -Si extra/nvidia-open-dkms 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
+  grep -Fq 'interrupted the NVIDIA step after the package transaction committed' \
+    "$test_root/r15-interrupted-after-commit.log" && report_ok=1
+  [[ $package_version == "$repo_utils" && $repo_utils == "$repo_dkms" &&
+     $(pacman -Qe nvidia-open-dkms >/dev/null 2>&1; echo $?) == 0 && ! -e $owned ]] || modules_ok=0
+  for module_dir in /usr/lib/modules/*; do
+    [[ -f $module_dir/pkgbase ]] || continue
+    kernel=${module_dir##*/}
+    pkgbase=$(<"$module_dir/pkgbase")
+    for module in "${required[@]}"; do
+      [[ $(modinfo -k "$kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] || modules_ok=0
+    done
+    image_set_for_kernel "$pkgbase" || { images_ok=0; continue; }
+    for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+      lsinitcpio "$image" >/dev/null 2>&1 || images_ok=0
+      check_image_versions_and_firmware "$image" "$module_version" || images_ok=0
+      modules=$(image_modules "$image" 2>/dev/null || true)
+      [[ -z $modules ]] || images_ok=0
+    done
+  done
+  record 'R15 interruption after commit leaves every kernel covered with listable fallback images' \
+    "$([[ $status != 0 && $report_ok == 1 && $modules_ok == 1 && $images_ok == 1 ]] && echo 1 || echo 0)" \
+    "nvidia-utils $package_version; transaction committed; owned early-KMS file and step image setup not reached"
+  hold_r15_failure_row interrupt-after-commit
+
+  if [[ -f $test_root/r15-interrupted-owned.saved ]]; then
+    sudo mv -f "$test_root/r15-interrupted-owned.saved" "$owned"
+  fi
+  if restore_r15a_current_state; then
+    record 'R17 interrupted transaction fixture is restored to current early KMS' 1 'current packages, DKMS modules, and images restored'
+  else
+    record 'R17 interrupted transaction fixture is restored to current early KMS' 0 'cleanup recovery failed'
   fi
 }
 
@@ -2033,6 +2113,10 @@ r15_row() {
     linux-gooarchy-dkms)
       verify_repository_driver_pair || return 1
       test_r15_linux_gooarchy_dkms_failure
+      ;;
+    interrupt-after-commit)
+      verify_repository_driver_pair || return 1
+      test_r15_interrupted_after_commit
       ;;
     package-hook-linux-only|package-hook-linux-partial-lts)
       verify_repository_driver_pair || return 1
