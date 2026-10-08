@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check shell syntax
-        run: git ls-files -z '*.sh' | xargs -0 -r bash -n
+        run: git ls-files -z '*.sh' | xargs -0 -r -n1 bash -n
       - name: Check Python syntax
         run: |
           python3 - <<'PY'
