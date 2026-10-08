@@ -1,3 +1,4 @@
+run_logged "$GOOARCHY_INSTALL/packaging/repository.sh"
 run_logged "$GOOARCHY_INSTALL/packaging/base.sh"
 run_logged "$GOOARCHY_INSTALL/packaging/scottland.sh"
 run_logged "$GOOARCHY_INSTALL/packaging/strata.sh"

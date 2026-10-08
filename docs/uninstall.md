@@ -1,6 +1,7 @@
 # Removing Gooarchy (rollback)
 
-Gooarchy's installer changes three kinds of things. Each comes off separately, and none of
+Gooarchy's installer changes packages, the pacman repository configuration and trusted key, user
+settings, and (with `--autologin`) a systemd drop-in. Each comes off separately, and none of
 it touches your files beyond the few settings listed below.
 
 Nothing the installer does is rolled back automatically: the Arch upgrade (`pacman -Syu`) and every
@@ -35,8 +36,8 @@ To back out instead:
 ## 1. Packages
 
 Everything the installer added from packages hangs off two packages, `gooarchy` and
-`gooarchy-flavorings`. The Arch packages from `install/gooarchy-base.packages` and the
-`scottland` and `strata-bin` packages it built went in as their dependencies. Remove those two
+`gooarchy-flavorings`. The Arch packages from `install/gooarchy-base.packages` and the repository's
+`scottland` and locally built `strata-bin` packages went in as their dependencies. Remove those two
 packages from a console, not from inside Scottland:
 
 ```sh
@@ -45,7 +46,8 @@ sudo pacman -Rns gooarchy gooarchy-flavorings
 
 That also removes their dependencies that nothing else needs. A package you had installed
 yourself before Gooarchy stays: the installer never changes the install reason of a package
-that was already there. `git` and `base-devel` (installed to build Scottland and Strata) stay;
+that was already there. `git` and `base-devel` (installed to build Strata, and Scottland when its
+pin is overridden) stay;
 remove them yourself if you don't want them. To see what would go first, run
 `pacman -Rns --print gooarchy gooarchy-flavorings`.
 
@@ -55,7 +57,16 @@ tty1 session start), `/etc/profile.d/gooarchy-flavorings.sh`, `/etc/tmux.conf`,
 hooks and config fragments under `/usr/lib/scottland/`.
 If you edited `/etc/tmux.conf`, pacman keeps your edited copy as `/etc/tmux.conf.pacsave`.
 
-## 2. The autologin setting (only with `--autologin`)
+## 2. The package repository and key
+
+If the installer added the repository, remove its `[gooarchy]` section from `/etc/pacman.conf`.
+The install report records the key fingerprint; remove that trust with:
+
+```sh
+sudo pacman-key --delete <fingerprint-from-the-install-report>
+```
+
+## 3. The autologin setting (only with `--autologin`)
 
 Running the installer again without `--autologin` does not remove it; delete the drop-in:
 
@@ -65,7 +76,7 @@ sudo rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null
 sudo systemctl daemon-reload
 ```
 
-## 3. Settings in your home directory
+## 4. Settings in your home directory
 
 `gooarchy-flavorings-apply` only filled settings that weren't set, once each. A setting it found
 already set was left alone and logged in `~/.local/state/gooarchy/reports.log`. To undo what it
