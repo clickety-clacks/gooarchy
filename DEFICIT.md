@@ -65,7 +65,6 @@ need it" means the severity applies to the people who depend on the feature.
 | Battery and power | High for laptops | VM | No UPower, no power-profiles-daemon: no battery level anywhere, no low-battery warning before the machine dies, no power profiles. |
 | Screen sharing and screen recording | High | VM | The portal has a Settings backend and a file chooser (both exercised in the VM) but no ScreenCast, Screenshot or RemoteDesktop backend, so screen sharing in Chromium (video calls) and screen recording don't work. |
 | Screenshot tools | Medium | VM | Print saves the whole screen into the Pictures folder, following a moved or localized folder (VM), and Shift+Print a selected region (Scottland's binding). No feedback that it happened, no copy to the clipboard, no annotation. |
-| X11 apps | High | VM | Xwayland isn't installed, so X11-only apps (many games, Steam, older Electron and Java apps) don't start. Wayfire logs that it can't find `/usr/bin/Xwayland`. |
 | Memory pressure | Medium | VM | No swap, zram or out-of-memory policy of Gooarchy's own: whatever the base install has (the VM had a 512 MiB swap file, no zram, systemd-oomd not enabled). A loaded desktop can freeze before the kernel's OOM killer acts. |
 | Printing | Medium | Config | No printer support (CUPS isn't installed), so nothing reaches a printer. Chromium's "Save as PDF" doesn't need it. |
 | Removable media | Medium | Config | udisks2 and gvfs are present (Strata's dependencies), but nothing automounts drives or offers to open them, and without a polkit agent some mounts are refused. |
@@ -102,7 +101,7 @@ need it" means the severity applies to the people who depend on the feature.
 | Offline install | Medium | Config | Everything is downloaded during install; there's no offline path. |
 | Boot and recovery | Medium | Undecided | No rescue boot entry or recovery tooling of Gooarchy's own. (Root logging in on tty1 gets a plain console, VM.) |
 | Firmware updates | Low | Undecided | No fwupd or firmware update path. |
-| Hardware support | High | Config | Only tested in a QEMU/KVM VM. Gooarchy doesn't install firmware (`linux-firmware`), microcode, GPU drivers beyond Mesa, or anything for NVIDIA, and has no laptop quirks or supported-hardware list. |
+| Hardware support | High | Config | Only tested in a QEMU/KVM VM. Gooarchy installs `linux-firmware` (VM) but no microcode or GPU drivers beyond Mesa, has nothing for NVIDIA (tracked separately until it lands), and has no laptop quirks or supported-hardware list. |
 | Releases, support | Medium | Config | No versions, release channels, changelog, or support and bug-reporting channels. Package versions are `0.0.1.r<commits>.g<hash>`. |
 | Other architectures | Low | Config | x86_64 only (Scottland's package is x86_64). |
 
