@@ -155,7 +155,7 @@ arch=('any')
 PKG
 cat >"$fixture/packaging/gooarchy-flavorings/PKGBUILD" <<'PKG'
 pkgname=gooarchy-flavorings
-_commit=0123456789abcdef0123456789abcdef01234567
+_tag=fixture-tag-v1
 pkgver=1.0
 pkgrel=1
 arch=('any')
@@ -468,11 +468,57 @@ export GOOARCHY_TEST_WAYFIRE_PACKAGE_VERSION="$test_wayfire_package_version"
 
 publish="$fixture/packaging/repository/publish.sh"
 first_publish_output=$("$publish" --all)
-grep -Fq 'gooarchy-flavorings 0123456789abcdef0123456789abcdef01234567' \
+grep -Fq 'gooarchy-flavorings tag:fixture-tag-v1' \
   <<<"$first_publish_output" || {
-  echo "repository-publish-test: publish output omitted the flavorings source revision" >&2
+  echo "repository-publish-test: publish output omitted the flavorings tag pin" >&2
   exit 1
 }
+initial_tag=$(cat "$release_root/LATEST")
+sed -i -e 's/^_tag=fixture-tag-v1$/_commit=0123456789abcdef0123456789abcdef01234567/' \
+  -e 's/^pkgver=1.0$/pkgver=1.1/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+fixture_commit
+commit_publish_output=$("$publish" gooarchy-flavorings)
+grep -Fq 'Published gooarchy-flavorings version 1.1-1 (replaced 1.0-1); source revision:' \
+  <<<"$commit_publish_output" &&
+  grep -Fq 'gooarchy-flavorings commit:0123456789abcdef0123456789abcdef01234567' \
+    <<<"$commit_publish_output" || {
+    echo "repository-publish-test: publish output omitted the flavorings commit pin" >&2
+    exit 1
+  }
+commit_tag=$(cat "$release_root/LATEST")
+[[ $commit_tag != "$initial_tag" ]] || {
+  echo "repository-publish-test: the flavorings commit-pin publish did not advance the release" >&2
+  exit 1
+}
+valid_flavorings_recipe="$test_root/valid-flavorings-PKGBUILD"
+cp -- "$fixture/packaging/gooarchy-flavorings/PKGBUILD" "$valid_flavorings_recipe"
+assert_invalid_flavorings_pin() {
+  local case_name=$1
+  fixture_commit
+  if "$publish" gooarchy-flavorings >"$test_root/$case_name.out" 2>"$test_root/$case_name.err"; then
+    echo "repository-publish-test: publisher accepted invalid flavorings pin case $case_name" >&2
+    exit 1
+  fi
+  grep -Fq 'must pin exactly one full 40-digit _commit or valid _tag' \
+    "$test_root/$case_name.err" || {
+    echo "repository-publish-test: invalid flavorings pin case $case_name had no clear error" >&2
+    exit 1
+  }
+  [[ $(cat "$release_root/LATEST") == "$commit_tag" ]] || {
+    echo "repository-publish-test: invalid flavorings pin case $case_name changed latest" >&2
+    exit 1
+  }
+}
+printf '\n_tag=fixture-tag-v1\n' >>"$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+assert_invalid_flavorings_pin both
+cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i '/^_commit=/d' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+assert_invalid_flavorings_pin missing
+cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i 's/^_commit=.*/_tag=invalid?tag/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+assert_invalid_flavorings_pin malformed
+cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+fixture_commit
 python3 - "$test_root/incomplete.db" <<'PY'
 import io
 import sys
@@ -759,4 +805,4 @@ grep -Fq 'the latest repository database signature is invalid' "$test_root/tampe
   exit 1
 }
 
-printf 'PASS: initial six-package publish, R2 recipe addition, signatures, strict database records, R8 refusal, R9 retention, redirect lookup, and A3 filename guard.\n'
+printf 'PASS: tag and commit source reporting/refusal, initial six-package publish, R2 recipe addition, signatures, strict database records, R8 refusal, R9 retention, redirect lookup, and A3 filename guard.\n'

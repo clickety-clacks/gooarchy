@@ -31,8 +31,10 @@ draft stays unpublished and the prior latest release remains active.
 `tests/repository-publish-test.sh` exercises this flow with a local
 Releases-shaped stand-in, synthetic Arch packages, and a throwaway OpenPGP key.
 It checks the initial six-package database, adding a seventh recipe, signing,
-Scottland's exact Wayfire dependency, version refusal, package and signature
-retention, lookup through a local redirect, and the filename guard. The real
+Scottland's exact Wayfire dependency, exact flavorings `_tag` and `_commit`
+source reporting, refusal of missing/ambiguous/invalid flavorings pins, version
+refusal, package and signature retention, lookup through a local redirect, and
+the filename guard. The real
 1Password read, GitHub upload, and gooarchy.com redirect are separate setup and
 publish steps.
 

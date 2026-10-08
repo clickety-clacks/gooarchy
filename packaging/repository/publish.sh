@@ -9,6 +9,23 @@ repo_root=$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null) || {
 }
 die() { echo "publish: $*" >&2; exit 1; }
 
+read_flavorings_source_ref() {
+  local recipe_file=$1 commit_count tag_count commit tag
+  commit_count=$(grep -c '^_commit=' "$recipe_file" || true)
+  tag_count=$(grep -c '^_tag=' "$recipe_file" || true)
+  commit=$(sed -n 's/^_commit=//p' "$recipe_file")
+  tag=$(sed -n 's/^_tag=//p' "$recipe_file")
+
+  if [[ $commit_count == 1 && $tag_count == 0 && $commit =~ ^[[:xdigit:]]{40}$ ]]; then
+    printf 'commit:%s' "$commit"
+  elif [[ $commit_count == 0 && $tag_count == 1 && -n $tag ]] && \
+    git check-ref-format "refs/tags/$tag"; then
+    printf 'tag:%s' "$tag"
+  else
+    die "the flavorings recipe must pin exactly one full 40-digit _commit or valid _tag."
+  fi
+}
+
 checkout_branch=$(git -C "$repo_root" branch --show-current)
 [[ $checkout_branch == main ]] || die "publish from Gooarchy main, not $checkout_branch."
 [[ -z $(git -C "$repo_root" status --porcelain) ]] || die "the Gooarchy main checkout has uncommitted changes."
@@ -234,9 +251,7 @@ for package_name in "${requested_packages[@]}"; do
       case $package_name in
       gooarchy-flavorings)
         if [[ $recipe_file == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]]; then
-          flavorings_source_revision=$(sed -n 's/^_commit=//p' "$recipe_file" | sed -n '1p')
-          [[ $flavorings_source_revision =~ ^[[:xdigit:]]{40}$ ]] ||
-            die "the flavorings recipe has no full pinned source commit."
+          flavorings_source_revision=$(read_flavorings_source_ref "$recipe_file")
           source_revision[$package_name]="Gooarchy $checkout_commit; gooarchy-flavorings $flavorings_source_revision"
         else
           source_revision[$package_name]="Gooarchy $checkout_commit; Scottland themes $scottland_ref"
