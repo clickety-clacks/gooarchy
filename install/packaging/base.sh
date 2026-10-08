@@ -14,9 +14,11 @@ if ((GOOARCHY_REPLACE_SCOTTLAND)); then
     "gooarchy/scottland=$GOOARCHY_REPOSITORY_SCOTTLAND_VERSION"
   sudo pacman -U --asdeps --noconfirm "${REPOSITORY_PACKAGE_ARCHIVES[@]}"
   sudo pacman -D --asdeps scottland
-  recovery="rerun install.sh with GOOARCHY_SCOTTLAND_REF set to the previous source revision"
-  if [[ $GOOARCHY_PREVIOUS_SCOTTLAND_REF =~ ^[A-Za-z0-9._/-]+$ ]]; then
-    recovery="run GOOARCHY_SCOTTLAND_REF=$GOOARCHY_PREVIOUS_SCOTTLAND_REF ./install.sh"
+  recovery="restore the previous scottland package from the local pacman cache if available"
+  if [[ $GOOARCHY_PREVIOUS_SCOTTLAND_REF_KIND == tag ||
+    $GOOARCHY_PREVIOUS_SCOTTLAND_REF_KIND == branch ]] &&
+    [[ $GOOARCHY_PREVIOUS_SCOTTLAND_REF =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    recovery="run GOOARCHY_SCOTTLAND_REF=$GOOARCHY_PREVIOUS_SCOTTLAND_REF GOOARCHY_SCOTTLAND_REF_KIND=$GOOARCHY_PREVIOUS_SCOTTLAND_REF_KIND ./install.sh"
   fi
   report "Replaced local scottland $GOOARCHY_PREVIOUS_SCOTTLAND_VERSION with Gooarchy repository scottland $(pacman -Q scottland | awk '{print $2}') because no source pin was overridden. To go back, $recovery."
   sudo rm -rf -- "$repo_cache"

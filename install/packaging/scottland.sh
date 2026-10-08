@@ -9,7 +9,8 @@ load_repository_plan
 
 if ((GOOARCHY_BUILD_LOCAL_SCOTTLAND)); then
   src=$GOOARCHY_BUILD/scottland
-  checkout_source "$GOOARCHY_SCOTTLAND_REPO" "$GOOARCHY_SCOTTLAND_REF" "$src"
+  checkout_source "$GOOARCHY_SCOTTLAND_REPO" "$GOOARCHY_SCOTTLAND_REF" "$src" \
+    "$GOOARCHY_SCOTTLAND_SOURCE_KIND"
 
   rev=$(git -C "$src" rev-parse HEAD)
   count=$(git -C "$src" rev-list --count HEAD)
@@ -25,13 +26,14 @@ if ((GOOARCHY_BUILD_LOCAL_SCOTTLAND)); then
     echo "Scottland's PKGBUILD has changed shape; can't set the build identity" >&2
     exit 1
   }
-  report "Building Scottland locally from pin $GOOARCHY_SCOTTLAND_REF because the pin is overridden; the repository copy is skipped. To return, unset GOOARCHY_SCOTTLAND_REF and rerun install.sh."
+  report "Building Scottland locally from $GOOARCHY_SCOTTLAND_SOURCE_KIND pin $GOOARCHY_SCOTTLAND_REF because the pin is overridden; the repository copy is skipped. To return, unset GOOARCHY_SCOTTLAND_REF and rerun install.sh."
   echo "Scottland ${rev:0:12} ($(git -C "$src" log -1 --format=%s)) for Wayfire $wayfire: scottland $version"
 
   build_package "$src/packaging/arch"
   mapfile -t files < <(built_files "$src/packaging/arch" scottland)
   install_built --asdeps "${files[@]}"
-  record_build scottland "$GOOARCHY_SCOTTLAND_REPO" "$rev" "$version"
+  record_build scottland "$GOOARCHY_SCOTTLAND_REPO" "$rev" "$version" \
+    "$GOOARCHY_SCOTTLAND_SOURCE_KIND" "$GOOARCHY_SCOTTLAND_REF"
 else
   package_is_repository_copy scottland || {
     echo "Gooarchy's scottland package was not installed as a signed repository copy." >&2

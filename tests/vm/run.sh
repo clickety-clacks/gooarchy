@@ -309,32 +309,36 @@ plugin_state() {
 }
 
 cmd_rebuild_check() {
-  # Scottland's PKGBUILD has a fixed version; a rebuild at another commit (or for another Wayfire)
-  # must still replace the installed plugin, and the package version must say what was built.
+  # A branch rebuild (or one for another Wayfire) must still replace the installed plugin, and
+  # the package version must say what was built.
   running || die "the guest isn't running"
   local out; out=$(artifacts)
-  local pinned; pinned=$(sed -n 's/.*GOOARCHY_SCOTTLAND_REF:-\([0-9a-f]*\)}.*/\1/p' "$repo/install/sources.conf")
-  local other=${GOOARCHY_VM_REBUILD_REF:-f3ba4c56d9d84e906e9023cce9f2fa786c6bce45}
-  local a b c d status=0
+  local other=${GOOARCHY_VM_REBUILD_REF:-main}
+  local other_kind=${GOOARCHY_VM_REBUILD_REF_KIND:-branch}
+  local a b c d other_commit default_version status=0
   a=$(plugin_state)
-  guest "cd ~/gooarchy && GOOARCHY_SCOTTLAND_REF=$other $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-b.log" 2>&1 || status=$?
+  guest "cd ~/gooarchy && GOOARCHY_SCOTTLAND_REF=$other GOOARCHY_SCOTTLAND_REF_KIND=$other_kind $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-b.log" 2>&1 || status=$?
   b=$(plugin_state)
+  other_commit=$(guest "awk -F '\t' '\$1 == \"scottland\" { ref = \$3 } END { print ref }' ~/.local/state/gooarchy/builds.tsv")
   local ok=0
-  [[ $status == 0 && ${a#* } != "${b#* }" && $b == *g${other:0:7}* ]] && ok=1
-  hcheck "rebuilding Scottland at another commit (same upstream version) replaces the installed plugin" "$ok" \
-    "A: $a; B: $b"
+  [[ $status == 0 && $other_commit =~ ^[[:xdigit:]]{40}$ &&
+    ${a#* } != "${b#* }" && $b == *g${other_commit:0:7}* ]] && ok=1
+  hcheck "rebuilding Scottland from a branch pin replaces the installed plugin" "$ok" \
+    "A: $a; B: $b; branch resolved to $other_commit"
   status=0
   guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-a.log" 2>&1 || status=$?
   c=$(plugin_state)
   ok=0
-  [[ $status == 0 && $c == *g${pinned:0:7}* && ${c#* } != "${b#* }" ]] && ok=1
-  hcheck "going back to the pinned commit replaces the plugin again" "$ok" "now: $c"
+  default_version=${c%% *}
+  [[ $status == 0 && $default_version =~ \.g[[:xdigit:]]{7}\.wf &&
+    ${c#* } != "${b#* }" ]] && ok=1
+  hcheck "returning to the configured main pin replaces the branch build" "$ok" "now: $c"
   status=0
   guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-same.log" 2>&1 || status=$?
   d=$(plugin_state)
   local reinstalled; reinstalled=$(guest 'grep -c "reinstalled scottland" /var/log/pacman.log')
   ok=0
-  [[ $status == 0 && $reinstalled -gt 0 && $d == *g${pinned:0:7}* ]] && ok=1
+  [[ $status == 0 && $reinstalled -gt 0 && $d == "$c" ]] && ok=1
   hcheck "an identical rebuild is installed too (not skipped as already installed)" "$ok" \
     "pacman.log 'reinstalled scottland': $reinstalled; now: $d"
   guest 'pacman -Qi scottland | grep -E "^(Version|Depends On)"' | tee "$out/scottland-package.txt" >&2

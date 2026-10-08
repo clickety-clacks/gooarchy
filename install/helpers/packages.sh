@@ -37,9 +37,10 @@ install_built() {
 }
 
 # A cached checkout of REPO at REF in DIR: re-cloned when the cache points somewhere else (an
-# override of the repository URL), fetched otherwise, then checked out clean.
+# override of the repository URL), fetched otherwise, then checked out clean. KIND selects an exact
+# tag or remote branch; commit is reserved for the fixed legacy default pin.
 checkout_source() {
-  local repo=$1 ref=$2 dir=$3
+  local repo=$1 ref=$2 dir=$3 kind=${4:-commit} selector=$2
   if [[ -d $dir/.git && $(git -C "$dir" remote get-url origin 2>/dev/null) != "$repo" ]]; then
     echo "The cached checkout in $dir came from $(git -C "$dir" remote get-url origin); cloning $repo instead."
     rm -rf "$dir"
@@ -50,16 +51,23 @@ checkout_source() {
     rm -rf "$dir"
     git clone --quiet "$repo" "$dir"
   fi
-  git -C "$dir" -c advice.detachedHead=false checkout --quiet --force "$ref"
+  case $kind in
+    tag) selector="refs/tags/$ref" ;;
+    branch) selector="refs/remotes/origin/$ref" ;;
+    commit) selector=$ref ;;
+    *) echo "unsupported source ref kind: $kind" >&2; return 1 ;;
+  esac
+  git -C "$dir" -c advice.detachedHead=false checkout --quiet --force "$selector"
   git -C "$dir" clean -qfdx
 }
 
 # Record what was built and installed (name, source, revision, package version) in
 # ~/.local/state/gooarchy/builds.tsv, one line per package, newest wins.
 record_build() {
-  local file=$GOOARCHY_STATE/builds.tsv
+  local file=$GOOARCHY_STATE/builds.tsv ref_kind=${5:-} ref=${6:-}
   touch "$file"
-  { grep -v "^$1	" "$file" || true; printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$(date -Iseconds)"; } >"$file.new"
+  { grep -v "^$1	" "$file" || true; printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$1" "$2" "$3" "$4" "$(date -Iseconds)" "$ref_kind" "$ref"; } >"$file.new"
   mv "$file.new" "$file"
 }
 

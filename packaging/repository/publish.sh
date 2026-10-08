@@ -10,19 +10,17 @@ repo_root=$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null) || {
 die() { echo "publish: $*" >&2; exit 1; }
 
 read_flavorings_source_ref() {
-  local recipe_file=$1 commit_count tag_count commit tag
+  local recipe_file=$1 commit_count tag_count branch_count tag
   commit_count=$(grep -c '^_commit=' "$recipe_file" || true)
   tag_count=$(grep -c '^_tag=' "$recipe_file" || true)
-  commit=$(sed -n 's/^_commit=//p' "$recipe_file")
+  branch_count=$(grep -c '^_branch=' "$recipe_file" || true)
   tag=$(sed -n 's/^_tag=//p' "$recipe_file")
 
-  if [[ $commit_count == 1 && $tag_count == 0 && $commit =~ ^[[:xdigit:]]{40}$ ]]; then
-    printf 'commit:%s' "$commit"
-  elif [[ $commit_count == 0 && $tag_count == 1 && -n $tag ]] && \
-    git check-ref-format "refs/tags/$tag"; then
+  if [[ $commit_count == 0 && $branch_count == 0 && $tag_count == 1 &&
+    $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && git check-ref-format "refs/tags/$tag"; then
     printf 'tag:%s' "$tag"
   else
-    die "the flavorings recipe must pin exactly one full 40-digit _commit or valid _tag."
+    die "the flavorings recipe must pin exactly one final version _tag for main publication; raw commit and branch refs are not supported."
   fi
 }
 
@@ -180,10 +178,28 @@ else
   done
 fi
 
+[[ -z ${GOOARCHY_SCOTTLAND_REF:-} && -z ${GOOARCHY_SCOTTLAND_REF_KIND:-} ]] ||
+  die "the publisher reads the configured main pin and does not accept local Scottland ref overrides."
 source "$repo_root/install/sources.conf"
-scottland_repo=${GOOARCHY_SCOTTLAND_REPO:-https://github.com/clickety-clacks/scottland.git}
-scottland_ref=${GOOARCHY_SCOTTLAND_REF:-}
-[[ -n $scottland_ref ]] || die "install/sources.conf has no pinned Scottland revision."
+scottland_repo=$GOOARCHY_SCOTTLAND_REPO
+scottland_ref=$GOOARCHY_SCOTTLAND_REF
+if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag &&
+  $scottland_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  scottland_source_label="Scottland tag:$scottland_ref"
+elif [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == commit &&
+  $GOOARCHY_SCOTTLAND_PIN_KIND == commit &&
+  $scottland_ref == "$GOOARCHY_SCOTTLAND_LEGACY_PIN_REF" &&
+  -z ${GOOARCHY_SCOTTLAND_REF_KIND:-} ]]; then
+  scottland_source_label='Scottland unchanged current pin'
+else
+  die "Gooarchy main publication requires a final Scottland version tag or the unchanged current fixed pin; commit overrides and branches are not supported."
+fi
+
+if [[ ${recipe_for[gooarchy-flavorings]+present} &&
+  ${recipe_for[gooarchy-flavorings]} != @scottland &&
+  ${recipe_for[gooarchy-flavorings]} == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]]; then
+  read_flavorings_source_ref "${recipe_for[gooarchy-flavorings]}" >/dev/null
+fi
 
 build_static_recipe() {
   local recipe_file=$1 recipe_dir build_dir recipe_key
@@ -202,8 +218,13 @@ build_static_recipe() {
 build_scottland() {
   local source_dir="$work_dir/scottland-source" build_dir="$work_dir/scottland-recipe"
   git clone --quiet "$scottland_repo" "$source_dir" || die "could not fetch the pinned Scottland source."
-  git -C "$source_dir" -c advice.detachedHead=false checkout --quiet --force "$scottland_ref" ||
-    die "could not check out the requested Scottland revision."
+  if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag ]]; then
+    git -C "$source_dir" -c advice.detachedHead=false checkout --quiet --force "refs/tags/$scottland_ref" ||
+      die "could not check out the requested Scottland release tag."
+  else
+    git -C "$source_dir" -c advice.detachedHead=false checkout --quiet --force "$scottland_ref" ||
+      die "could not check out the retained current Scottland pin."
+  fi
   git -C "$source_dir" clean -qfdx
   scottland_source_revision=$(git -C "$source_dir" rev-parse HEAD)
   mkdir -m 700 "$build_dir"
@@ -234,7 +255,7 @@ for package_name in "${requested_packages[@]}"; do
   if [[ $recipe_file == @scottland ]]; then
     [[ ${recipe_built[scottland]+present} ]] || build_scottland
     recipe_built[scottland]=1
-    source_revision[$package_name]=$scottland_source_revision
+    source_revision[$package_name]="$scottland_source_label (resolved $scottland_source_revision)"
   else
     if [[ ! ${recipe_built[$recipe_file]+present} ]]; then
       recipe_dir=$(dirname -- "$recipe_file")
@@ -254,7 +275,7 @@ for package_name in "${requested_packages[@]}"; do
           flavorings_source_revision=$(read_flavorings_source_ref "$recipe_file")
           source_revision[$package_name]="Gooarchy $checkout_commit; gooarchy-flavorings $flavorings_source_revision"
         else
-          source_revision[$package_name]="Gooarchy $checkout_commit; Scottland themes $scottland_ref"
+          source_revision[$package_name]="Gooarchy $checkout_commit; $scottland_source_label"
         fi
         ;;
       linux-gooarchy|linux-gooarchy-headers)

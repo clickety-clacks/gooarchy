@@ -118,7 +118,9 @@ GIT_AUTHOR_NAME='Test' GIT_AUTHOR_EMAIL='test@example.invalid' \
 GIT_AUTHOR_NAME='Test' GIT_AUTHOR_EMAIL='test@example.invalid' \
   GIT_COMMITTER_NAME='Test' GIT_COMMITTER_EMAIL='test@example.invalid' \
   git -C "$scottland_source" commit -qm 'pinned Scottland fixture'
-scottland_ref=$(git -C "$scottland_source" rev-parse HEAD)
+scottland_commit=$(git -C "$scottland_source" rev-parse HEAD)
+scottland_ref=v100.0.0
+git -C "$scottland_source" tag "$scottland_ref" "$scottland_commit"
 
 strata_source="$test_root/strata-source"
 mkdir -m 700 -p "$strata_source"
@@ -142,7 +144,9 @@ GIT_AUTHOR_NAME='Test' GIT_AUTHOR_EMAIL='test@example.invalid' \
 strata_ref=$(git -C "$strata_source" rev-parse HEAD)
 cat >"$fixture/install/sources.conf" <<SOURCES
 GOOARCHY_SCOTTLAND_REPO=file://$scottland_source
-GOOARCHY_SCOTTLAND_REF=$scottland_ref
+GOOARCHY_SCOTTLAND_LEGACY_PIN_REF=f325ab1331944334010923fb5712558efd3f2395
+GOOARCHY_SCOTTLAND_PIN_REF=$scottland_ref
+GOOARCHY_SCOTTLAND_PIN_KIND=tag
 GOOARCHY_STRATA_AUR=file://$strata_source
 GOOARCHY_STRATA_REF=$strata_ref
 SOURCES
@@ -155,7 +159,7 @@ arch=('any')
 PKG
 cat >"$fixture/packaging/gooarchy-flavorings/PKGBUILD" <<'PKG'
 pkgname=gooarchy-flavorings
-_tag=fixture-tag-v1
+_tag=v0.1.0
 pkgver=1.0
 pkgrel=1
 arch=('any')
@@ -465,31 +469,67 @@ export GOOARCHY_TEST_RELEASE_ROOT="$release_root"
 export GOOARCHY_PUBLISH_TMPDIR="$test_root"
 export GOOARCHY_TEST_REAL_PACMAN="$real_pacman"
 export GOOARCHY_TEST_WAYFIRE_PACKAGE_VERSION="$test_wayfire_package_version"
+unset GOOARCHY_SCOTTLAND_REF GOOARCHY_SCOTTLAND_REF_KIND
 
 publish="$fixture/packaging/repository/publish.sh"
+valid_scottland_sources="$test_root/valid-scottland-sources.conf"
+cp -- "$fixture/install/sources.conf" "$valid_scottland_sources"
+for pin_case in commit branch; do
+  cp -- "$valid_scottland_sources" "$fixture/install/sources.conf"
+  if [[ $pin_case == commit ]]; then
+    sed -i -e 's/^GOOARCHY_SCOTTLAND_PIN_REF=.*/GOOARCHY_SCOTTLAND_PIN_REF=0123456789abcdef0123456789abcdef01234567/' \
+      -e 's/^GOOARCHY_SCOTTLAND_PIN_KIND=.*/GOOARCHY_SCOTTLAND_PIN_KIND=commit/' \
+      "$fixture/install/sources.conf"
+  else
+    sed -i -e 's/^GOOARCHY_SCOTTLAND_PIN_REF=.*/GOOARCHY_SCOTTLAND_PIN_REF=0.3/' \
+      -e 's/^GOOARCHY_SCOTTLAND_PIN_KIND=.*/GOOARCHY_SCOTTLAND_PIN_KIND=branch/' \
+      "$fixture/install/sources.conf"
+  fi
+  fixture_commit
+  if "$publish" --all >"$test_root/nonfinal-scottland-$pin_case.out" \
+      2>"$test_root/nonfinal-scottland-$pin_case.err"; then
+    echo "repository-publish-test: publisher accepted the non-final Scottland $pin_case pin" >&2
+    exit 1
+  fi
+  if [[ $pin_case == commit ]]; then
+    expected_pin_error='commit pins are reserved for the unchanged current Scottland default'
+  else
+    expected_pin_error='Gooarchy main publication requires a final Scottland version tag or the unchanged current fixed pin'
+  fi
+  grep -Fq "$expected_pin_error" "$test_root/nonfinal-scottland-$pin_case.err" || {
+    echo "repository-publish-test: non-final Scottland $pin_case pin had no clear refusal" >&2
+    exit 1
+  }
+  [[ ! -e $release_root/LATEST ]] || {
+    echo "repository-publish-test: non-final Scottland $pin_case pin created a release" >&2
+    exit 1
+  }
+done
+cp -- "$valid_scottland_sources" "$fixture/install/sources.conf"
+fixture_commit
+if GOOARCHY_SCOTTLAND_REF=v100.0.0 GOOARCHY_SCOTTLAND_REF_KIND=tag \
+    "$publish" --all >"$test_root/local-scottland-override.out" \
+    2>"$test_root/local-scottland-override.err"; then
+  echo "repository-publish-test: publisher accepted a local Scottland ref override" >&2
+  exit 1
+fi
+grep -Fq 'publisher reads the configured main pin and does not accept local Scottland ref overrides' \
+  "$test_root/local-scottland-override.err" || {
+  echo "repository-publish-test: local Scottland ref override had no clear refusal" >&2
+  exit 1
+}
 first_publish_output=$("$publish" --all)
-grep -Fq 'gooarchy-flavorings tag:fixture-tag-v1' \
+grep -Fq 'gooarchy-flavorings tag:v0.1.0' \
   <<<"$first_publish_output" || {
   echo "repository-publish-test: publish output omitted the flavorings tag pin" >&2
   exit 1
 }
-initial_tag=$(cat "$release_root/LATEST")
-sed -i -e 's/^_tag=fixture-tag-v1$/_commit=0123456789abcdef0123456789abcdef01234567/' \
-  -e 's/^pkgver=1.0$/pkgver=1.1/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
-fixture_commit
-commit_publish_output=$("$publish" gooarchy-flavorings)
-grep -Fq 'Published gooarchy-flavorings version 1.1-1 (replaced 1.0-1); source revision:' \
-  <<<"$commit_publish_output" &&
-  grep -Fq 'gooarchy-flavorings commit:0123456789abcdef0123456789abcdef01234567' \
-    <<<"$commit_publish_output" || {
-    echo "repository-publish-test: publish output omitted the flavorings commit pin" >&2
-    exit 1
-  }
-commit_tag=$(cat "$release_root/LATEST")
-[[ $commit_tag != "$initial_tag" ]] || {
-  echo "repository-publish-test: the flavorings commit-pin publish did not advance the release" >&2
+grep -Fq "Scottland tag:$scottland_ref (resolved $scottland_commit)" \
+  <<<"$first_publish_output" || {
+  echo "repository-publish-test: publish output omitted the Scottland tag and resolved source" >&2
   exit 1
 }
+initial_tag=$(cat "$release_root/LATEST")
 valid_flavorings_recipe="$test_root/valid-flavorings-PKGBUILD"
 cp -- "$fixture/packaging/gooarchy-flavorings/PKGBUILD" "$valid_flavorings_recipe"
 assert_invalid_flavorings_pin() {
@@ -499,23 +539,42 @@ assert_invalid_flavorings_pin() {
     echo "repository-publish-test: publisher accepted invalid flavorings pin case $case_name" >&2
     exit 1
   fi
-  grep -Fq 'must pin exactly one full 40-digit _commit or valid _tag' \
+  grep -Fq 'must pin exactly one final version _tag for main publication' \
     "$test_root/$case_name.err" || {
     echo "repository-publish-test: invalid flavorings pin case $case_name had no clear error" >&2
     exit 1
   }
-  [[ $(cat "$release_root/LATEST") == "$commit_tag" ]] || {
+  [[ $(cat "$release_root/LATEST") == "$initial_tag" ]] || {
     echo "repository-publish-test: invalid flavorings pin case $case_name changed latest" >&2
     exit 1
   }
 }
-printf '\n_tag=fixture-tag-v1\n' >>"$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i -e 's/^_tag=v0.1.0$/_tag=v0.1.1/' \
+  -e 's/^pkgver=1.0$/pkgver=1.1/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+printf '_commit=0123456789abcdef0123456789abcdef01234567\n' >>"$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+assert_invalid_flavorings_pin commit-and-tag
+cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i -e 's/^_tag=v0.1.0$/_tag=v0.1.1/' \
+  -e 's/^pkgver=1.0$/pkgver=1.1/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i '/^_tag=/d' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+printf '_commit=0123456789abcdef0123456789abcdef01234567\n' >>"$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+assert_invalid_flavorings_pin commit-only
+cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i -e 's/^_tag=v0.1.0$/_tag=v0.1.1/' \
+  -e 's/^pkgver=1.0$/pkgver=1.1/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i '/^_tag=/d' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+printf '_branch=main\n' >>"$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+assert_invalid_flavorings_pin branch-only
+cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i -e 's/^_tag=v0.1.0$/_tag=v0.1.1/' \
+  -e 's/^pkgver=1.0$/pkgver=1.1/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+printf '\n_tag=v0.1.1\n' >>"$fixture/packaging/gooarchy-flavorings/PKGBUILD"
 assert_invalid_flavorings_pin both
 cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
-sed -i '/^_commit=/d' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i '/^_tag=/d' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
 assert_invalid_flavorings_pin missing
 cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
-sed -i 's/^_commit=.*/_tag=invalid?tag/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+sed -i 's/^_tag=.*/_tag=v0.1.1-rc1/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
 assert_invalid_flavorings_pin malformed
 cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
 fixture_commit
@@ -556,7 +615,8 @@ first_scottland_file=$(awk -F '\t' '$1 == "scottland" { print $3 }' <<<"$first_r
   echo "repository-publish-test: Scottland version did not include the current Arch Wayfire version" >&2
   exit 1
 }
-grep -Fq "source revision: $scottland_ref." <<<"$first_publish_output" || {
+grep -Fq "source revision: Scottland tag:$scottland_ref (resolved $scottland_commit)" \
+  <<<"$first_publish_output" || {
   echo "repository-publish-test: publish output omitted the pinned Scottland source revision" >&2
   exit 1
 }
@@ -682,7 +742,7 @@ if GOOARCHY_TEST_VERSION_SCOTTLAND=1.1 "$publish" scottland >"$test_root/refusal
   echo "repository-publish-test: R8 accepted a package version that was not newer" >&2
   exit 1
 fi
-grep -Fq "Refused scottland: new version 1.1-1 is not newer than published version $new_scottland_version; source revision: $scottland_ref; this package remains unchanged." \
+grep -Fq "Refused scottland: new version 1.1-1 is not newer than published version $new_scottland_version; source revision: Scottland tag:$scottland_ref (resolved $scottland_commit); this package remains unchanged." \
   "$test_root/refusal.log" || {
   echo "repository-publish-test: R8 refusal omitted the compared versions or source revision" >&2
   exit 1
@@ -805,4 +865,4 @@ grep -Fq 'the latest repository database signature is invalid' "$test_root/tampe
   exit 1
 }
 
-printf 'PASS: tag and commit source reporting/refusal, initial six-package publish, R2 recipe addition, signatures, strict database records, R8 refusal, R9 retention, redirect lookup, and A3 filename guard.\n'
+printf 'PASS: final-tag source reporting and commit/branch refusal, initial six-package publish, R2 recipe addition, signatures, strict database records, R8 refusal, R9 retention, redirect lookup, and A3 filename guard.\n'

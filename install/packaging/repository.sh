@@ -195,10 +195,12 @@ local_scottland=$scottland_override
 replace_scottland=0
 previous_scottland_version=
 previous_scottland_ref=
+previous_scottland_ref_kind=
 if package_is_installed scottland; then
   previous_scottland_version=$(installed_package_version scottland)
   if [[ -r $GOOARCHY_STATE/builds.tsv ]]; then
-    previous_scottland_ref=$(awk -F '\t' '$1 == "scottland" { ref = $3 } END { print ref }' "$GOOARCHY_STATE/builds.tsv")
+    previous_scottland_ref=$(awk -F '\t' '$1 == "scottland" { ref = ($7 != "" ? $7 : $3) } END { print ref }' "$GOOARCHY_STATE/builds.tsv")
+    previous_scottland_ref_kind=$(awk -F '\t' '$1 == "scottland" { kind = $6 } END { print kind }' "$GOOARCHY_STATE/builds.tsv")
   fi
   if ((local_scottland == 0)) && ! package_is_repository_copy scottland; then
     replace_scottland=1
@@ -247,6 +249,7 @@ plan_tmp=$GOOARCHY_STATE/repository-plan.sh.$$
   printf 'GOOARCHY_REPLACE_SCOTTLAND=%q\n' "$replace_scottland"
   printf 'GOOARCHY_PREVIOUS_SCOTTLAND_VERSION=%q\n' "$previous_scottland_version"
   printf 'GOOARCHY_PREVIOUS_SCOTTLAND_REF=%q\n' "$previous_scottland_ref"
+  printf 'GOOARCHY_PREVIOUS_SCOTTLAND_REF_KIND=%q\n' "$previous_scottland_ref_kind"
   printf 'GOOARCHY_SCOTTLAND_TARGET=%q\n' "$scottland_target"
   printf 'GOOARCHY_PREVIOUS_GOOARCHY_INSTALLED=%q\n' "$previous_gooarchy_installed"
   printf 'GOOARCHY_PREVIOUS_GOOARCHY_REPOSITORY_COPY=%q\n' "$previous_gooarchy_repository_copy"

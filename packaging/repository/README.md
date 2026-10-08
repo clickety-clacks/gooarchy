@@ -12,6 +12,12 @@ It builds in a private temporary directory, sets the package identity to
 configured Arch `wayfire` version when building Scottland. Kernel publication
 also requires 35 GiB free in the temporary build location.
 
+On `main`, publication uses the unchanged fixed Scottland pin during the tag transition, then a
+final version tag once the approved release is available. The publisher reports the selected tag
+and resolved source revision, rejects release-candidate tags and branch pins, and refuses local
+Scottland ref overrides. The local installer accepts only final tag and branch overrides; its
+current default SHA remains fixed until the Scottland final tag is ready.
+
 The private key reference is supplied by machine configuration through
 `GOOARCHY_SIGNING_KEY_REF` as a 1Password `op://` reference. The `op` CLI reads
 the key into a temporary GnuPG home for that publish. GitHub authorization is
@@ -31,7 +37,7 @@ draft stays unpublished and the prior latest release remains active.
 `tests/repository-publish-test.sh` exercises this flow with a local
 Releases-shaped stand-in, synthetic Arch packages, and a throwaway OpenPGP key.
 It checks the initial six-package database, adding a seventh recipe, signing,
-Scottland's exact Wayfire dependency, exact flavorings `_tag` and `_commit`
+Scottland's exact Wayfire dependency, exact final flavorings `_tag`
 source reporting, refusal of missing/ambiguous/invalid flavorings pins, version
 refusal, package and signature retention, lookup through a local redirect, and
 the filename guard. The real

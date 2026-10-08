@@ -15,17 +15,19 @@ if ((GOOARCHY_BUILD_LOCAL_GOOARCHY)); then
   flavorings_ref=$checkout_commit
   if [[ -f $flavorings_recipe ]]; then
     flavorings_source=$(sed -n 's/^url="\(.*\)"$/\1/p' "$flavorings_recipe")
-    flavorings_commit=$(sed -n 's/^_commit=//p' "$flavorings_recipe")
     flavorings_tag=$(sed -n 's/^_tag=//p' "$flavorings_recipe")
-    if [[ -n $flavorings_commit && -z $flavorings_tag && $flavorings_commit =~ ^[[:xdigit:]]{40}$ ]]; then
-      flavorings_ref=$flavorings_commit
-    elif [[ -n $flavorings_tag && -z $flavorings_commit ]] && git check-ref-format "refs/tags/$flavorings_tag"; then
+    flavorings_tag_count=$(grep -c '^_tag=' "$flavorings_recipe" || true)
+    flavorings_commit_count=$(grep -c '^_commit=' "$flavorings_recipe" || true)
+    flavorings_branch_count=$(grep -c '^_branch=' "$flavorings_recipe" || true)
+    if [[ $flavorings_tag_count == 1 && $flavorings_commit_count == 0 &&
+      $flavorings_branch_count == 0 && $flavorings_tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
+      git check-ref-format "refs/tags/$flavorings_tag"; then
       flavorings_ref=$flavorings_tag
     else
       flavorings_ref=
     fi
     [[ -n $flavorings_source && -n $flavorings_ref ]] || {
-      echo "The distro's gooarchy-flavorings recipe must have a valid source URL and exactly one valid _commit or _tag for the build report." >&2
+      echo "The distro's gooarchy-flavorings recipe must have a source URL and exactly one final version _tag; raw commit and branch pins are not supported." >&2
       exit 1
     }
   fi

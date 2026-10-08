@@ -63,9 +63,9 @@ GOOARCHY_VM_GPU=software GOOARCHY_VM_VNC=1 tests/vm/run.sh start
 ```
 
 What the run does, in order: an install made to fail at one step and then rerun (it must recover);
-rebuilding Scottland at another commit and back (the installed plugin must follow); a reboot into
-the autologin session; the session check; password logins typed at the consoles; and a check that a
-newer Wayfire can't install over the Scottland built for this one.
+rebuilding Scottland from another branch pin and returning to the fixed pin (the installed plugin
+must follow); a reboot into the autologin session; the session check; password logins typed at the
+consoles; and a check that a newer Wayfire can't install over the Scottland built for this one.
 
 The session check drives the desktop the way a person would, through Wayfire's virtual input, and
 checks each step against Scottland's own model and against the screen: Super+Enter opens Ghostty,
@@ -116,8 +116,9 @@ Keeping it current: `pacman -Syu` updates Arch's packages as usual. When Arch up
 pacman stops ("wayfire=… required by scottland"), because the Scottland plugin is built for one
 Wayfire version. Once a matching Scottland package is published, `pacman -Syu` updates it with
 Wayfire. To deliberately build Scottland locally, set `GOOARCHY_SCOTTLAND_REF` when running
-`./install.sh`; for a branch, also set `GOOARCHY_SCOTTLAND_REF_KIND=branch`. A 40-digit value is
-treated as a commit and other values as tag names by default.
+`./install.sh`. Overrides accept final version tags (`vMAJOR.MINOR.PATCH`) or branches; for a
+branch, also set `GOOARCHY_SCOTTLAND_REF_KIND=branch`. Raw commit overrides and release-candidate
+tags are rejected. The current fixed Scottland pin remains until v0.2.0 is released.
 
 ## How it is put together
 
