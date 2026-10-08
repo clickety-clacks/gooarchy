@@ -563,7 +563,7 @@ cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUIL
 sed -i -e 's/^_tag=v0.1.0$/_tag=v0.1.1/' \
   -e 's/^pkgver=1.0$/pkgver=1.1/' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
 sed -i '/^_tag=/d' "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
-printf '_branch=main\n' >>"$fixture/packaging/gooarchy-flavorings/PKGBUILD"
+printf '_branch=0.3\n' >>"$fixture/packaging/gooarchy-flavorings/PKGBUILD"
 assert_invalid_flavorings_pin branch-only
 cp -- "$valid_flavorings_recipe" "$fixture/packaging/gooarchy-flavorings/PKGBUILD"
 sed -i -e 's/^_tag=v0.1.0$/_tag=v0.1.1/' \

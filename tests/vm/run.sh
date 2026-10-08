@@ -313,7 +313,7 @@ cmd_rebuild_check() {
   # the package version must say what was built.
   running || die "the guest isn't running"
   local out; out=$(artifacts)
-  local other=${GOOARCHY_VM_REBUILD_REF:-main}
+  local other=${GOOARCHY_VM_REBUILD_REF:-0.3}
   local other_kind=${GOOARCHY_VM_REBUILD_REF_KIND:-branch}
   local a b c d other_commit default_version status=0
   a=$(plugin_state)

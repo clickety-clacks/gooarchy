@@ -116,9 +116,11 @@ Keeping it current: `pacman -Syu` updates Arch's packages as usual. When Arch up
 pacman stops ("wayfire=… required by scottland"), because the Scottland plugin is built for one
 Wayfire version. Once a matching Scottland package is published, `pacman -Syu` updates it with
 Wayfire. To deliberately build Scottland locally, set `GOOARCHY_SCOTTLAND_REF` when running
-`./install.sh`. Overrides accept final version tags (`vMAJOR.MINOR.PATCH`) or branches; for a
-branch, also set `GOOARCHY_SCOTTLAND_REF_KIND=branch`. Raw commit overrides and release-candidate
-tags are rejected. The current fixed Scottland pin remains until v0.2.0 is released.
+`./install.sh`. Overrides accept final version tags (`vMAJOR.MINOR.PATCH`) or branches; the
+2026.11 test line uses the Scottland `0.3` branch and sets
+`GOOARCHY_SCOTTLAND_REF_KIND=branch`. Raw commit overrides and release-candidate tags are rejected.
+Main keeps the current fixed Scottland pin until v0.2.0 is final and keeps the current Flavorings
+pin until the first reviewed-main final tag is cut; main then uses only those final tags.
 
 ## How it is put together
 
