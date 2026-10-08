@@ -116,7 +116,8 @@ Keeping it current: `pacman -Syu` updates Arch's packages as usual. When Arch up
 pacman stops ("wayfire=… required by scottland"), because the Scottland plugin is built for one
 Wayfire version. Once a matching Scottland package is published, `pacman -Syu` updates it with
 Wayfire. To deliberately build Scottland locally, set `GOOARCHY_SCOTTLAND_REF` when running
-`./install.sh`.
+`./install.sh`; for a branch, also set `GOOARCHY_SCOTTLAND_REF_KIND=branch`. A 40-digit value is
+treated as a commit and other values as tag names by default.
 
 ## How it is put together
 

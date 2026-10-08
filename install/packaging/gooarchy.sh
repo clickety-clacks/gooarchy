@@ -15,9 +15,17 @@ if ((GOOARCHY_BUILD_LOCAL_GOOARCHY)); then
   flavorings_ref=$checkout_commit
   if [[ -f $flavorings_recipe ]]; then
     flavorings_source=$(sed -n 's/^url="\(.*\)"$/\1/p' "$flavorings_recipe")
-    flavorings_ref=$(sed -n 's/^_commit=//p' "$flavorings_recipe")
-    [[ -n $flavorings_source && $flavorings_ref =~ ^[[:xdigit:]]{40}$ ]] || {
-      echo "The distro's gooarchy-flavorings recipe has no valid source URL and commit for the build report." >&2
+    flavorings_commit=$(sed -n 's/^_commit=//p' "$flavorings_recipe")
+    flavorings_tag=$(sed -n 's/^_tag=//p' "$flavorings_recipe")
+    if [[ -n $flavorings_commit && -z $flavorings_tag && $flavorings_commit =~ ^[[:xdigit:]]{40}$ ]]; then
+      flavorings_ref=$flavorings_commit
+    elif [[ -n $flavorings_tag && -z $flavorings_commit ]] && git check-ref-format "refs/tags/$flavorings_tag"; then
+      flavorings_ref=$flavorings_tag
+    else
+      flavorings_ref=
+    fi
+    [[ -n $flavorings_source && -n $flavorings_ref ]] || {
+      echo "The distro's gooarchy-flavorings recipe must have a valid source URL and exactly one valid _commit or _tag for the build report." >&2
       exit 1
     }
   fi
