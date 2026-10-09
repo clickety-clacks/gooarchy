@@ -1,0 +1,10 @@
+[package]
+name = "gooarchy"
+description = "Runs Gooarchy's system tools: `gooarchy <tool> ...` runs gooarchy-<tool>"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+common = { package = "gooarchy-common", path = "../common" }
