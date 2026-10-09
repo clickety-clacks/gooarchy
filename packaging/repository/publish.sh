@@ -216,7 +216,7 @@ build_static_recipe() {
 }
 
 build_scottland() {
-  local source_dir="$work_dir/scottland-source" build_dir="$work_dir/scottland-recipe"
+  local source_dir="$work_dir/scottland-source" build_dir
   git clone --quiet "$scottland_repo" "$source_dir" || die "could not fetch the pinned Scottland source."
   if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag ]]; then
     git -C "$source_dir" -c advice.detachedHead=false checkout --quiet --force "refs/tags/$scottland_ref" ||
@@ -227,8 +227,10 @@ build_scottland() {
   fi
   git -C "$source_dir" clean -qfdx
   scottland_source_revision=$(git -C "$source_dir" rev-parse HEAD)
-  mkdir -m 700 "$build_dir"
-  cp -a -- "$source_dir/packaging/arch/." "$build_dir/"
+  # Keep makepkg at the pinned recipe's original path: it resolves the complete checkout
+  # through $startdir/../.. while reading core files, themes, and the license.
+  build_dir="$source_dir/packaging/arch"
+  [[ -s $build_dir/PKGBUILD ]] || die "the pinned Scottland source has no packaging/arch/PKGBUILD."
   wayfire_package_version=$(pacman -Si extra/wayfire | awk -F: '/^[[:space:]]*Version[[:space:]]*:/ { sub(/^[[:space:]]*/, "", $2); print $2; exit }') ||
     die "could not read the current Arch wayfire version."
   wayfire_version=${wayfire_package_version#*:}

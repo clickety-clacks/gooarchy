@@ -67,17 +67,24 @@ cp -- "$source_root/packaging/repository/read-db.py" "$fixture/packaging/reposit
 
 scottland_source="$test_root/scottland-source"
 mkdir -m 700 -p "$scottland_source/packaging/arch" \
+  "$scottland_source/core/plugin" \
   "$scottland_source/omarchy/themes/watercolor-dream-light" \
   "$scottland_source/omarchy/themes/watercolor-dream-dark"
+printf 'source tree used by the Scottland recipe\n' \
+  >"$scottland_source/core/plugin/source-tree-fixture"
 cat >"$scottland_source/packaging/arch/PKGBUILD" <<'PKG'
 pkgname=scottland
 pkgver=1.0
 pkgrel=1
 arch=('x86_64')
   depends=('wayfire=__GOOARCHY_TEST_WAYFIRE_VERSION__')
+_root="$startdir/../.."
+build() {
+  test -s "$_root/core/plugin/source-tree-fixture"
+}
 package() {
-  install -d "$pkgdir/usr/share/scottland"
-  printf 'repository test fixture\n' >"$pkgdir/usr/share/scottland/fixture"
+  install -Dm644 "$_root/core/plugin/source-tree-fixture" \
+    "$pkgdir/usr/share/scottland/source-tree-fixture"
 }
 PKG
 python3 - "$scottland_source/packaging/arch/PKGBUILD" "$test_wayfire_version" <<'PY'
@@ -142,11 +149,13 @@ GIT_AUTHOR_NAME='Test' GIT_AUTHOR_EMAIL='test@example.invalid' \
   GIT_COMMITTER_NAME='Test' GIT_COMMITTER_EMAIL='test@example.invalid' \
   git -C "$strata_source" commit -qm 'pinned Strata fixture'
 strata_ref=$(git -C "$strata_source" rev-parse HEAD)
-cat >"$fixture/install/sources.conf" <<SOURCES
-GOOARCHY_SCOTTLAND_REPO=file://$scottland_source
-GOOARCHY_SCOTTLAND_LEGACY_PIN_REF=f325ab1331944334010923fb5712558efd3f2395
-GOOARCHY_SCOTTLAND_PIN_REF=$scottland_ref
-GOOARCHY_SCOTTLAND_PIN_KIND=tag
+cp -- "$source_root/install/sources.conf" "$fixture/install/sources.conf"
+sed -i \
+  -e "s|^GOOARCHY_SCOTTLAND_REPO=.*|GOOARCHY_SCOTTLAND_REPO=file://$scottland_source|" \
+  -e "s|^GOOARCHY_SCOTTLAND_PIN_REF=.*|GOOARCHY_SCOTTLAND_PIN_REF=$scottland_ref|" \
+  -e 's|^GOOARCHY_SCOTTLAND_PIN_KIND=.*|GOOARCHY_SCOTTLAND_PIN_KIND=tag|' \
+  "$fixture/install/sources.conf"
+cat >>"$fixture/install/sources.conf" <<SOURCES
 GOOARCHY_STRATA_AUR=file://$strata_source
 GOOARCHY_STRATA_REF=$strata_ref
 SOURCES
@@ -293,6 +302,28 @@ for name in names:
                 "printf 'invoked\\n' >>\"$GOOARCHY_TEST_FLAVORINGS_APPLY_MARKER\"\n"
             )
             apply_tool.chmod(0o755)
+            archive_entries.append("usr")
+        if name == "scottland":
+            if '_root="$startdir/../.."' not in text:
+                raise SystemExit("Scottland fixture does not retain its source-root recipe path")
+            source_root = (Path.cwd() / "../..").resolve()
+            source_fixture = source_root / "core/plugin/source-tree-fixture"
+            if not source_fixture.is_file():
+                raise SystemExit(f"Scottland recipe source tree is unavailable at {source_root}")
+            package_env = os.environ.copy()
+            package_env["GOOARCHY_TEST_PACKAGE_DIR"] = temporary
+            subprocess.run(
+                ["bash", "-c", (
+                    'set -euo pipefail; startdir="$PWD"; '
+                    'pkgdir="$GOOARCHY_TEST_PACKAGE_DIR"; '
+                    'source ./PKGBUILD; build; package'
+                )],
+                cwd=Path.cwd(), env=package_env, check=True,
+            )
+            packaged_fixture = Path(temporary) / "usr/share/scottland/source-tree-fixture"
+            if not packaged_fixture.is_file() or packaged_fixture.read_text() != \
+                    "source tree used by the Scottland recipe\n":
+                raise SystemExit("Scottland package did not include the pinned source-tree fixture")
             archive_entries.append("usr")
         destination = Path(package_dest) / filename
         with destination.open("wb") as output:
@@ -623,6 +654,12 @@ grep -Fq "source revision: Scottland tag:$scottland_ref (resolved $scottland_com
 first_scottland_metadata=$(bsdtar -xOf "$first_assets/$first_scottland_file" .PKGINFO)
 grep -Fxq 'depend = wayfire=0.11.0' <<<"$first_scottland_metadata" || {
   echo "repository-publish-test: Scottland did not declare the exact Arch Wayfire dependency" >&2
+  exit 1
+}
+first_scottland_source=$(bsdtar -xOf "$first_assets/$first_scottland_file" \
+  usr/share/scottland/source-tree-fixture)
+[[ $first_scottland_source == 'source tree used by the Scottland recipe' ]] || {
+  echo "repository-publish-test: Scottland package did not include a file read from the pinned source tree" >&2
   exit 1
 }
 gpg --homedir "$key_home" --batch --verify "$first_assets/gooarchy.db.sig" \
