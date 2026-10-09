@@ -32,4 +32,4 @@ jobs:
       - name: Run host-safe tests
         run: |
           python3 tests/vm/selftest.py
-          python3 tests/flavorings-apply-test.py
+          tests/flavorings-pkgbuild-source-test.sh
