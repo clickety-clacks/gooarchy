@@ -119,8 +119,9 @@ pacman stops ("wayfire=… required by scottland"), because the Scottland plugin
 Wayfire version. Once a matching Scottland package is published, `pacman -Syu` updates it with
 Wayfire. To deliberately build Scottland locally, set `GOOARCHY_SCOTTLAND_REF` when running
 `./install.sh`. Overrides accept final version tags (`vMAJOR.MINOR.PATCH`) or branches; the
-2026.11 test line uses the Scottland `0.3` branch and sets
-`GOOARCHY_SCOTTLAND_REF_KIND=branch`. Raw commit overrides and release-candidate tags are rejected.
+2026.11 release line selects the Scottland `0.3` branch by name and resolves its exact head in
+runner evidence, then must use a final Scottland tag before the distro tag. Raw commit overrides and
+release-candidate tags are rejected.
 Main keeps the current fixed Scottland pin until v0.2.0 is final and keeps the current Flavorings
 pin until the first reviewed-main final tag is cut; main then uses only those final tags.
 
@@ -141,9 +142,10 @@ without Gooarchy:
 
 | Path | What |
 |---|---|
-| `install.sh`, `install/` | The installer, in ordered steps like Omarchy's: `preflight/` (checks), `packaging/` (Arch packages, then Scottland, Strata and Gooarchy's own packages), `user/` (per-user defaults), `login/` (tty1 session, optional autologin), `post-install/` |
+| `install.sh`, `install/` | The installer, in ordered steps like Omarchy's: `preflight/` (checks), `packaging/` (Arch packages, the portal backend, Scottland, Strata and Gooarchy's own packages), `user/` (per-user defaults), `login/` (tty1 session, optional autologin), `post-install/` |
 | `install/gooarchy-base.packages` | The Arch packages Gooarchy is made of |
-| `install/sources.conf` | Scottland and Strata, pinned to the versions tested together |
+| `install/sources.conf` | Scottland 0.3 branch for the 2026.11 test line; main keeps its current fixed pin |
+| `packaging/arch/xdg-desktop-portal-wlr/` | Gooarchy's screen-sharing backend, built from our own fork ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)) |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
