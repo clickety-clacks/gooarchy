@@ -28,6 +28,12 @@
 # The seed server and the guest's network stay as the test uses them.
 #
 # Configuration (environment):
+#   GOOARCHY_VM_KERNEL      1: install the opt-in kernel and direct-boot it in this test VM for
+#                           the desktop checks; then build a module against its headers, check
+#                           that the opt-in left GRUB alone, follow its advice, regenerate the
+#                           disk's GRUB menu and check that the ordinary kernel still boots from
+#                           it by default.
+#   GOOARCHY_VM_KERNEL_JOBS kernel build parallelism (default 2; use 1 on a shared host)
 #   GOOARCHY_VM_DIR         work directory (default ~/.cache/gooarchy-vm-test): image, disk, logs
 #   GOOARCHY_VM_IMAGE_URL   Arch cloud image (default: the latest official one; to repeat a run,
 #                           use the dated image named in its manifest.json)
@@ -59,6 +65,8 @@ size=${GOOARCHY_VM_SIZE:-1920x1080}
 memory=${GOOARCHY_VM_MEMORY:-6144}
 disk=${GOOARCHY_VM_DISK:-40G}
 cpus=${GOOARCHY_VM_CPUS:-4}
+kernel_jobs=${GOOARCHY_VM_KERNEL_JOBS:-2}
+[[ $kernel_jobs =~ ^[1-9][0-9]*$ ]] || { echo "invalid GOOARCHY_VM_KERNEL_JOBS" >&2; exit 2; }
 port=${GOOARCHY_VM_SSH_PORT:-2222}
 proxy=${GOOARCHY_VM_PROXY:-}
 run=$dir/run
@@ -209,6 +217,13 @@ cmd_start() {
 
 start_qemu() {
   local seed_port display
+  local kernel_args=()
+  if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
+    [[ -s $run/kernel/vmlinuz && -s $run/kernel/initramfs.img && -s $run/kernel/cmdline ]] ||
+      die "candidate kernel boot files are missing"
+    kernel_args=(-kernel "$run/kernel/vmlinuz" -initrd "$run/kernel/initramfs.img"
+                 -append "$(cat "$run/kernel/cmdline")")
+  fi
   seed_port=$(seed)
   local xres=${size%x*} yres=${size#*x}
   case $gpu in
@@ -228,6 +243,7 @@ start_qemu() {
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
   setsid "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
+    "${kernel_args[@]}" \
     -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
     -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.2:$seed_port/" \
@@ -275,6 +291,12 @@ cmd_install() {
   local out; out=$(artifacts)
   copy_checkout
   local status=0
+  local kernel_option= kernel_build_env=
+  if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+    kernel_option=--kernel
+    kernel_build_env=MAKEFLAGS=-j$kernel_jobs
+    grub_snapshot
+  fi
   if [[ ${GOOARCHY_VM_RETRY_TEST:-1} == 1 ]]; then
     # A failed attempt (made to fail at the Strata step), then a retry that must complete.
     log "running ./install.sh, made to fail at packaging/strata.sh (log: $out/install-failed-attempt.log)"
@@ -289,7 +311,7 @@ cmd_install() {
     status=0
   fi
   log "running ./install.sh --yes --autologin (log: $out/install.log)"
-  guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes --autologin" >"$out/install.log" 2>&1 || status=$?
+  guest "cd ~/gooarchy && $kernel_build_env $(guest_proxy_env) ./install.sh --yes --autologin $kernel_option" >"$out/install.log" 2>&1 || status=$?
   tail -n 30 "$out/install.log" >&2
   guest 'tar -C ~/.local/state/gooarchy -cf - logs builds.tsv reports.log 2>/dev/null' | tar -C "$out" -xf - 2>/dev/null || true
   hcheck "./install.sh completes (after the failed attempt, when the retry test runs)" "$(( status == 0 ))" "exit $status"
@@ -300,7 +322,138 @@ cmd_install() {
       "$attempts attempt logs, $manifests manifests"
   fi
   (( status == 0 )) || die "install.sh exited with $status"
+  if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+    prepare_kernel_boot
+  fi
   log "install finished"
+}
+
+prepare_kernel_boot() {
+  mkdir -p "$run/kernel"
+  guest 'sudo cat /boot/vmlinuz-linux-gooarchy' >"$run/kernel/vmlinuz"
+  guest 'sudo cat /boot/initramfs-linux-gooarchy.img' >"$run/kernel/initramfs.img"
+  guest 'sed -E "s/(^| )BOOT_IMAGE=[^ ]*//g" /proc/cmdline' >"$run/kernel/cmdline"
+  guest 'pacman -Qlq linux-gooarchy | sed -n "s|/usr/lib/modules/\([^/]*\)/pkgbase|\1|p"' >"$run/kernel/version"
+  [[ $(cat "$run/kernel/version") =~ ^[a-zA-Z0-9._+-]+-gooarchy$ ]] || die "cannot identify the candidate kernel"
+  export GOOARCHY_VM_KERNEL_BOOT=1
+}
+
+cmd_kernel_check() {
+  # An already installed test VM: exercise just the installer kernel step, then boot and test.
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  copy_checkout
+  grub_snapshot
+  guest "cd ~/gooarchy && export GOOARCHY_PATH=\$PWD GOOARCHY_INSTALL=\$PWD/install
+         export GOOARCHY_STATE=\$HOME/.local/state/gooarchy GOOARCHY_BUILD=\$HOME/.cache/gooarchy/build
+         export GOOARCHY_INSTALL_LOG_FILE=\$GOOARCHY_STATE/kernel-check-install.log
+         MAKEFLAGS=-j$kernel_jobs $(guest_proxy_env) bash -e -o pipefail install/packaging/kernel.sh" >"$out/kernel-install.log" 2>&1
+  cmd_kernel_boot_check
+}
+
+cmd_kernel_boot_check() {
+  # Boot an already installed candidate, e.g. after an interrupted build was recovered.
+  running || die "the guest is not running"
+  prepare_kernel_boot
+  cmd_reboot
+  local status=0
+  cmd_check || status=$?
+  kernel_headers_check
+  kernel_bootloader_check
+  return "$status"
+}
+
+grub_snapshot() {
+  # The disk bootloader before the kernel opt-in: GRUB's menu (hash) and /etc/default/grub.
+  mkdir -p "$run/kernel"
+  guest 'sudo sha256sum /boot/grub/grub.cfg | cut -d" " -f1; cat /etc/default/grub' >"$run/kernel/grub-before.txt"
+  cp "$run/kernel/grub-before.txt" "$(artifacts)/grub-before-kernel.txt"
+}
+
+kernel_headers_check() {
+  # The installed headers build an external module whose version magic is the candidate's.
+  local result ok=0
+  result=$(guest 'bash -s' 2>&1 <<'EOF'
+set -euo pipefail
+version=$(pacman -Qlq linux-gooarchy | sed -n 's|/usr/lib/modules/\([^/]*\)/pkgbase|\1|p')
+dir=$(mktemp -d /tmp/gooarchy-header-probe.XXXXXX)
+trap 'rm -rf "$dir"' EXIT
+cat >"$dir/gooarchy_probe.c" <<'SOURCE'
+#include <linux/module.h>
+static int __init probe_init(void) { return 0; }
+static void __exit probe_exit(void) { }
+module_init(probe_init);
+module_exit(probe_exit);
+MODULE_LICENSE("GPL");
+SOURCE
+echo 'obj-m += gooarchy_probe.o' >"$dir/Makefile"
+make -C "/usr/lib/modules/$version/build" M="$dir" modules >"$dir/make.log" 2>&1 || { tail -n 20 "$dir/make.log"; exit 1; }
+vermagic=$(modinfo -F vermagic "$dir/gooarchy_probe.ko")
+echo "built against $version; vermagic: $vermagic"
+[[ $vermagic == "$version "* ]]
+EOF
+  ) && ok=1
+  echo "$result" >"$(artifacts)/kernel-headers-probe.log"
+  hcheck "the installed linux-gooarchy headers build an external module for it" "$ok" "$(tail -n 1 <<<"$result")"
+}
+
+kernel_bootloader_check() {
+  # The disk bootloader after the opt-in: GRUB's menu and /etc/default/grub exactly as they were.
+  # Then a user's next steps: add the GRUB_TOP_LEVEL line the opt-in printed, regenerate the menu
+  # (how linux-gooarchy gets into it), and the ordinary kernel still boots by default, through the
+  # disk's own GRUB.
+  local out; out=$(artifacts)
+  local after=$out/grub-after-kernel.txt before=$run/kernel/grub-before.txt ok=0
+  guest 'sudo sha256sum /boot/grub/grub.cfg | cut -d" " -f1; cat /etc/default/grub' >"$after"
+  if [[ -f $before ]]; then
+    cmp -s "$before" "$after" && ok=1
+    hcheck "the kernel opt-in leaves GRUB's menu and /etc/default/grub as they were" "$ok" \
+      "$(diff "$before" "$after" | head -n 5)"
+  else
+    log "no GRUB state from before the kernel opt-in; not comparing"
+  fi
+  # Regenerating as it stands, for comparison only (left in a scratch file).
+  guest 'sudo grub-mkconfig -o /tmp/grub-control.cfg >/dev/null 2>&1; s=$?; sudo cat /tmp/grub-control.cfg; sudo rm -f /tmp/grub-control.cfg; exit $s' \
+    >"$out/grub-control-without-top-level.cfg" || die "control regeneration failed"
+  if guest 'grep -q "^GRUB_TOP_LEVEL=" /etc/default/grub'; then
+    log "/etc/default/grub already sets GRUB_TOP_LEVEL; not adding the opt-in's advice"
+  else
+    local advice
+    advice=$(guest 'grep -o "GRUB_TOP_LEVEL=\"/boot/[^\"]*\"" ~/.local/state/gooarchy/reports.log | tail -n 1')
+    ok=0
+    [[ $advice =~ ^GRUB_TOP_LEVEL=\"/boot/vmlinuz-[^\"]+\"$ && $advice != *vmlinuz-linux-gooarchy* ]] && ok=1
+    hcheck "the kernel opt-in reports the GRUB_TOP_LEVEL line that keeps the booted kernel the default" "$ok" \
+      "advice: ${advice:-none}"
+    (( ok )) || die "no GRUB_TOP_LEVEL advice to follow"
+    guest "printf '%s\\n' '$advice' | sudo tee -a /etc/default/grub >/dev/null"
+  fi
+  guest 'sudo grub-mkconfig -o /boot/grub/grub.cfg' >"$out/grub-mkconfig.log" 2>&1 || die "grub-mkconfig failed"
+  guest 'sudo cat /boot/grub/grub.cfg' >"$out/grub-regenerated.cfg"
+  local first control offered=0
+  first=$(awk '$1 == "linux" {print $2; exit}' "$out/grub-regenerated.cfg")
+  control=$(awk '$1 == "linux" {print $2; exit}' "$out/grub-control-without-top-level.cfg")
+  grep -qE '^\s*linux\s+\S*/vmlinuz-linux-gooarchy\s' "$out/grub-regenerated.cfg" && offered=1
+  hcheck "the regenerated GRUB menu offers linux-gooarchy" "$offered"
+  boot_disk
+  local version stock
+  version=$(guest 'uname -r')
+  stock=$(guest 'pacman -Qlq linux | sed -n "s|/usr/lib/modules/\([^/]*\)/pkgbase|\1|p"')
+  guest 'cat /proc/cmdline' >"$out/stock-boot-cmdline.txt"
+  ok=0
+  [[ -n $stock && $version == "$stock" && ${first##*/} == vmlinuz-linux ]] && ok=1
+  hcheck "with that line added and GRUB regenerated, the disk bootloader boots the ordinary kernel by default" "$ok" \
+    "booted $version (ordinary: $stock); first entry $first; without GRUB_TOP_LEVEL it would be $control"
+}
+
+boot_disk() {
+  # Power the guest off properly, then boot it through its own disk bootloader.
+  guest 'sudo systemctl poweroff' || true
+  local deadline=$((SECONDS + 120))
+  while running && (( SECONDS < deadline )); do sleep 2; done
+  export GOOARCHY_VM_KERNEL_BOOT=0
+  cmd_stop
+  start_qemu
+  log "booted from the disk: $(guest 'uname -r')"
 }
 
 plugin_state() {
@@ -369,6 +522,19 @@ EOF
 }
 cmd_reboot() {
   running || die "the guest isn't running"
+  if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
+    # QMP quit stops the emulator without shutting down the guest. Persist the
+    # just-installed modules and package database before replacing its kernel.
+    guest 'sync'
+    cmd_stop
+    start_qemu
+    local version correct=0; version=$(guest 'uname -r')
+    [[ $version == "$(cat "$run/kernel/version")" ]] && correct=1
+    hcheck "the VM runs the opt-in Gooarchy kernel" "$correct" "$version"
+    ((correct)) || die "the VM booted a different kernel ($version)"
+    log "rebooted into $version (direct kernel boot; disk bootloader unchanged)"
+    return
+  fi
   ensure_seed
   local before; before=$(guest 'cat /proc/sys/kernel/random/boot_id')
   guest 'sudo systemctl reboot' || true
@@ -471,6 +637,8 @@ case ${1:-all} in
   rebuild-check) cmd_rebuild_check ;;
   reboot) cmd_reboot ;;
   check) cmd_check ;;
+  kernel-check) cmd_kernel_check ;;
+  kernel-boot-check) cmd_kernel_boot_check ;;
   login-check) cmd_login_check ;;
   upgrade-guard) cmd_upgrade_guard ;;
   ssh) shift; guest -t "$@" ;;
@@ -486,6 +654,10 @@ case ${1:-all} in
     cmd_check || true
     cmd_login_check || true
     cmd_upgrade_guard
+    if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+      kernel_headers_check
+      kernel_bootloader_check
+    fi
     manifest
     log "artifacts: $(artifacts)"
     summary

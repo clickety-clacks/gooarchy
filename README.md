@@ -147,6 +147,7 @@ without Gooarchy:
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
+| `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
