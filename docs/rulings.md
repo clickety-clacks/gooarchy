@@ -22,3 +22,13 @@ delegation. His words were: “yes do it this way. rule for me”.
 publishes, without an interactive signing step, and the same key can be
 recovered onto a replacement machine. No additional custody mechanism is part
 of this ruling.
+
+## The kernel opt-in leaves the bootloader alone
+
+2026-10-07, Mike (decision `dr_1d029059`).
+
+A regenerated GRUB menu lists linux-gooarchy first and boots it by default. `./install.sh --kernel`
+had been adding a commented `GRUB_TOP_LEVEL` line to `/etc/default/grub` to keep the stock kernel
+the default. Mike chose "messages-only" over keeping that edit. The opt-in changes no bootloader
+setting; on GRUB it says which `GRUB_TOP_LEVEL` line keeps the stock kernel the default, and the
+user decides whether to add it.

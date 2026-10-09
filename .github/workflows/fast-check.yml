@@ -33,4 +33,5 @@ jobs:
         run: |
           python3 tests/vm/selftest.py
           bash tests/scottland-source-plan-test.sh
+          bash tests/vm/process-guard-test.sh
           tests/flavorings-pkgbuild-source-test.sh
