@@ -78,9 +78,9 @@ shell on tty1 instead of a restart loop. Checks named "config:" only read config
 title bar setting, tmux, touchpad, the agents' bell settings); they don't show the behavior. It also
 records what's missing (notifications, lock, portals, ...) for [DEFICIT.md](DEFICIT.md). On
 2026-10-05, fresh runs passed every check with virgl graphics (65) and with software graphics (66,
-including the login check restoring autologin). `tests/vm/selftest.py` checks the harness, and
-`tests/flavorings-pkgbuild-source-test.sh` checks the
-final-tag-only package source selector without a VM; the defaults tool's tests live in
+including the login check restoring autologin). `tests/vm/selftest.py` and
+`tests/vm/process-guard-test.sh` check the harness, and `tests/flavorings-pkgbuild-source-test.sh`
+checks the final-tag-only package source selector without a VM; the defaults tool's tests live in
 gooarchy-flavorings.
 
 What it doesn't show: it's the Arch cloud image (cloud-init gives it an SSH key and passwordless

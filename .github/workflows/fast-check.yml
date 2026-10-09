@@ -32,4 +32,5 @@ jobs:
       - name: Run host-safe tests
         run: |
           python3 tests/vm/selftest.py
+          bash tests/vm/process-guard-test.sh
           tests/flavorings-pkgbuild-source-test.sh
