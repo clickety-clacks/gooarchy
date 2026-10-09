@@ -1,5 +1,10 @@
 # Helpers for identifying packages installed from the signed Gooarchy repository.
 
+scottland_local_build_required() {
+  local explicit_override=$1 source_kind=$2
+  [[ $explicit_override == 1 || $source_kind == branch ]]
+}
+
 load_repository_plan() {
   local plan=$GOOARCHY_STATE/repository-plan.sh
   [[ -r $plan ]] || { echo "Gooarchy's repository selection has not been prepared." >&2; return 1; }

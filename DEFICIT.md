@@ -63,7 +63,7 @@ need it" means the severity applies to the people who depend on the feature.
 | Network management and UI | Blocker for laptops | VM | Gooarchy doesn't pick a network stack: it keeps what the Arch install set up (the VM's was systemd-networkd on Ethernet). No Wi-Fi UI or indicator; joining a network means `iwctl` or `nmcli` in a terminal, if the base install has one. Gooarchy installs neither NetworkManager nor iwd. |
 | Bluetooth | High | VM | BlueZ isn't installed: no Bluetooth at all (WirePlumber logs "BlueZ system service is not available"). No pairing UI. |
 | Battery and power | High for laptops | VM | No UPower, no power-profiles-daemon: no battery level anywhere, no low-battery warning before the machine dies, no power profiles. |
-| Screen sharing and screen recording | High | VM | The portal has a Settings backend and a file chooser (both exercised in the VM) but no ScreenCast, Screenshot or RemoteDesktop backend, so screen sharing in Chromium (video calls) and screen recording don't work. |
+| Screen sharing and screen recording | High | VM | The portal has a Settings backend and a file chooser (both exercised in the VM) but no accepted ScreenCast, Screenshot or RemoteDesktop path, so screen sharing in Chromium (video calls) and screen recording remain unverified. In progress (not yet in a VM run): the installer builds Gooarchy's xdg-desktop-portal-wlr from its own fork ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)); this 2026.11 candidate selects Scottland's `0.3` branch, currently resolved to `e5f0f439680af0efdcedc9ab7a5b014f12a79056`, whose package installs the portal config. Scottland main `21273828a427885202f8b5dce1543994184867ee` does not contain that file. The exact combined VM run must still verify backend selection and screen-share capture. |
 | Screenshot tools | Medium | VM | Print saves the whole screen into the Pictures folder, following a moved or localized folder (VM), and Shift+Print a selected region (Scottland's binding). No feedback that it happened, no copy to the clipboard, no annotation. |
 | Memory pressure | Medium | VM | No swap, zram or out-of-memory policy of Gooarchy's own: whatever the base install has (the VM had a 512 MiB swap file, no zram, systemd-oomd not enabled). A loaded desktop can freeze before the kernel's OOM killer acts. |
 | Printing | Medium | Config | No printer support (CUPS isn't installed), so nothing reaches a printer. Chromium's "Save as PDF" doesn't need it. |
@@ -93,7 +93,7 @@ need it" means the severity applies to the people who depend on the feature.
 |---|---|---|---|
 | License and asset provenance | High for public distribution | Config | Gooarchy has no license yet (the packages say `LicenseRef-unlicensed`), and the Watercolor Dream color files and wallpapers copied from Scottland's repository carry no license or attribution notice in the package. Fine for trying it; not yet a redistributable baseline. |
 | Installer ISO | High (release gap) | Config | You install Arch Linux first (partitioning, encryption, accounts, bootloader are archinstall's or yours), then run `install.sh`. |
-| Package repository | High (release gap) | Config | Scottland and Gooarchy's packages are compiled on your machine during install (needs base-devel; minutes); Strata's AUR recipe runs with your user's rights. No signed Gooarchy repository. |
+| Package repository | High (release gap) | Config | Scottland and Gooarchy's packages are compiled on your machine during install (needs base-devel; minutes); Strata's AUR recipe runs with your user's rights. No signed Gooarchy repository. Gooarchy's xdg-desktop-portal-wlr is also compiled on the machines of Scottland-on-Omarchy users, by the adapter's setup; once the repository exists, the installer and that setup must install it from there ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)). |
 | Updates and migrations | High | VM | `pacman -Syu` updates Arch's packages; Scottland, Strata and Gooarchy's packages change only when you pull this repository and run `install.sh` again, and there are no configuration migrations. When Arch moves Wayfire on, `pacman -Syu` stops with "wayfire=… required by scottland" (VM) until `install.sh` rebuilds Scottland for the new Wayfire. |
 | Release reproducibility and trust | Medium | Config | Pins are full commits (and Strata's binary is checksummed), but official Arch packages roll, builds aren't reproducible or done in a clean chroot, and nothing is signed by Gooarchy. |
 | Recovery from a failed install | Medium | VM | A failed step stops the install, says what completed, keeps that attempt's log and before/after package manifests, and a rerun recovers (VM). Nothing is rolled back: the Arch upgrade and packages already installed stay ([docs/uninstall.md](docs/uninstall.md)). |
@@ -136,12 +136,14 @@ important first. None blocks the desktop today; Gooarchy works around the ones m
    Settings and command-line tools, would let distros offer both honestly. Acceptance: a manual
    choice sticks until the user goes back to automatic; offline, no location, and both solar
    modes behave as documented.
-4. **A portal configuration for the Scottland desktop** (Medium once screen sharing ships). The
-   portal now picks backends through Wayfire's `wayfire-portals.conf` (`XDG_CURRENT_DESKTOP` is
-   `Scottland:Wayfire:wlroots`). A file name alone creates no backend: Scottland could own a
-   desktop fallback contract (which interfaces, preference order, user overrides) while the distro
-   chooses the backends it ships. Acceptance: Settings, open/save, screenshot and screencast requests
-   work with the intended backends, also after relogin.
+4. **Portal backend behavior on Scottland** (Medium once screen sharing ships). Scottland 0.3
+   supplies `scottland-portals.conf`, read before `wayfire-portals.conf` for
+   `XDG_CURRENT_DESKTOP=Scottland:Wayfire:wlroots`; it selects GTK as default, xdg-desktop-portal-wlr
+   for ScreenCast and Screenshot, the installed keyring for Secret, and no backend for Inhibit,
+   GlobalShortcuts or InputCapture. The xdpw candidate pins the Scottland source that supplies this
+   config, but the exact combined Gooarchy VM acceptance is still pending. Verify that package install
+   puts the config at the portal data path and that Settings, open/save, screenshot and screencast
+   requests use the intended backends after relogin.
 5. **Silence or fix the warnings every session logs** (Low if cosmetic). Wayfire's animate plugin
    reports `Unknown animation type: ""` (a configuration value), and the goo shaders log
    `Uniform uBackgroundMap/uShine/uHints not found in program`. Whether the uniforms are optimized

@@ -1,5 +1,5 @@
-# Scottland is built locally only when its source pin is explicitly overridden. Otherwise the
-# repository package is selected in base.sh's system-upgrade transaction so its exact Wayfire
+# Scottland's fixed release-branch selector and explicit source overrides build locally. Otherwise
+# the repository package is selected in base.sh's system-upgrade transaction so its exact Wayfire
 # dependency stays atomic with Arch's update.
 source "$GOOARCHY_INSTALL/helpers/packages.sh"
 source "$GOOARCHY_INSTALL/helpers/repository.sh"
@@ -26,7 +26,11 @@ if ((GOOARCHY_BUILD_LOCAL_SCOTTLAND)); then
     echo "Scottland's PKGBUILD has changed shape; can't set the build identity" >&2
     exit 1
   }
-  report "Building Scottland locally from $GOOARCHY_SCOTTLAND_SOURCE_KIND pin $GOOARCHY_SCOTTLAND_REF because the pin is overridden; the repository copy is skipped. To return, unset GOOARCHY_SCOTTLAND_REF and rerun install.sh."
+  if [[ -z ${GOOARCHY_SCOTTLAND_REF_KIND:-} ]]; then
+    report "Building Scottland locally from the fixed release branch pin $GOOARCHY_SCOTTLAND_REF; the repository copy is skipped. Replace this with a final Scottland tag before the distro tag."
+  else
+    report "Building Scottland locally from $GOOARCHY_SCOTTLAND_SOURCE_KIND pin $GOOARCHY_SCOTTLAND_REF because GOOARCHY_SCOTTLAND_REF is overridden; the repository copy is skipped. To return, unset GOOARCHY_SCOTTLAND_REF and rerun install.sh."
+  fi
   echo "Scottland ${rev:0:12} ($(git -C "$src" log -1 --format=%s)) for Wayfire $wayfire: scottland $version"
 
   build_package "$src/packaging/arch"
