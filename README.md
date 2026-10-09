@@ -78,9 +78,9 @@ shell on tty1 instead of a restart loop. Checks named "config:" only read config
 title bar setting, tmux, touchpad, the agents' bell settings); they don't show the behavior. It also
 records what's missing (notifications, lock, portals, ...) for [DEFICIT.md](DEFICIT.md). On
 2026-10-05, fresh runs passed every check with virgl graphics (65) and with software graphics (66,
-including the login check restoring autologin). `tests/vm/selftest.py` checks the harness, and
-`tests/flavorings-pkgbuild-source-test.sh` checks the
-final-tag-only package source selector without a VM; the defaults tool's tests live in
+including the login check restoring autologin). `tests/vm/selftest.py` and
+`tests/vm/process-guard-test.sh` check the harness, and `tests/flavorings-pkgbuild-source-test.sh`
+checks the final-tag-only package source selector without a VM; the defaults tool's tests live in
 gooarchy-flavorings.
 
 What it doesn't show: it's the Arch cloud image (cloud-init gives it an SSH key and passwordless
@@ -147,6 +147,7 @@ without Gooarchy:
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
+| `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
