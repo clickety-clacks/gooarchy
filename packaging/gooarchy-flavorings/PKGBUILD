@@ -1,0 +1,45 @@
+# gooarchy-flavorings: Gooarchy's curated defaults and the Watercolor Dream themes, built from the
+# gooarchy-flavorings repository at the final tag pinned here. Gooarchy and Scottland's Omarchy
+# adapter install this same package. It needs nothing from a gooarchy or Scottland checkout, so
+# this file can be built on its own: makepkg in a directory holding only it.
+#
+# Leave _tag empty while the release gate is open. The recipe fails closed until the exact
+# authorized final Flavorings tag is supplied; do not substitute an RC, branch, or commit.
+# pkgver starts at 0.0.2 so it sorts above the 0.0.1.r* versions of the earlier combined recipe.
+pkgname=gooarchy-flavorings
+_tag=
+pkgver=0.0.2.r17.g4dc4e7a
+pkgrel=1
+pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
+arch=('any')
+url="https://github.com/clickety-clacks/gooarchy-flavorings.git"
+license=('LicenseRef-unlicensed')
+# Runtime needs of what it installs. Building needs only git and Python (and base-devel), not
+# Scottland: on a machine without Scottland yet, build with makepkg --nodeps (see the README).
+depends=('scottland' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
+         'xdg-user-dirs' 'grim' 'slurp')
+optdepends=('ghostty: themed terminal' 'chromium: browser (system title bar)'
+            'strata-bin: file manager' 'tmux: titled terminal sessions')
+makedepends=('git' 'python')
+backup=('etc/tmux.conf')
+options=('!debug')
+
+_recipe=${BASH_SOURCE[0]}
+_tag_count=$(grep -c '^_tag=' "$_recipe" || true)
+_commit_count=$(grep -c '^_commit=' "$_recipe" || true)
+_branch_count=$(grep -c '^_branch=' "$_recipe" || true)
+if [[ $_tag_count == 1 && $_commit_count == 0 && $_branch_count == 0 &&
+      $_tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
+   git check-ref-format "refs/tags/$_tag"; then
+  _flavorings_source_ref="#tag=$_tag"
+else
+  echo "Set exactly one final version _tag (vMAJOR.MINOR.PATCH) in the gooarchy-flavorings recipe; raw commit, branch, RC, and missing pins are unsupported." >&2
+  exit 1
+fi
+
+source=("gooarchy-flavorings::git+$url$_flavorings_source_ref")
+sha256sums=('SKIP')
+
+package() {
+  make -C "$srcdir/gooarchy-flavorings" install DESTDIR="$pkgdir"
+}
