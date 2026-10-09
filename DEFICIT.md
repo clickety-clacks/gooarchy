@@ -39,6 +39,7 @@ need it" means the severity applies to the people who depend on the feature.
 | Saved credentials (keyring) | High for those who need it | VM | No `org.freedesktop.secrets` provider. Chromium has no keyring to encrypt saved passwords with (it falls back to its basic store); apps that keep tokens in the keyring can't sign in, or forget the login. |
 | Power and session menu | Medium | VM | No shutdown/reboot/suspend UI. Super+Shift+Escape logs out (and `--autologin` logs straight back in); the rest is `systemctl poweroff`/`reboot`/`suspend` in a terminal. |
 | Keybinding help | Medium | Config | No cheatsheet; Scottland's and Gooarchy's keys are only in the config files. |
+| System menu and its utilities | Medium | Config / Undecided | No system menu. Omarchy's menu (`omarchy-menu`) is the reference: one key opens routes to install and remove software (repository and AUR packages), install web apps and terminal-app launchers, install, switch and remove themes, pick a background or font, set default apps, capture and share, toggle features, set up security (fingerprint, FIDO2), restart stuck services and update the system. Gooarchy has none of these; each is a terminal command or isn't available. Which utilities Gooarchy offers is undecided; this row records the gap, not a plan to copy each one. |
 | Greeter, boot polish | Low | VM | Boot shows kernel and systemd text, then a console login on tty1 (or autologin). That is the chosen design for now; no graphical greeter, boot splash or branding. |
 
 ## Input, display, sound
