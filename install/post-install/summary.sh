@@ -11,5 +11,6 @@ if [[ -s $GOOARCHY_STATE/reports.log ]]; then
 fi
 echo
 echo "Next: reboot, or log in on tty1, to start Scottland. Super+Enter opens a terminal."
-echo "When Arch updates Wayfire, pacman -Syu stops until you run ./install.sh again (it rebuilds Scottland)."
+echo "If Arch's Wayfire moves ahead of published Scottland, pacman -Syu stops until a matching Scottland is published."
+echo "With GOOARCHY_SCOTTLAND_REF overridden, ./install.sh builds Scottland locally for Arch's Wayfire."
 echo "What Gooarchy doesn't have yet is listed in DEFICIT.md."

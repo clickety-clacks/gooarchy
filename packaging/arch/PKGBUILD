@@ -24,9 +24,9 @@ makedepends=('git' 'python')
 options=('!debug')
 
 # The Watercolor Dream themes live in Scottland's repository; take them from the Scottland
-# commit Gooarchy builds (install/sources.conf).
+# source revision Gooarchy builds (install/sources.conf).
 source "$_repo/install/sources.conf"
-source=("scottland::git+${GOOARCHY_SCOTTLAND_REPO}#commit=${GOOARCHY_SCOTTLAND_REF}")
+source=("scottland::git+${GOOARCHY_SCOTTLAND_REPO}#${GOOARCHY_SCOTTLAND_SOURCE_KIND}=${GOOARCHY_SCOTTLAND_REF}")
 sha256sums=('SKIP')
 
 build() {

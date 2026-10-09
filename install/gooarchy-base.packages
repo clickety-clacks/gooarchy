@@ -3,9 +3,14 @@
 # Scottland and Strata are built separately (they aren't in Arch's repositories) and pull in
 # their own dependencies (Wayfire, Quickshell, GTK 4, ...).
 
+# Firmware for every machine's actual devices; stock Arch package, no vendor detection or trimming
+linux-firmware
+
 # The desktop session
 wayfire
 xdg-desktop-portal
+# X11-only apps (games, Steam, older Electron and Java apps) run through Xwayland
+xorg-xwayland
 # Settings (light/dark for GTK 4 apps and Scottland) and file chooser portals
 xdg-desktop-portal-gtk
 gsettings-desktop-schemas
