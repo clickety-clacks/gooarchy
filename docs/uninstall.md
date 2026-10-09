@@ -60,17 +60,23 @@ If you edited `/etc/tmux.conf`, pacman keeps your edited copy as `/etc/tmux.conf
 ### NVIDIA packages and initramfs
 
 The NVIDIA installer step installs `nvidia-open-dkms` and `nvidia-utils` explicitly, and may add
-matching kernel-header packages. Remove the two driver packages with:
+matching kernel-header packages. In the install attempt's `packages-before.txt`, check whether each
+driver package was already installed. Remove only packages absent from that manifest; keep any
+driver package that was present before the attempt.
 
 ```sh
-sudo pacman -Rns nvidia-open-dkms nvidia-utils
+cd ~/.local/state/gooarchy/logs/<time>
+grep -E '^(nvidia-open-dkms|nvidia-utils) ' packages-before.txt || true
 ```
 
 Only remove a header package if it was absent from `packages-before.txt` for the install attempt.
 If Gooarchy replaced the prebuilt `nvidia-open` package, restore it with
 `sudo pacman -S nvidia-open` before removing the DKMS packages. For a replaced `nvidia-open-lts`,
-use `sudo pacman -S nvidia-open-lts` instead. Remove the early-KMS drop-in and regenerate the
-initramfs images so they no longer contain the Gooarchy-added modules:
+use `sudo pacman -S nvidia-open-lts` instead. Before removing the early-KMS drop-in, check the
+install report and confirm the file still has Gooarchy's managed-content marker. If the installer
+reported that it left an existing file untouched, or its contents no longer match the managed file,
+leave it in place. Otherwise remove it and regenerate the initramfs images so they no longer contain
+the Gooarchy-added modules:
 
 ```sh
 sudo rm -f /etc/mkinitcpio.conf.d/gooarchy-nvidia.conf

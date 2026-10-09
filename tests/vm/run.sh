@@ -723,7 +723,7 @@ cmd_nvidia_install() {
   env=$(nvidia_guest_env "$stamp")
   flags=$(installer_flags)
   out=$(artifacts)
-  guest "cd ~/gooarchy && test -x \$HOME/gooarchy-nvidia-matrix/$stamp/nvidia-test-bash-env.sh && env $env BASH_ENV=\$HOME/gooarchy-nvidia-matrix/$stamp/nvidia-test-bash-env.sh GOOARCHY_TEST_NVIDIA_DEVICES=10de,0x030000,0x25a2,0 $(guest_proxy_env) ./install.sh $flags" \
+  guest "cd ~/gooarchy && test -r \$HOME/gooarchy-nvidia-matrix/$stamp/nvidia-test-bash-env.sh && env $env BASH_ENV=\$HOME/gooarchy-nvidia-matrix/$stamp/nvidia-test-bash-env.sh GOOARCHY_TEST_NVIDIA_DEVICES=0x10de,0x030000,0x25a2,0 $(guest_proxy_env) ./install.sh $flags" \
     >"$out/nvidia-supported-install.log" 2>&1 || status=$?
   guest 'tar -C ~/.local/state/gooarchy -cf - logs builds.tsv reports.log 2>/dev/null' |
     tar -C "$out" -xf - 2>/dev/null || true

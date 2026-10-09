@@ -41,19 +41,21 @@ nvidia_detect_devices() {
       [[ -n $row ]] || continue
       row=${row//,/ }
       read -r vendor class device boot <<<"$row"
-      [[ -n ${vendor:-} && -n ${class:-} && -n ${device:-} && -n ${boot:-} ]] || continue
+      [[ -n ${vendor:-} && -n ${class:-} && -n ${device:-} ]] || continue
+      boot=${boot:-0}
       printf '%s %s %s %s\n' "$vendor" "$class" "$device" "$boot"
     done <<<"$GOOARCHY_TEST_NVIDIA_DEVICES"
     return
   fi
 
   for path in /sys/bus/pci/devices/*; do
-    [[ -r $path/vendor && -r $path/class && -r $path/device && -r $path/boot_vga ]] || continue
+    [[ -r $path/vendor && -r $path/class && -r $path/device ]] || continue
     vendor=$(<"$path/vendor")
     class=$(<"$path/class")
     [[ $class == 0x03* ]] || continue
     device=$(<"$path/device")
-    boot=$(<"$path/boot_vga")
+    boot=0
+    [[ -r $path/boot_vga ]] && boot=$(<"$path/boot_vga")
     printf '%s %s %s %s\n' "$vendor" "$class" "$device" "$boot"
   done
 }
@@ -101,7 +103,14 @@ nvidia_pacman_version() {
 nvidia_sync_version() {
   local output
   output=$(LC_ALL=C pacman -Si "$1" 2>/dev/null) || return 1
-  awk -F ': ' '$1 == "Version" { print $2; exit }' <<<"$output"
+  awk '
+    /^[[:space:]]*Version[[:space:]]*:/ {
+      sub(/^[^:]*:[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      if (length) { print; found=1; exit }
+    }
+    END { if (!found) exit 1 }
+  ' <<<"$output"
 }
 
 nvidia_sync_installed_size_kb() {
@@ -127,6 +136,12 @@ nvidia_module_version_from_package() {
   local version=$1
   version=${version#*:}
   printf '%s\n' "${version%-*}"
+}
+
+nvidia_driver_module_files() {
+  find "$1" -type f \
+    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+    -print0
 }
 
 nvidia_is_known_package() {
@@ -174,7 +189,7 @@ nvidia_find_foreign_driver_packages() {
     if [[ ! " ${foreign[*]} " == *"$owner "* ]]; then
       foreign+=("$owner ${owner_version:-unknown}")
     fi
-  done < <(find /usr/lib/modules -type f -name 'nvidia*.ko*' -print0 2>/dev/null)
+  done < <(nvidia_driver_module_files /usr/lib/modules 2>/dev/null)
 
   if ((${#foreign[@]})); then
     printf '%s\n' "${foreign[@]}"
@@ -328,7 +343,7 @@ nvidia_preset_config() {
 }
 
 nvidia_config_module_text() {
-  local file line text= active=0
+  local file=${1:-} line text= active=0
   [[ -f $file ]] || return 0
   while IFS= read -r line || [[ -n $line ]]; do
     line=${line%%\#*}
@@ -555,7 +570,7 @@ nvidia_only_missing_nvidia_errors() {
 
 nvidia_image_listable() {
   local image=$1
-  [[ -f $image ]] && lsinitcpio "$image" >/dev/null 2>&1
+  sudo test -f "$image" && sudo lsinitcpio "$image" >/dev/null 2>&1
 }
 
 nvidia_image_module_state() {
@@ -568,8 +583,8 @@ nvidia_image_module_state() {
     NV_IMAGE_ERROR="could not create a temporary inspection directory"
     return 1
   }
-  if ! (cd "$tmp" && lsinitcpio -x "$image" >/dev/null 2>&1); then
-    rm -rf "$tmp"
+  if ! (cd "$tmp" && sudo lsinitcpio -x "$image" >/dev/null 2>&1); then
+    sudo rm -rf "$tmp"
     NV_IMAGE_ERROR="image could not be listed or extracted"
     return 1
   fi
@@ -581,7 +596,7 @@ nvidia_image_module_state() {
     [[ $name == nvidia* ]] || continue
     NV_IMAGE_HAS_NVIDIA=1
     NV_IMAGE_MODULE_SET[$name]=1
-    version=$(modinfo -F version "$file" 2>/dev/null || true)
+    version=$(sudo modinfo -F version "$file" 2>/dev/null || true)
     if [[ -z $version || $version != "$expected" ]]; then
       NV_IMAGE_ERROR="${file#"$tmp"/} has module version ${version:-unknown}, expected $expected"
     fi
@@ -590,17 +605,21 @@ nvidia_image_module_state() {
       while IFS= read -r firmware; do
         [[ -n $firmware ]] || continue
         local firmware_path
-        firmware_path=$(find "$tmp" -type f -path "*/firmware/$firmware" -print -quit)
+        firmware_path=$(sudo find "$tmp" -type f \
+          \( -path "*/firmware/$firmware" -o -path "*/firmware/$firmware.zst" -o -path "*/firmware/$firmware.xz" \) \
+          -print -quit)
         if [[ -z $firmware_path ]]; then
           NV_IMAGE_ERROR="${file#"$tmp"/} requires firmware $firmware that is absent from the image"
         fi
-      done < <(modinfo -F firmware "$file" 2>/dev/null || true)
+      done < <(sudo modinfo -F firmware "$file" 2>/dev/null || true)
     fi
-  done < <(find "$tmp" -type f -name 'nvidia*.ko*' -print0)
+    done < <(sudo find "$tmp" -type f \
+      \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+      -print0)
   if [[ ${present[nvidia]:-} && ${present[nvidia_modeset]:-} && ${present[nvidia_uvm]:-} && ${present[nvidia_drm]:-} ]]; then
     NV_IMAGE_HAS_ALL=1
   fi
-  rm -rf "$tmp"
+  sudo rm -rf "$tmp"
   [[ -z $NV_IMAGE_ERROR ]]
 }
 
@@ -675,7 +694,7 @@ nvidia_kernel_module_state() {
   while IFS= read -r -d '' file; do
     version=$(modinfo -F version "$file" 2>/dev/null || true)
     [[ -n $version && $version == "$expected" ]] || NV_KERNEL_ERROR="${file#/usr/lib/modules/$kernel/} is ${version:-unreadable}, expected $expected"
-  done < <(find "/usr/lib/modules/$kernel" -type f -name 'nvidia*.ko*' -print0 2>/dev/null)
+  done < <(nvidia_driver_module_files "/usr/lib/modules/$kernel" 2>/dev/null)
   [[ -z $NV_KERNEL_ERROR ]]
 }
 
@@ -953,6 +972,7 @@ nvidia_config_has_nouveau() {
   for file in /etc/mkinitcpio.conf /etc/mkinitcpio.conf.d/*.conf; do
     [[ -f $file ]] || continue
     text=$(nvidia_config_module_text "$file")
+    text=${text//[()]/ }
     [[ $text =~ (^|[[:space:]])nouveau[?]?([[:space:]]|$) ]] && return 0
   done
   for file in /etc/modprobe.d/*.conf; do
@@ -976,6 +996,7 @@ nvidia_report_suspend_overrides() {
       END { exit !found }
     ' "$file" && nvidia_report "left the user's NVIDIA suspend configuration in $file unchanged; kernel suspend notifiers or video-memory preservation are user-configured, and Gooarchy does not change the NVIDIA sleep services."
   done
+  return 0
 }
 
 nvidia_owned_config_version() {
@@ -1008,7 +1029,8 @@ if [[ -n \${KERNELVERSION:-} ]]; then
       GOOARCHY_NVIDIA_TREE_MATCHES=0
       break
     fi
-  done < <(find "/usr/lib/modules/\${KERNELVERSION:-}" -type f -name 'nvidia*.ko*' -print0 2>/dev/null)
+  done < <(find "/usr/lib/modules/\${KERNELVERSION:-}" -type f \\
+    \\( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \\) -print0 2>/dev/null)
 fi
 if [[ -n \${GOOARCHY_NVIDIA_KERNEL_PACKAGE#* } ]] &&
    [[ \${GOOARCHY_NVIDIA_KERNEL_PACKAGE#* } == \${GOOARCHY_NVIDIA_HEADERS_PACKAGE#* } ]] &&
@@ -1401,8 +1423,10 @@ nvidia_install() {
     if nvidia_kernel_has_headers "$kernel"; then continue; fi
     if headers_target=$(nvidia_headers_target "$kernel"); then
       header_targets+=("$headers_target")
-      if ! pacman -Qe "${headers_target%%=*}" >/dev/null 2>&1; then
-        nonexplicit_headers+=("${headers_target%%=*}")
+      package=${headers_target%%=*}
+      package=${package##*/}
+      if pacman -Q "$package" >/dev/null 2>&1 && ! pacman -Qe "$package" >/dev/null 2>&1; then
+        nonexplicit_headers+=("$package")
       fi
     fi
   done

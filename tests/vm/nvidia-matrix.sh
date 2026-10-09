@@ -20,12 +20,31 @@ test_stamp=${GOOARCHY_NVIDIA_TEST_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 test_root=${GOOARCHY_NVIDIA_ARTIFACTS:-$HOME/gooarchy-nvidia-matrix/$test_stamp}
 state=$HOME/.local/state/gooarchy
 owned=/etc/mkinitcpio.conf.d/gooarchy-nvidia.conf
-supported='10de,0x030000,0x25a2,0'
-legacy='10de,0x030000,0x1b80,0'
-dual_gpu=$'0x8086,0x030000,0x9a49,1\n10de,0x030200,0x25a2,0'
+supported='0x10de,0x030000,0x25a2,0'
+legacy='0x10de,0x030000,0x1b80,0'
+dual_gpu=$'0x8086,0x030000,0x9a49,1\n0x10de,0x030200,0x25a2,0'
 checks=0
 failures=0
 last_status=0
+
+driver_module_files() {
+  find "$1" -type f \
+    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+    -print0
+}
+
+repository_version() {
+  local output
+  output=$(LC_ALL=C pacman -Si "$1" 2>/dev/null) || return 1
+  awk '
+    /^[[:space:]]*Version[[:space:]]*:/ {
+      sub(/^[^:]*:[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      if (length) { print; found=1; exit }
+    }
+    END { if (!found) exit 1 }
+  ' <<<"$output"
+}
 old_utils_package=
 old_dkms_package=
 old_utils_sha=
@@ -141,7 +160,7 @@ images=()
 for module_dir in /usr/lib/modules/*; do
   [[ -f $module_dir/pkgbase && $(<"$module_dir/pkgbase") == linux ]] || continue
   printf 'kernel  %s\n' "${module_dir##*/}"
-  find "$module_dir" -type f -name 'nvidia*.ko*' -print0 | sort -z | xargs -0r sha256sum
+  driver_module_files "$module_dir" | sort -z | xargs -0r sha256sum
 done
 if [[ -r /etc/mkinitcpio.d/linux.preset ]]; then
 while IFS= read -r line || [[ -n $line ]]; do
@@ -168,7 +187,9 @@ for image in "${images[@]}"; do
       module_name=${module_name//-/_}
       version=$(modinfo -F version "$module_file" 2>/dev/null || true)
       printf 'image-module  %s  %s  %s\n' "$image" "$module_name" "${version:-unknown}"
-    done < <(find "$tmp" -type f -name 'nvidia*.ko*' -print0)
+    done < <(find "$tmp" -type f \
+      \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+      -print0)
   fi
   rm -rf "$tmp"
 done
@@ -372,10 +393,8 @@ capture_repository_pair_mismatch() {
 
 verify_repository_driver_pair() {
   local utils_version dkms_version
-  utils_version=$(LC_ALL=C pacman -Si extra/nvidia-utils 2>/dev/null |
-    awk -F ': ' '$1 == "Version" { print $2; exit }' || true)
-  dkms_version=$(LC_ALL=C pacman -Si extra/nvidia-open-dkms 2>/dev/null |
-    awk -F ': ' '$1 == "Version" { print $2; exit }' || true)
+  utils_version=$(repository_version extra/nvidia-utils || true)
+  dkms_version=$(repository_version extra/nvidia-open-dkms || true)
   if [[ -z $utils_version || -z $dkms_version || $utils_version != "$dkms_version" ]]; then
     local evidence
     evidence=$(capture_repository_pair_mismatch)
@@ -392,7 +411,7 @@ ensure_archive_pair() {
   local saved_current saved_utils saved_utils_version saved_utils_sha saved_dkms saved_dkms_version saved_dkms_sha
   local -a urls=()
   metadata=$test_root/nvidia-archive-pair.tsv
-  current_version=$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')
+  current_version=$(repository_version extra/nvidia-utils)
   if [[ -s $metadata && -n $current_version ]]; then
     saved_current=$(awk -F '\t' '$1 == "current" {print $2; exit}' "$metadata")
     saved_utils=$(awk -F '\t' '$1 == "nvidia-utils" {print $2; exit}' "$metadata")
@@ -573,33 +592,39 @@ preset_images() {
 image_modules() {
   local image=$1 tmp
   tmp=$(mktemp -d "$test_root/image.XXXXXXXX") || return 1
-  if ! (cd "$tmp" && lsinitcpio -x "$image" >/dev/null 2>&1); then
-    rm -rf "$tmp"
+  if ! (cd "$tmp" && sudo lsinitcpio -x "$image" >/dev/null 2>&1); then
+    sudo rm -rf "$tmp"
     return 1
   fi
-  find "$tmp" -type f -name 'nvidia*.ko*' -printf '%f\n' |
+  sudo find "$tmp" -type f \
+    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+    -printf '%f\n' |
     sed -E 's/\.ko.*$//; s/-/_/g' | sort -u
-  rm -rf "$tmp"
+  sudo rm -rf "$tmp"
 }
 
 check_image_versions_and_firmware() {
   local image=$1 expected=$2 tmp file version firmware firmware_path
   tmp=$(mktemp -d "$test_root/image-check.XXXXXXXX") || return 1
-  if ! (cd "$tmp" && lsinitcpio -x "$image" >/dev/null 2>&1); then
-    rm -rf "$tmp"
+  if ! (cd "$tmp" && sudo lsinitcpio -x "$image" >/dev/null 2>&1); then
+    sudo rm -rf "$tmp"
     return 1
   fi
   while IFS= read -r -d '' file; do
-    version=$(modinfo -F version "$file" 2>/dev/null || true)
-    if [[ $version != "$expected" ]]; then rm -rf "$tmp"; return 1; fi
+    version=$(sudo modinfo -F version "$file" 2>/dev/null || true)
+    if [[ $version != "$expected" ]]; then sudo rm -rf "$tmp"; return 1; fi
     [[ ${file##*/} == nvidia.ko* ]] || continue
     while IFS= read -r firmware; do
       [[ -n $firmware ]] || continue
-      firmware_path=$(find "$tmp" -type f -path "*/firmware/$firmware" -print -quit)
-      [[ -n $firmware_path ]] || { rm -rf "$tmp"; return 1; }
-    done < <(modinfo -F firmware "$file" 2>/dev/null || true)
-  done < <(find "$tmp" -type f -name 'nvidia*.ko*' -print0)
-  rm -rf "$tmp"
+      firmware_path=$(sudo find "$tmp" -type f \
+        \( -path "*/firmware/$firmware" -o -path "*/firmware/$firmware.zst" -o -path "*/firmware/$firmware.xz" \) \
+        -print -quit)
+      [[ -n $firmware_path ]] || { sudo rm -rf "$tmp"; return 1; }
+    done < <(sudo modinfo -F firmware "$file" 2>/dev/null || true)
+  done < <(sudo find "$tmp" -type f \
+    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+    -print0)
+  sudo rm -rf "$tmp"
 }
 
 image_has_modules_at_version() {
@@ -672,10 +697,10 @@ kernel_sounds_for_boot() {
     [[ -n $module_version ]] || return 1
     file_version=$(modinfo -F version "$module_file" 2>/dev/null || true)
     [[ $file_version == "$module_version" ]] || return 1
-  done < <(find "/usr/lib/modules/$kernel" -type f -name 'nvidia*.ko*' -print0)
+  done < <(driver_module_files "/usr/lib/modules/$kernel")
   image_set_for_kernel "$pkgbase" || return 1
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-    [[ -f $image ]] && lsinitcpio "$image" >/dev/null 2>&1 || return 1
+    sudo test -f "$image" && sudo lsinitcpio "$image" >/dev/null 2>&1 || return 1
     modules=$(image_modules "$image") || return 1
     if [[ -z $module_version ]]; then
       [[ -z $modules ]] || return 1
@@ -1279,7 +1304,7 @@ test_custom_preset() {
   grep -Fq 'linux.preset reads /etc/mkinitcpio.conf directly' "$test_root/r11-custom-config-pacman-hook.log" && report_seen=1
   module_version=$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")
   for image in "${NV_TEST_IMAGES[@]}"; do
-    lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
+    sudo lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
     check_image_versions_and_firmware "$image" "$module_version" || image_ok=0
     modules=$(image_modules "$image" 2>/dev/null || true)
     [[ -z $modules ]] || image_ok=0
@@ -1385,7 +1410,7 @@ test_r15_linux_gooarchy_dkms_failure() {
 
   package_version=$(pacman -Q nvidia-utils | awk '{print $2}')
   module_version=$(module_version_from_package "$package_version")
-  repo_version=$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')
+  repo_version=$(repository_version extra/nvidia-utils)
   for module in "${required[@]}"; do
     [[ $(modinfo -k "$linux_kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] ||
       linux_covered=0
@@ -1435,17 +1460,17 @@ test_r15_linux_gooarchy_dkms_failure() {
   status=$last_status
   package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
   module_version=$(module_version_from_package "$package_version")
-  repo_version=$(pacman -Si extra/nvidia-utils 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
+  repo_version=$(repository_version extra/nvidia-utils || true)
   image_set_for_kernel linux-gooarchy || image_ok=0
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-    lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
+    sudo lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
     check_image_versions_and_firmware "$image" "$module_version" || image_ok=0
     [[ -z $(image_modules "$image" 2>/dev/null || true) ]] || image_ok=0
   done
   while IFS= read -r -d '' file; do
     version=$(modinfo -F version "$file" 2>/dev/null || true)
     [[ $version == "$module_version" ]] || gooarchy_modules_ok=0
-  done < <(find "/usr/lib/modules/$kernel" -type f -name 'nvidia*.ko*' -print0)
+  done < <(driver_module_files "/usr/lib/modules/$kernel")
   if [[ $status == 0 && -n $module_version && $package_version == "$repo_version" &&
         $(pacman -Qe nvidia-open-dkms >/dev/null 2>&1; echo $?) == 0 &&
         -z $(modinfo -k "$kernel" -F version nvidia_drm 2>/dev/null || true) &&
@@ -1479,7 +1504,7 @@ test_r15_linux_gooarchy_dkms_failure() {
     while IFS= read -r -d '' file; do
       version=$(modinfo -F version "$file" 2>/dev/null || true)
       [[ $version == "$module_version" ]] || other_kernels_ok=0
-    done < <(find "$dir" -type f -name 'nvidia*.ko*' -print0)
+    done < <(driver_module_files "$dir")
     headers_version=$(pacman -Q "$pkgbase-headers" 2>/dev/null | awk '{print $2}' || true)
     kernel_package_version=$(pacman -Q "$pkgbase" 2>/dev/null | awk '{print $2}' || true)
     kernel_covered=0
@@ -1492,7 +1517,7 @@ test_r15_linux_gooarchy_dkms_failure() {
     fi
     image_set_for_kernel "$pkgbase" || { other_kernels_ok=0; continue; }
     for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-      lsinitcpio "$image" >/dev/null 2>&1 || other_kernels_ok=0
+      sudo lsinitcpio "$image" >/dev/null 2>&1 || other_kernels_ok=0
       check_image_versions_and_firmware "$image" "$module_version" || other_kernels_ok=0
       if ((kernel_covered)); then
         image_has_modules_at_version "$image" "$module_version" "${required[@]}" || other_kernels_ok=0
@@ -1559,7 +1584,7 @@ test_r15_interrupted_after_commit() {
     pkgbase=$(<"$module_dir/pkgbase")
     image_set_for_kernel "$pkgbase" || { images_ok=0; continue; }
     for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-      lsinitcpio "$image" >/dev/null 2>&1 || images_ok=0
+      sudo lsinitcpio "$image" >/dev/null 2>&1 || images_ok=0
       modules=$(image_modules "$image" 2>/dev/null || true)
       [[ -z $modules ]] || images_ok=0
     done
@@ -1586,8 +1611,8 @@ test_r15_interrupted_after_commit() {
     "before=$image_hashes_before after=$image_hashes_after; any difference is recorded for hook attribution"
   package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
   module_version=$(module_version_from_package "$package_version")
-  repo_utils=$(pacman -Si extra/nvidia-utils 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
-  repo_dkms=$(pacman -Si extra/nvidia-open-dkms 2>/dev/null | awk -F ': ' '$1 == "Version" {print $2; exit}' || true)
+  repo_utils=$(repository_version extra/nvidia-utils || true)
+  repo_dkms=$(repository_version extra/nvidia-open-dkms || true)
   grep -Fq 'interrupted the NVIDIA step after the package transaction committed' \
     "$test_root/r15-interrupted-after-commit.log" && report_ok=1
   [[ $package_version == "$repo_utils" && $repo_utils == "$repo_dkms" &&
@@ -1601,7 +1626,7 @@ test_r15_interrupted_after_commit() {
     done
     image_set_for_kernel "$pkgbase" || { images_ok=0; continue; }
     for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-      lsinitcpio "$image" >/dev/null 2>&1 || images_ok=0
+      sudo lsinitcpio "$image" >/dev/null 2>&1 || images_ok=0
       check_image_versions_and_firmware "$image" "$module_version" || images_ok=0
       modules=$(image_modules "$image" 2>/dev/null || true)
       [[ -z $modules ]] || images_ok=0
@@ -1788,7 +1813,7 @@ test_user_partial_kernels() {
       image_ok=1
       module_version=$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")
       for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-        lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
+        sudo lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
         check_image_versions_and_firmware "$image" "$module_version" || image_ok=0
       done
       record "R15 $scenario partial images remain consistent and listable" "$image_ok" "$module_version"
@@ -1854,8 +1879,11 @@ test_pacman_hook_failure_with_partial_kernel() {
   sudo cp -a "$linux_preset" "$test_root/linux.preset.saved"
   sudo cp /etc/mkinitcpio.conf "$r11_config"
   r11_config_hash=$(sha256sum "$r11_config" | awk '{print $1}')
-  printf '\nALL_config="%s"\n' "$r11_config" >"$test_root/linux.preset.r11"
-  sudo cp "$test_root/linux.preset.r11" "$linux_preset"
+  if grep -Eq '^[[:space:]]*([[:alnum:]_-]+_)?config[[:space:]]*=' "$linux_preset"; then
+    sudo sed -i -E "s|^([[:space:]]*([[:alnum:]_-]+_)?config[[:space:]]*=).*|\\1\"$r11_config\"|" "$linux_preset"
+  else
+    printf '\nALL_config="%s"\n' "$r11_config" | sudo tee -a "$linux_preset" >/dev/null
+  fi
   if ! sudo mkinitcpio -p linux >"$test_root/r15-hook-r11-prepare.log" 2>&1; then
     record 'R11/R15 custom preset image fixture can be prepared' 0 'mkinitcpio failed using the named config'
     sudo mv "$test_root/linux.preset.saved" "$linux_preset"
@@ -1865,7 +1893,7 @@ test_pacman_hook_failure_with_partial_kernel() {
   fi
   image_set_for_kernel linux || r11_image_ok=0
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-    lsinitcpio "$image" >/dev/null 2>&1 || r11_image_ok=0
+    sudo lsinitcpio "$image" >/dev/null 2>&1 || r11_image_ok=0
     check_image_versions_and_firmware "$image" "$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")" || r11_image_ok=0
     modules=$(image_modules "$image" 2>/dev/null || true)
     [[ -z $modules ]] || r11_image_ok=0
@@ -1913,7 +1941,7 @@ test_pacman_hook_failure_with_partial_kernel() {
   r11_image_ok=1
   image_set_for_kernel linux || r11_image_ok=0
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-    lsinitcpio "$image" >/dev/null 2>&1 || r11_image_ok=0
+    sudo lsinitcpio "$image" >/dev/null 2>&1 || r11_image_ok=0
     check_image_versions_and_firmware "$image" "$module_version" || r11_image_ok=0
     modules=$(image_modules "$image" 2>/dev/null || true)
     [[ -z $modules ]] || r11_image_ok=0
@@ -2088,8 +2116,8 @@ test_held_driver() {
   sudo mv "$saved_conf" "$pacman_conf"
   sudo pacman -S --noconfirm --needed nvidia-utils nvidia-open-dkms
   run_nvidia_step r8-held-driver-restored "$supported" -
-  record 'R8 archive hold fixture is restored to the repository driver' "$([[ $last_status == 0 && $(pacman -Q nvidia-utils | awk '{print $2}') == "$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')" ]] && echo 1 || echo 0)" 'repository driver restored after held-version check'
-  if [[ $last_status == 0 && $(pacman -Q nvidia-utils | awk '{print $2}') == "$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')" ]]; then
+  record 'R8 archive hold fixture is restored to the repository driver' "$([[ $last_status == 0 && $(pacman -Q nvidia-utils | awk '{print $2}') == "$(repository_version extra/nvidia-utils)" ]] && echo 1 || echo 0)" 'repository driver restored after held-version check'
+  if [[ $last_status == 0 && $(pacman -Q nvidia-utils | awk '{print $2}') == "$(repository_version extra/nvidia-utils)" ]]; then
     rm -f "$test_root/driver-recovery-needed"
   fi
 }
@@ -2238,7 +2266,7 @@ test_r15_step_regeneration_after_successful_arch_upgrade() {
   fi
   image_set_for_kernel linux || image_ok=0
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-    lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
+    sudo lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
     modules=$(image_modules "$image" 2>/dev/null || true)
     [[ -z $modules ]] || image_ok=0
   done
@@ -2274,14 +2302,14 @@ test_r15_step_regeneration_after_successful_arch_upgrade() {
   image_ok=1
   image_set_for_kernel linux || image_ok=0
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-    lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
+    sudo lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
     check_image_versions_and_firmware "$image" "$(module_version_from_package "$current_package_version")" || image_ok=0
     modules=$(image_modules "$image" 2>/dev/null || true)
     [[ -z $modules ]] || image_ok=0
   done
   record 'R15 Arch upgrade hooks succeed and the step regeneration fails with complete, consistent fallback images' \
     "$([[ $status != 0 && $state_unchanged == 1 && $hook_ok == 1 && $step_failure == 1 && $image_ok == 1 && -e $owned &&
-          $current_package_version == "$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')" ]] && echo 1 || echo 0)" \
+          $current_package_version == "$(repository_version extra/nvidia-utils)" ]] && echo 1 || echo 0)" \
     "linux $kernel; nvidia-utils $current_package_version; owned early-KMS file remains for rerun"
   hold_r15_failure_row arch-upgrade-step-regen
   if restore_r15a_current_state; then
@@ -2363,11 +2391,11 @@ test_r15a_arch_upgrade_hook() {
     "$([[ $status == 0 && $hook_failed == 1 && $old_image_preserved == 1 && $stale_report == 1 ]] && echo 1 || echo 0)" \
     "arch-upgrade hook failure injected for linux; old image version $old_module_version"
   record 'R15a step repairs the inherited stale Linux images and completes' \
-    "$([[ $status == 0 && $current_package_version == "$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')" && $image_ok == 1 ]] && echo 1 || echo 0)" \
+    "$([[ $status == 0 && $current_package_version == "$(repository_version extra/nvidia-utils)" && $image_ok == 1 ]] && echo 1 || echo 0)" \
     "nvidia-utils $current_package_version; module version $current_module_version"
   hold_r15_failure_row arch-upgrade-hook-repaired
   if ((status != 0 || image_ok == 0)) ||
-     [[ $current_package_version != "$(pacman -Si extra/nvidia-utils | awk -F ': ' '$1 == "Version" {print $2; exit}')" ]]; then
+     [[ $current_package_version != "$(repository_version extra/nvidia-utils)" ]]; then
     restore_r15a_current_state || true
     return
   fi
