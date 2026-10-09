@@ -56,9 +56,9 @@ Upstream context, for reading upstream changes against the fork:
   is already installed, it is replaced in the same pacman transaction and the installer says so.
   `pacman -Syu` keeps Gooarchy's build: Arch's package doesn't declare that it replaces it.
   Running `./install.sh` again rebuilds it. Screen sharing also needs Scottland's
-  `scottland-portals.conf`. The 2026.11 release line selects the unreleased Scottland `0.3` branch
-  by name; its current remote head is `e5f0f439680af0efdcedc9ab7a5b014f12a79056`, where the config
-  is blob `c6ac951050a7cdeecad5fdd34126c9c03c7e0343`, and the package recipe installs it as
+  `scottland-portals.conf`. The 2026.11 release line builds Scottland locally from the unreleased
+  `0.3` branch by name. Its current remote head is `e5f0f439680af0efdcedc9ab7a5b014f12a79056`,
+  where the config is blob `c6ac951050a7cdeecad5fdd34126c9c03c7e0343`, and the package recipe installs it as
   `/usr/share/xdg-desktop-portal/scottland-portals.conf`. Scottland main at
   `21273828a427885202f8b5dce1543994184867ee` has no such file, so the 0.3 source is confined to the
   2026.11 release line; replace the branch selector with Scottland's final version tag before the

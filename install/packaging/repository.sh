@@ -7,9 +7,13 @@ fail_repository() {
   exit 1
 }
 
-scottland_override=0
-[[ -n ${GOOARCHY_SCOTTLAND_REF:-} ]] && scottland_override=1
+scottland_explicit_override=0
+[[ -n ${GOOARCHY_SCOTTLAND_REF:-} ]] && scottland_explicit_override=1
 source "$GOOARCHY_INSTALL/sources.conf"
+scottland_local_build=0
+if scottland_local_build_required "$scottland_explicit_override" "$GOOARCHY_SCOTTLAND_SOURCE_KIND"; then
+  scottland_local_build=1
+fi
 
 repository_url=${GOOARCHY_REPOSITORY_URL%/}
 [[ $repository_url =~ ^(https?://|file://)[^[:space:]#]+$ ]] ||
@@ -159,7 +163,7 @@ arch_wayfire_package_version=$(sync_package_field wayfire Version extra)
 arch_wayfire_version=${arch_wayfire_package_version#*:}
 arch_wayfire_version=${arch_wayfire_version%-*}
 
-if ((scottland_override == 0)) && [[ $repo_wayfire_version != "$arch_wayfire_version" ]]; then
+if ((scottland_local_build == 0)) && [[ $repo_wayfire_version != "$arch_wayfire_version" ]]; then
   fail_repository "repository scottland requires wayfire=$repo_wayfire_version, while Arch serves wayfire=$arch_wayfire_version. Publish a new Scottland first; to build one deliberately, set GOOARCHY_SCOTTLAND_REF and rerun install.sh. No package was installed or upgraded."
 fi
 
@@ -191,7 +195,7 @@ if ((checkout_dirty)) || [[ $checkout_commit != "$repo_source_commit" ]]; then
   local_gooarchy=1
 fi
 
-local_scottland=$scottland_override
+local_scottland=$scottland_local_build
 replace_scottland=0
 previous_scottland_version=
 previous_scottland_ref=

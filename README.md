@@ -79,8 +79,9 @@ title bar setting, tmux, touchpad, the agents' bell settings); they don't show t
 records what's missing (notifications, lock, portals, ...) for [DEFICIT.md](DEFICIT.md). On
 2026-10-05, fresh runs passed every check with virgl graphics (65) and with software graphics (66,
 including the login check restoring autologin). `tests/vm/selftest.py` checks the harness, and
-`tests/flavorings-pkgbuild-source-test.sh` checks the
-final-tag-only package source selector without a VM; the defaults tool's tests live in
+`tests/scottland-source-plan-test.sh` checks when a branch selector builds locally.
+`tests/flavorings-pkgbuild-source-test.sh` checks the final-tag-only package source selector without
+a VM; the defaults tool's tests live in
 gooarchy-flavorings.
 
 What it doesn't show: it's the Arch cloud image (cloud-init gives it an SSH key and passwordless
@@ -119,9 +120,9 @@ pacman stops ("wayfire=… required by scottland"), because the Scottland plugin
 Wayfire version. Once a matching Scottland package is published, `pacman -Syu` updates it with
 Wayfire. To deliberately build Scottland locally, set `GOOARCHY_SCOTTLAND_REF` when running
 `./install.sh`. Overrides accept final version tags (`vMAJOR.MINOR.PATCH`) or branches; the
-2026.11 release line selects the Scottland `0.3` branch by name and resolves its exact head in
-runner evidence, then must use a final Scottland tag before the distro tag. Raw commit overrides and
-release-candidate tags are rejected.
+2026.11 release line builds Scottland locally from its fixed `0.3` branch selector, resolves its
+exact head in runner evidence, and must use a final Scottland tag before the distro tag. Raw commit
+overrides and release-candidate tags are rejected.
 Main keeps the current fixed Scottland pin until v0.2.0 is final and keeps the current Flavorings
 pin until the first reviewed-main final tag is cut; main then uses only those final tags.
 
