@@ -12,8 +12,8 @@
 #   tests/vm/run.sh boot    fresh disk from the cloud image, boot, wait for SSH
 #   tests/vm/run.sh install copy this checkout in; ./install.sh made to fail at one step first, then
 #                           run again (it must recover); with --autologin
-#   tests/vm/run.sh rebuild-check   rebuild Scottland at another commit with the same upstream
-#                           version and back, plus an identical rebuild; the installed plugin must
+#   tests/vm/run.sh rebuild-check   rebuild Scottland from a distinct source ref, return to the
+#                           configured ref, then repeat it; the plugin and resolved commits must
 #                           follow each time
 #   tests/vm/run.sh reboot  reboot the guest and wait for the new boot
 #   tests/vm/run.sh check   check the running session (guest-check.py); screenshots and logs
@@ -44,8 +44,8 @@
 #   GOOARCHY_VM_RENDERNODE  host render node for virgl (default: the first /dev/dri/renderD*)
 #   GOOARCHY_VM_SIZE        guest screen size (default 1920x1080)
 #   GOOARCHY_VM_VNC         1: show the screen over VNC on 127.0.0.1:5900 (software graphics only)
-#   GOOARCHY_VM_REBUILD_REF Scottland commit for rebuild-check (default: a later commit whose
-#                           PKGBUILD has the same version as the pinned one)
+#   GOOARCHY_VM_REBUILD_REF Scottland ref for rebuild-check (default: branch main); it must resolve
+#                           to a different commit from the configured source
 #   GOOARCHY_VM_MEMORY, GOOARCHY_VM_CPUS, GOOARCHY_VM_DISK   (default 6144 MiB, 4, 40G)
 #   The guest's pacman cache is kept in GOOARCHY_VM_DIR/pkgcache (shared into the guest over 9p).
 #   GOOARCHY_VM_SSH_PORT    host port forwarded to the guest's SSH (default 2222, bound to loopback)
@@ -487,31 +487,39 @@ plugin_state() {
            "$(sha256sum "$(pacman -Qlq scottland | grep "/libscottland.so$")" | cut -c1-16)"'
 }
 
+scottland_build_commit() {
+  guest "awk -F '\\t' '\\$1 == \\\"scottland\\\" { ref = \\$3 } END { print ref }' ~/.local/state/gooarchy/builds.tsv"
+}
+
 cmd_rebuild_check() {
-  # A branch rebuild (or one for another Wayfire) must still replace the installed plugin, and
-  # the package version must say what was built.
+  # Rebuild from a distinct source ref, then restore the configured ref. Compare resolved commits
+  # as well as plugin hashes so identical selectors cannot pass or fail by coincidence.
   running || die "the guest isn't running"
   local out; out=$(artifacts)
-  local other=${GOOARCHY_VM_REBUILD_REF:-0.3}
+  local other=${GOOARCHY_VM_REBUILD_REF:-main}
   local other_kind=${GOOARCHY_VM_REBUILD_REF_KIND:-branch}
-  local a b c d other_commit default_version status=0
+  local a b c d initial_commit other_commit restored_commit status=0
   a=$(plugin_state)
+  initial_commit=$(scottland_build_commit)
+  [[ $initial_commit =~ ^[[:xdigit:]]{40}$ ]] || die "the configured Scottland build has no resolved commit"
   guest "cd ~/gooarchy && GOOARCHY_SCOTTLAND_REF=$other GOOARCHY_SCOTTLAND_REF_KIND=$other_kind $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-b.log" 2>&1 || status=$?
   b=$(plugin_state)
-  other_commit=$(guest "awk -F '\t' '\$1 == \"scottland\" { ref = \$3 } END { print ref }' ~/.local/state/gooarchy/builds.tsv")
+  other_commit=$(scottland_build_commit)
   local ok=0
-  [[ $status == 0 && $other_commit =~ ^[[:xdigit:]]{40}$ &&
+  [[ $status == 0 && $other_commit =~ ^[[:xdigit:]]{40}$ && $initial_commit != "$other_commit" &&
     ${a#* } != "${b#* }" && $b == *g${other_commit:0:7}* ]] && ok=1
-  hcheck "rebuilding Scottland from a branch pin replaces the installed plugin" "$ok" \
-    "A: $a; B: $b; branch resolved to $other_commit"
+  hcheck "rebuilding Scottland from a distinct source ref replaces the installed plugin" "$ok" \
+    "configured: $initial_commit ($a); alternate: $other_commit ($b)"
   status=0
   guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-a.log" 2>&1 || status=$?
   c=$(plugin_state)
+  restored_commit=$(scottland_build_commit)
   ok=0
-  default_version=${c%% *}
-  [[ $status == 0 && $default_version =~ \.g[[:xdigit:]]{7}\.wf &&
+  [[ $status == 0 && $restored_commit == "$initial_commit" &&
+    $c == *g${initial_commit:0:7}.wf* &&
     ${c#* } != "${b#* }" ]] && ok=1
-  hcheck "returning to the configured main pin replaces the branch build" "$ok" "now: $c"
+  hcheck "returning to the configured Scottland source restores the exact initial revision" "$ok" \
+    "initial: $initial_commit ($a); alternate: $other_commit ($b); restored: $restored_commit ($c)"
   status=0
   guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-same.log" 2>&1 || status=$?
   d=$(plugin_state)
