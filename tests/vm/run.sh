@@ -26,9 +26,11 @@
 #   tests/vm/run.sh stop    power the guest off
 #   tests/vm/run.sh manifest capture the guest package set and VM build details
 #   tests/vm/run.sh nvidia-preflight  check current and older NVIDIA package pairs before package changes
-#   tests/vm/run.sh nvidia-matrix preinstall|postinstall
+#   tests/vm/run.sh nvidia-matrix preinstall|postinstall|focused prepare|preset-assignment-edge|mixed-preset
 #   tests/vm/run.sh nvidia-install   run the supported-device full install through this wrapper
 #   tests/vm/run.sh nvidia-r15-row ROW   hold a failure state through each sound-kernel desktop reboot
+#   focused package-hook R15 row: set GOOARCHY_VM_NVIDIA_FOCUSED_CASE=package-hook-partial-lts and
+#   GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB to a runner-approved cap no larger than 4 GiB
 #   tests/vm/run.sh nvidia-reference   fresh VM for R18's reference-state rerun
 #
 # Looking at the desktop: GOOARCHY_VM_GPU=software GOOARCHY_VM_VNC=1 tests/vm/run.sh start, then
@@ -121,9 +123,19 @@ nvidia_test_stamp() {
 }
 
 nvidia_guest_env() {
-  local stamp=$1
+  local stamp=$1 focused_case=${GOOARCHY_VM_NVIDIA_FOCUSED_CASE:-}
+  local pressure_max=${GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB:-}
   printf 'GOOARCHY_VM_GUEST_NVIDIA_MATRIX=1 GOOARCHY_NVIDIA_REPO=$HOME/gooarchy GOOARCHY_NVIDIA_ARTIFACTS=$HOME/gooarchy-nvidia-matrix/%s GOOARCHY_VM_NVIDIA_TEST_ROOT=$HOME/gooarchy-nvidia-matrix/%s GOOARCHY_NVIDIA_TEST_STAMP=%s' \
     "$stamp" "$stamp" "$stamp"
+  if [[ -n $focused_case ]]; then
+    [[ $focused_case == package-hook-partial-lts ]] || die "invalid focused NVIDIA R15 case"
+    printf ' GOOARCHY_VM_NVIDIA_FOCUSED_CASE=%s' "$focused_case"
+  fi
+  if [[ -n $pressure_max ]]; then
+    [[ $pressure_max =~ ^[0-9]+$ ]] || die "NVIDIA pressure cap must be an integer KiB value"
+    ((pressure_max > 0 && pressure_max <= 4194304)) || die "NVIDIA pressure cap must be at most 4 GiB"
+    printf ' GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB=%s' "$pressure_max"
+  fi
 }
 
 copy_nvidia_artifacts() {
@@ -788,7 +800,7 @@ cmd_nvidia_matrix() {
   running || die "the guest isn't running"
   local phase=${1:-} arg=${2:-} stamp env out name remote_command status=0
   case $phase in
-    preflight | preinstall | postinstall | reference | r15-row | r15-release) ;;
+    preflight | preinstall | postinstall | reference | focused | r15-row | r15-release) ;;
     *) die "unknown NVIDIA matrix phase: $phase" ;;
   esac
   if [[ -n $arg ]]; then

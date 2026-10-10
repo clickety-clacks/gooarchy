@@ -34,6 +34,14 @@ driver_module_files() {
     -print0
 }
 
+driver_module_hashes() {
+  local module_dir
+  for module_dir in /usr/lib/modules/*; do
+    [[ -d $module_dir ]] || continue
+    driver_module_files "$module_dir" | sort -z | xargs -0r sha256sum
+  done
+}
+
 repository_version() {
   local output
   output=$(LC_ALL=C pacman -Si "$1" 2>/dev/null) || return 1
@@ -131,7 +139,8 @@ sudo() {
     if ! gooarchy_test_install_mkinitcpio_hook; then return 97; fi
     hook_installed=1
     if ((is_upgrade)); then args+=(--ignore mkinitcpio); fi
-    if command sudo env GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET="$fail_preset" \
+    if command sudo env GOOARCHY_VM_NVIDIA_TEST_ROOT="${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}" \
+      GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET="$fail_preset" \
       GOOARCHY_TEST_PACMAN_HOOK_FAIL_AFTER_WRITE=1 GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE="$fail_image" \
       PATH="${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/bin:$PATH" "${args[@]}"; then
       rc=0
@@ -282,11 +291,18 @@ cat >"$test_root/bin/mkinitcpio" <<'EOF'
 #!/bin/bash
 if [[ -n ${GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET:-} && ${1:-} == -P ]]; then
   status=0
+  marker=${GOOARCHY_VM_NVIDIA_TEST_ROOT:-}/r15-package-hook-invocations.tsv
   for preset in /etc/mkinitcpio.d/*.preset; do
     [[ -f $preset ]] || continue
     pkgbase=${preset##*/}
     pkgbase=${pkgbase%.preset}
     if [[ $pkgbase == "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET" ]]; then
+      if [[ -n ${GOOARCHY_VM_NVIDIA_TEST_ROOT:-} ]]; then
+        filesystem=$(df -Pk --output=source -- "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" | awk 'NR == 2 { print $1 }')
+        available=$(df -Pk --output=avail -- "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" | awk 'NR == 2 { print $1 }')
+        printf 'invoke\t%s\t%s\t%s\t%s\n' "$pkgbase" "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" \
+          "$filesystem" "$available" >>"$marker"
+      fi
       printf '==> Building image from preset: %s\n' "$preset"
       if [[ ${GOOARCHY_TEST_PACMAN_HOOK_FAIL_AFTER_WRITE:-} == 1 &&
             -n ${GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE:-} ]]; then
@@ -296,6 +312,9 @@ if [[ -n ${GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET:-} && ${1:-} == -P ]]; then
         else
           printf 'ERROR: Gooarchy VM injected package-hook failure after writing %s\n' \
             "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE"
+          if [[ -n ${GOOARCHY_VM_NVIDIA_TEST_ROOT:-} ]]; then
+            printf 'after-write\t%s\t%s\n' "$pkgbase" "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" >>"$marker"
+          fi
         fi
       else
         printf 'ERROR: Gooarchy VM test injected package-hook failure for %s\n' "$pkgbase"
@@ -332,8 +351,46 @@ restore_r15a_current_state() {
   return 1
 }
 
+cleanup_bounded_pressure() {
+  local path expected_device expected_inode actual status=0
+  [[ -f $test_root/r15-bounded-pressure-owned.tsv ]] || return 0
+  while IFS=$'\t' read -r path expected_device expected_inode; do
+    [[ -n $path && -n $expected_device && -n $expected_inode ]] || continue
+    if [[ ! -f $path || -L $path ]]; then
+      status=1
+      continue
+    fi
+    actual=$(sudo stat -c '%d:%i' -- "$path" 2>/dev/null || true)
+    if [[ $actual != "$expected_device:$expected_inode" ]] || ! sudo rm -f -- "$path"; then
+      status=1
+    fi
+  done <"$test_root/r15-bounded-pressure-owned.tsv"
+  if ((status == 0)); then rm -f "$test_root/r15-bounded-pressure-owned.tsv"; fi
+  return "$status"
+}
+
+bounded_pressure_files_present() {
+  local path expected_device expected_inode actual count=0
+  [[ -s $test_root/r15-bounded-pressure.tsv ]] || return 1
+  awk -F '\t' 'NR == 1 { next } $5 < $3 || $5 > $3 + $9 + 4096 || $4 !~ /^[0-9]+$/ || $9 !~ /^[0-9]+$/ { bad=1 } END { exit !(NR > 1 && !bad) }' \
+    "$test_root/r15-bounded-pressure.tsv" || return 1
+  if [[ -s $test_root/r15-bounded-pressure-owned.tsv ]]; then
+    while IFS=$'\t' read -r path expected_device expected_inode; do
+      [[ -n $path && -n $expected_device && -n $expected_inode ]] || continue
+      [[ -f $path && ! -L $path ]] || return 1
+      actual=$(sudo stat -c '%d:%i' -- "$path" 2>/dev/null || true)
+      [[ $actual == "$expected_device:$expected_inode" ]] || return 1
+      ((count += 1))
+    done <"$test_root/r15-bounded-pressure-owned.tsv"
+    ((count > 0))
+  else
+    awk -F '\t' 'NR == 1 { next } $4 != 0 { bad=1 } END { exit !(NR > 1 && !bad) }' \
+      "$test_root/r15-bounded-pressure.tsv"
+  fi
+}
+
 cleanup() {
-  local status=$? build_link_record build_link_path saved_link partial_kernel
+  local status=$? build_link_record build_link_path saved_link partial_kernel path
   local lock_expected lock_identity_expected lock_actual lock_identity_actual
   if [[ -f $test_root/r15-stale-lock-owned ]]; then
     IFS=$'\t' read -r lock_expected lock_identity_expected <"$test_root/r15-stale-lock-owned"
@@ -365,6 +422,23 @@ cleanup() {
     printf 'Preserving the failed R15 state for per-kernel reboot evidence: %s\n' \
       "$(cut -f1 "$test_root/r15-boot-held")" >&2
     return "$status"
+  fi
+  if [[ -f $test_root/r15-bounded-pressure-owned.tsv ]] && ! cleanup_bounded_pressure; then
+    printf 'The test-owned bounded pressure file could not be safely removed; see r15-bounded-pressure-owned.tsv.\n' \
+      >"$test_root/cleanup-failure.txt"
+    status=1
+  fi
+  if [[ -f $test_root/c1-stale-image-paths.tsv ]]; then
+    while IFS= read -r path; do
+      [[ -n $path && $path != path ]] || continue
+      if [[ -f $path && ! -L $path ]]; then
+        sudo rm -f -- "$path" || status=1
+      elif [[ -e $path || -L $path ]]; then
+        printf 'C1 stale output path changed type; left in place: %s\n' "$path" \
+          >>"$test_root/cleanup-failure.txt"
+        status=1
+      fi
+    done <"$test_root/c1-stale-image-paths.tsv"
   fi
   if [[ -f $test_root/90-mkinitcpio-install.hook.saved ]]; then
     sudo mv -f "$test_root/90-mkinitcpio-install.hook.saved" \
@@ -1703,6 +1777,103 @@ test_mixed_preset_selected_entry_regeneration() {
   record 'R11 mixed preset fixture returns to the stock installer state' "$([[ $last_status == 0 ]] && echo 1 || echo 0)" 'stock preset and images restored'
 }
 
+test_preset_assignment_edge() {
+  local preset=/etc/mkinitcpio.d/linux.preset saved=$test_root/linux.preset.saved
+  local variant entry key stale packages_before database_before etc_before modules_before status error_ok image_hash_ok original_hash
+  local -a variants=(duplicate-presets appended-presets duplicate-image appended-image)
+  if [[ ! -f $preset || -e $saved ]]; then
+    record 'C1 preset assignment-edge fixture is available' 0 'linux preset missing or another preset backup is active'
+    return
+  fi
+  sudo cp -a "$preset" "$saved"
+  original_hash=$(sha256sum "$saved" | awk '{print $1}')
+  if ! preset_images "$saved"; then
+    record 'C1 stock preset assignment-edge fixture resolves' 0 'could not parse the original active image entries'
+    return
+  fi
+  if ! c1_capture_image_inventory; then
+    record 'C1 stock active image inventory is measurable' 0 'could not build a saved-path list for every kernel preset'
+    return
+  fi
+  if ! preset_images "$saved"; then
+    record 'C1 stock preset entry state is recoverable' 0 'could not restore the saved Linux preset parser state'
+    return
+  fi
+  entry=${NV_TEST_PRESET_ENTRIES[0]:-}
+  [[ -n $entry ]] || { record 'C1 stock preset has an active entry' 0 "$saved"; return; }
+  key=${entry}_image
+  if ! awk -v key="$key" 'index($0, "#") { sub(/#.*/, "") } { lhs=$0; sub(/=.*/, "", lhs); gsub(/^[[:space:]]+|[[:space:]]+$/, "", lhs); if (lhs == key) found=1 } END { exit !found }' "$saved"; then
+    key=${entry}_uki
+    if ! awk -v key="$key" 'index($0, "#") { sub(/#.*/, "") } { lhs=$0; sub(/=.*/, "", lhs); gsub(/^[[:space:]]+|[[:space:]]+$/, "", lhs); if (lhs == key) found=1 } END { exit !found }' "$saved"; then
+      sudo mv -f "$saved" "$preset"
+      record 'C1 stock preset has a literal active image assignment' 0 "$entry"
+      return
+    fi
+  fi
+  printf 'path\n' >"$test_root/c1-stale-image-paths.tsv"
+
+  for variant in "${variants[@]}"; do
+    sudo cp -a "$saved" "$preset"
+    stale=
+    case $variant in
+      duplicate-presets)
+        printf '\nPRESETS=(%s)\n' "${NV_TEST_PRESET_ENTRIES[*]}" | sudo tee -a "$preset" >/dev/null
+        ;;
+      appended-presets)
+        printf '\nPRESETS+=(gooarchy-c1-edge)\n' | sudo tee -a "$preset" >/dev/null
+        ;;
+      duplicate-image|appended-image)
+        stale=${NV_TEST_IMAGES[0]}.gooarchy-c1-${test_stamp}-${variant}
+        if [[ -e $stale || -L $stale ]]; then
+          record "C1 $variant assignment edge has an unused output path" 0 "$stale already exists"
+          continue
+        fi
+        printf '%s\n' "$stale" >>"$test_root/c1-stale-image-paths.tsv"
+        if [[ $variant == duplicate-image ]]; then
+          printf '\n%s="%s"\n' "$key" "$stale" | sudo tee -a "$preset" >/dev/null
+        else
+          printf '\n%s+="%s"\n' "$key" "$stale" | sudo tee -a "$preset" >/dev/null
+        fi
+        ;;
+    esac
+    packages_before=$(package_manifest)
+    database_before=$(tree_hash /var/lib/pacman/local)
+    etc_before=$(tree_hash /etc)
+    modules_before=$(driver_module_hashes)
+    if ! c1_hash_image_inventory >"$test_root/c1-images-before.sha256"; then
+      record "C1 $variant baseline images are measurable" 0 'active images could not all be hashed'
+      continue
+    fi
+    run_nvidia_step "c1-$variant" "$supported" -
+    status=$last_status
+    error_ok=0
+    grep -Eq 'could not resolve (every image path|every active image path|active image entries)|could not resolve every image' \
+      "$test_root/c1-$variant.log" && error_ok=1
+    image_hash_ok=0
+    if c1_hash_image_inventory >"$test_root/c1-images-after.sha256" &&
+       cmp -s "$test_root/c1-images-before.sha256" "$test_root/c1-images-after.sha256"; then
+      image_hash_ok=1
+    fi
+    record "C1 $variant assignment fails closed without package, configuration, module, or image changes" \
+      "$([[ $status != 0 && $error_ok == 1 && $packages_before == "$(package_manifest)" &&
+            $database_before == "$(tree_hash /var/lib/pacman/local)" && $etc_before == "$(tree_hash /etc)" &&
+            $modules_before == "$(driver_module_hashes)" &&
+            $image_hash_ok == 1 && ( -z $stale || ! -e $stale ) ]] && echo 1 || echo 0)" \
+      "status $status; stale first-match output ${stale:-none}; fixture diagnostic and before/after hashes retained"
+  done
+
+  sudo mv -f "$saved" "$preset"
+  if [[ -f $test_root/c1-stale-image-paths.tsv ]]; then
+    while IFS= read -r stale; do
+      [[ -n $stale && $stale != path ]] || continue
+      if [[ -f $stale && ! -L $stale ]]; then sudo rm -f -- "$stale"; fi
+    done <"$test_root/c1-stale-image-paths.tsv"
+  fi
+  record 'C1 preset assignment-edge fixtures restore the original preset bytes' \
+    "$([[ $(sha256sum "$preset" | awk '{print $1}') == "$original_hash" ]] && echo 1 || echo 0)" \
+    'original preset bytes restored and checked'
+}
+
 test_r17_header_repair() {
   local kernel pkg_version header_version module_version module image image_ok=1 status
   local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
@@ -2024,6 +2195,233 @@ capture_all_kernel_image_hashes() {
   done
 }
 
+c1_capture_image_inventory() {
+  local preset source image
+  : >"$test_root/c1-image-paths.tsv"
+  for preset in /etc/mkinitcpio.d/*.preset; do
+    [[ -f $preset ]] || continue
+    source=$preset
+    [[ ${preset##*/} == linux.preset ]] && source=$test_root/linux.preset.saved
+    preset_images "$source" || return 1
+    for image in "${NV_TEST_IMAGES[@]}"; do printf '%s\n' "$image" >>"$test_root/c1-image-paths.tsv"; done
+  done
+  [[ -s $test_root/c1-image-paths.tsv ]]
+}
+
+c1_hash_image_inventory() {
+  local image
+  while IFS= read -r image; do
+    [[ -f $image ]] || return 1
+    sudo sha256sum -- "$image" || return 1
+  done <"$test_root/c1-image-paths.tsv"
+}
+
+focused_installed_size_kb() {
+  local output
+  output=$(LC_ALL=C pacman -Si "$1" 2>/dev/null) || return 1
+  awk -F: '
+    $1 ~ /^[[:space:]]*Installed Size[[:space:]]*$/ {
+      value=$2
+      sub(/^[[:space:]]+/, "", value)
+      split(value, part, /[[:space:]]+/)
+      amount=part[1]+0
+      unit=part[2]
+      if (unit ~ /^KiB/) print int(amount)
+      else if (unit ~ /^MiB/) print int(amount*1024)
+      else if (unit ~ /^GiB/) print int(amount*1024*1024)
+      else if (unit ~ /^B/) print int(amount/1024)
+      exit
+    }
+  ' <<<"$output"
+}
+
+prepare_bounded_disk_pressure() {
+  local cap=${GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB:-} utils_growth dkms_growth growth
+  local margin_kb=131072 total_kb=0 preset image filesystem available size required allocated path identity after index=0
+  local -A required_by_fs=() available_by_fs=() directory_by_fs=() allocated_by_fs=()
+  local -a filesystems=()
+  [[ $cap =~ ^[0-9]+$ ]] && ((cap > 0 && cap <= 4194304)) || {
+    record 'C2 bounded disk-pressure cap is valid' 0 'runner must set GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB to 1..4194304 KiB'
+    return 1
+  }
+  utils_growth=$(focused_installed_size_kb extra/nvidia-utils) || utils_growth=
+  dkms_growth=$(focused_installed_size_kb extra/nvidia-open-dkms) || dkms_growth=
+  [[ $utils_growth =~ ^[0-9]+$ && $dkms_growth =~ ^[0-9]+$ ]] || {
+    record 'C2 bounded disk-pressure package growth is measurable' 0 'configured extra repository did not report both installed sizes'
+    return 1
+  }
+  growth=$((utils_growth + dkms_growth))
+  ((growth >= 131072)) || growth=131072
+
+  for preset in /etc/mkinitcpio.d/*.preset; do
+    [[ -f $preset ]] || continue
+    if ! preset_images "$preset"; then
+      record 'C2 bounded disk-pressure active image inventory resolves' 0 "$preset"
+      return 1
+    fi
+    for image in "${NV_TEST_IMAGES[@]}"; do
+      [[ -f $image && $image != *$'\t'* && $image != *$'\n'* ]] || {
+        record 'C2 bounded disk-pressure active image exists' 0 "$image"
+        return 1
+      }
+      read -r filesystem available < <(df -Pk --output=source,avail -- "$image" | awk 'NR == 2 { print $1, $2 }')
+      [[ -n $filesystem && $available =~ ^[0-9]+$ ]] || {
+        record 'C2 bounded disk-pressure filesystem is measurable' 0 "$image"
+        return 1
+      }
+      size=$(sudo stat -c %s -- "$image") || return 1
+      required=$(((size + 1023) / 1024 + growth + 16 * 1024))
+      if [[ ! ${required_by_fs[$filesystem]+present} ]]; then
+        filesystems+=("$filesystem")
+        required_by_fs[$filesystem]=0
+        available_by_fs[$filesystem]=$available
+        directory_by_fs[$filesystem]=$(dirname -- "$image")
+      elif ((available < available_by_fs[$filesystem])); then
+        available_by_fs[$filesystem]=$available
+      fi
+      required_by_fs[$filesystem]=$((required_by_fs[$filesystem] + required))
+    done
+  done
+  ((${#filesystems[@]} > 0)) || {
+    record 'C2 bounded disk-pressure image inventory is nonempty' 0 'no active images found across installed kernel presets'
+    return 1
+  }
+
+  for filesystem in "${filesystems[@]}"; do
+    available=${available_by_fs[$filesystem]}
+    required=${required_by_fs[$filesystem]}
+    if ((available < required)); then
+      record 'C2 bounded disk-pressure baseline has room for the product preflight' 0 \
+        "$filesystem has ${available} KiB; product preflight requires at least ${required} KiB"
+      return 1
+    fi
+    allocated=0
+    if ((available > required + margin_kb)); then
+      allocated=$((available - required - margin_kb))
+    fi
+    allocated_by_fs[$filesystem]=$allocated
+    total_kb=$((total_kb + allocated))
+  done
+  if ((total_kb > cap)); then
+    record 'C2 bounded disk-pressure allocation stays under its runner cap' 0 \
+      "would need ${total_kb} KiB; runner cap is ${cap} KiB; use a smaller disposable guest disk or report the fixture refusal"
+    return 1
+  fi
+
+  : >"$test_root/r15-bounded-pressure.tsv"
+  : >"$test_root/r15-bounded-pressure-owned.tsv"
+  printf 'filesystem\tavailable-before-kb\trequired-kb\tallocated-kb\tavailable-after-kb\tfile\tdevice\tinode\tsafety-margin-kb\n' \
+    >"$test_root/r15-bounded-pressure.tsv"
+  for filesystem in "${filesystems[@]}"; do
+    available=${available_by_fs[$filesystem]}
+    required=${required_by_fs[$filesystem]}
+    allocated=${allocated_by_fs[$filesystem]}
+    path=${directory_by_fs[$filesystem]}/.gooarchy-nvidia-pressure-${test_stamp}-${index}
+    ((index += 1))
+    if [[ -e $path || -L $path ]]; then
+      cleanup_bounded_pressure || true
+      record 'C2 bounded disk-pressure path is uniquely test-owned' 0 "$path already exists"
+      return 1
+    fi
+    if ((allocated > 0)); then
+      if ! sudo install -m 0600 /dev/null "$path"; then
+        if [[ -f $path && ! -L $path ]]; then sudo rm -f -- "$path" 2>/dev/null || true; fi
+        cleanup_bounded_pressure || true
+        record 'C2 bounded disk-pressure file is created within the disposable guest' 0 "$path"
+        return 1
+      fi
+      identity=$(sudo stat -c '%d:%i' -- "$path") || {
+        sudo rm -f -- "$path" 2>/dev/null || true
+        cleanup_bounded_pressure || true
+        return 1
+      }
+      printf '%s\t%s\t%s\n' "$path" "${identity%%:*}" "${identity##*:}" \
+        >>"$test_root/r15-bounded-pressure-owned.tsv"
+      if ! sudo fallocate -l "${allocated}K" -- "$path"; then
+        cleanup_bounded_pressure || true
+        record 'C2 bounded disk-pressure allocation succeeds' 0 "$filesystem; requested ${allocated} KiB within the ${cap} KiB cap"
+        return 1
+      fi
+    else
+      path=-
+      identity=-:-
+    fi
+    read -r after < <(df -Pk --output=avail -- "${directory_by_fs[$filesystem]}" | awk 'NR == 2 { print $1 }')
+    [[ $after =~ ^[0-9]+$ ]] || { cleanup_bounded_pressure || true; return 1; }
+    if ((after < required + margin_kb || after > required + margin_kb + 4096)); then
+      cleanup_bounded_pressure || true
+      record 'C2 bounded disk-pressure measurement meets the product boundary' 0 \
+        "$filesystem reports ${after} KiB after allocation; target ${required} KiB plus ${margin_kb} KiB boot/cleanup reserve"
+      return 1
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$filesystem" "$available" "$required" "$allocated" "$after" "$path" \
+      "${identity%%:*}" "${identity##*:}" "$margin_kb" >>"$test_root/r15-bounded-pressure.tsv"
+  done
+  record 'C2 bounded disk pressure is measured on every active image filesystem' 1 \
+    "${total_kb} KiB allocated (cap ${cap} KiB); measured rows in $test_root/r15-bounded-pressure.tsv"
+}
+
+focused_baseline_ready() {
+  local linux_kernel lts_kernel utils_version dkms_version linux_version linux_headers_version
+  local lts_version lts_headers_version module_version status=0 pkgbase kernel image module
+  local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
+  verify_repository_driver_pair || status=1
+  utils_version=$(repository_version extra/nvidia-utils || true)
+  dkms_version=$(repository_version extra/nvidia-open-dkms || true)
+  [[ -n $utils_version && $(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}') == "$utils_version" ]] || status=1
+  [[ -n $dkms_version && $(pacman -Q nvidia-open-dkms 2>/dev/null | awk '{print $2}') == "$dkms_version" ]] || status=1
+  linux_kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
+  lts_kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
+  linux_version=$(pacman -Q linux 2>/dev/null | awk '{print $2}' || true)
+  linux_headers_version=$(pacman -Q linux-headers 2>/dev/null | awk '{print $2}' || true)
+  lts_version=$(pacman -Q linux-lts 2>/dev/null | awk '{print $2}' || true)
+  lts_headers_version=$(pacman -Q linux-lts-headers 2>/dev/null | awk '{print $2}' || true)
+  [[ -n $linux_kernel && -n $lts_kernel && $linux_version == "$linux_headers_version" &&
+     $lts_version == "$lts_headers_version" ]] || status=1
+  module_version=$(module_version_from_package "${utils_version:-}")
+  if ((status == 0)); then
+    for pkgbase in linux linux-lts; do
+      kernel=$(kernel_for_pkgbase "$pkgbase" 2>/dev/null || true)
+      for module in "${required[@]}"; do
+        [[ $(modinfo -k "$kernel" -F version "$module" 2>/dev/null || true) == "$module_version" ]] || status=1
+      done
+      image_set_for_kernel "$pkgbase" || { status=1; continue; }
+      for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
+        image_has_modules_at_version "$image" "$module_version" "${required[@]}" || status=1
+      done
+    done
+  fi
+  record 'C2-C5 focused baseline has current paired packages and two sound kernels' "$((status == 0))" \
+    "linux ${linux_kernel:-missing} headers ${linux_headers_version:-missing}; linux-lts ${lts_kernel:-missing} headers ${lts_headers_version:-missing}; driver $utils_version/$dkms_version"
+  ((status == 0))
+}
+
+focused_prepare() {
+  local status=0 package
+  verify_repository_driver_pair || return 1
+  for package in core/linux core/linux-headers core/linux-lts core/linux-lts-headers \
+      extra/nvidia-utils extra/nvidia-open-dkms; do
+    if ! pacman -Si "$package" >/dev/null 2>&1; then
+      record 'C2-C5 configured repository provides the exact baseline packages' 0 "$package is unavailable"
+      return 1
+    fi
+  done
+  if ! sudo pacman -S --noconfirm --needed core/linux core/linux-headers core/linux-lts core/linux-lts-headers \
+      extra/nvidia-utils extra/nvidia-open-dkms; then
+    record 'C2-C5 focused package baseline installs from configured repositories' 0 'pacman refused the verified kernel and matching NVIDIA package set'
+    return 1
+  fi
+  record 'C2-C5 focused package baseline installs from configured repositories' 1 \
+    'core linux/linux-lts with matching headers; extra nvidia-utils/nvidia-open-dkms; no alternate source or signing override'
+  run_nvidia_step focused-two-kernel-baseline "$supported" -
+  status=$last_status
+  record 'C2-C5 NVIDIA step establishes the two-kernel baseline' "$([[ $status == 0 ]] && echo 1 || echo 0)" \
+    "status $status; direct existing matrix step only, no full install.sh invocation"
+  ((status == 0)) || return 1
+  focused_baseline_ready
+}
+
 test_r15_pacman_stale_lock() {
   local lock=/var/lib/pacman/db.lck packages_before database_before etc_before
   local modules_before boot_before lock_hash lock_identity status lock_ok=1 reports_before
@@ -2200,8 +2598,10 @@ test_user_partial_kernels() {
 test_pacman_hook_failure_with_partial_kernel() {
   local linux_kernel lts_kernel build_link_path module_version config_hash
   local linux_images_before linux_images_after lts_images_before lts_images_after status image image_ok=1 restore_status=0
-  local module modules step_log hook_report_ok partial_report_ok current_version linux_preset
+  local module modules step_log hook_report_ok partial_report_ok current_version linux_preset focused_case
   local linux_preset_hash r11_config_hash r11_report_ok=0 r11_image_ok=1 r11_files_unchanged=0
+  local hook_before hook_after hook_image hook_marker_ok=0 hook_after_write_ok=0 pressure_hook_ok=0
+  local hook_filesystem hook_available pressure_target hook_path=/usr/share/libalpm/hooks/90-mkinitcpio-install.hook
   local -a required_partial=(nvidia nvidia_modeset)
   linux_kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
   lts_kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
@@ -2280,6 +2680,19 @@ test_pacman_hook_failure_with_partial_kernel() {
   printf '%s' "$build_link_path" >"$test_root/linux-lts-build-link-path"
   sudo mv "$build_link_path" "$test_root/linux-lts-build-link.saved"
 
+  focused_case=${GOOARCHY_VM_NVIDIA_FOCUSED_CASE:-}
+  if [[ ! -f $hook_path ]] || ! grep -Eq '^[[:space:]]*Exec[[:space:]]*=[[:space:]]*/usr/bin/mkinitcpio[[:space:]]+-P[[:space:]]*$' "$hook_path"; then
+    record 'C3 Arch package hook fixture is available' 0 "$hook_path missing or does not use the expected mkinitcpio -P command"
+    return 1
+  fi
+  hook_before=$(sha256sum "$hook_path" | awk '{print $1}')
+  : >"$test_root/r15-package-hook-invocations.tsv"
+  image_set_for_kernel linux || image_ok=0
+  hook_image=${NV_TEST_IMAGES[0]:-}
+  if [[ $focused_case == package-hook-partial-lts ]]; then
+    if ! prepare_bounded_disk_pressure; then return 1; fi
+  fi
+
   run_nvidia_step r15-package-hook-linux-partial-lts "$supported" \
     "pacman:force-transaction,pacman-hook:$linux_kernel,dkms:$lts_kernel"
   status=$last_status
@@ -2300,6 +2713,29 @@ test_pacman_hook_failure_with_partial_kernel() {
   step_log=$test_root/r15-package-hook-linux-partial-lts.log
   hook_report_ok=0
   grep -Fq "post-transaction mkinitcpio hook reported an image-generation error for linux kernel $linux_kernel" "$step_log" && hook_report_ok=1
+  hook_after=$(sha256sum "$hook_path" | awk '{print $1}')
+  if [[ -n $hook_image ]] && awk -F '\t' -v image="$hook_image" \
+      '$1 == "invoke" && $2 == "linux" && $3 == image { invoked=1 }
+       END { exit !invoked }' "$test_root/r15-package-hook-invocations.tsv"; then
+    hook_marker_ok=1
+  fi
+  if [[ -n $hook_image ]] && awk -F '\t' -v image="$hook_image" \
+      '$1 == "after-write" && $2 == "linux" && $3 == image { wrote=1 }
+       END { exit !wrote }' "$test_root/r15-package-hook-invocations.tsv"; then
+    hook_after_write_ok=1
+  fi
+  if [[ $focused_case == package-hook-partial-lts ]]; then
+    hook_filesystem=$(awk -F '\t' -v image="$hook_image" '$1 == "invoke" && $3 == image { print $4; exit }' \
+      "$test_root/r15-package-hook-invocations.tsv")
+    hook_available=$(awk -F '\t' -v image="$hook_image" '$1 == "invoke" && $3 == image { print $5; exit }' \
+      "$test_root/r15-package-hook-invocations.tsv")
+    pressure_target=$(awk -F '\t' -v fs="$hook_filesystem" '$1 == fs { print $5; exit }' \
+      "$test_root/r15-bounded-pressure.tsv")
+    if [[ $hook_available =~ ^[0-9]+$ && $pressure_target =~ ^[0-9]+$ ]] &&
+       ((hook_available <= pressure_target)) && ((hook_after_write_ok == 1)) && bounded_pressure_files_present; then
+      pressure_hook_ok=1
+    fi
+  fi
   partial_report_ok=0
   if grep -Fq "linux-lts kernel $lts_kernel" "$step_log" &&
      grep -Fq "$user_config" "$step_log" &&
@@ -2329,6 +2765,20 @@ test_pacman_hook_failure_with_partial_kernel() {
     "$([[ $status != 0 && $image_ok == 1 && $partial_report_ok == 1 && \
           $config_hash == "$(sha256sum "$user_config" | awk '{print $1}')" ]] && echo 1 || echo 0)" \
     "linux-lts $lts_kernel; images ${lts_images_before:+checked}; config $user_config"
+  if [[ $focused_case == package-hook-partial-lts ]]; then
+    record 'C2 measured bounded disk pressure overlaps hook failure while linux images restore byte-identically' \
+      "$([[ $status != 0 && $hook_report_ok == 1 && $pressure_hook_ok == 1 && -n $linux_images_before &&
+            $linux_images_before == "$linux_images_after" ]] && echo 1 || echo 0)" \
+      "hook free space ${hook_available:-unmeasured} KiB; target ${pressure_target:-unmeasured} KiB; pressure evidence $test_root/r15-bounded-pressure.tsv"
+    record 'C3 generated Arch package hook reaches and restores the test wrapper' \
+      "$([[ $status != 0 && $hook_marker_ok == 1 && $hook_after_write_ok == 1 && $hook_before == "$hook_after" &&
+            ! -e $test_root/90-mkinitcpio-install.hook.saved ]] && echo 1 || echo 0)" \
+      "invoked=$hook_marker_ok after-write=$hook_after_write_ok; linux image $hook_image; original hook SHA256 $hook_before"
+    record 'C5 hook-failure interaction retains the user-partial fix report without changing its config' \
+      "$([[ $status != 0 && $partial_report_ok == 1 && $r11_report_ok == 1 && $r11_files_unchanged == 1 &&
+            $config_hash == "$(sha256sum "$user_config" | awk '{print $1}')" ]] && echo 1 || echo 0)" \
+      "linux-lts $lts_kernel; report and named user config asserted on the hook-failure path"
+  fi
   hold_r15_failure_row package-hook-linux-partial-lts
 
   sudo mv "$test_root/linux-lts-build-link.saved" "$build_link_path"
@@ -2832,6 +3282,9 @@ r15_row() {
       ;;
     package-hook-linux-only|package-hook-linux-partial-lts)
       verify_repository_driver_pair || return 1
+      if [[ ${GOOARCHY_VM_NVIDIA_FOCUSED_CASE:-} == package-hook-partial-lts ]]; then
+        focused_baseline_ready || return 1
+      fi
       test_pacman_hook_failure_with_partial_kernel
       ;;
     prebuilt-refused|prebuilt-linux-dkms)
@@ -2855,11 +3308,40 @@ r15_row() {
   ((failures == 0))
 }
 
+focused_case() {
+  local selected=${1:-} checks_before=$checks failures_before=$failures
+  case $selected in
+    prepare)
+      focused_prepare
+      ;;
+    preset-assignment-edge)
+      focused_baseline_ready || return 1
+      test_preset_assignment_edge
+      record 'C1 focused assignment-edge selector completes its negative fixtures' \
+        "$([[ $failures == "$failures_before" ]] && echo 1 || echo 0)" \
+        "${checks_before:+$((checks - checks_before))} result rows; duplicate and appended PRESETS/image assignments"
+      ;;
+    mixed-preset)
+      focused_baseline_ready || return 1
+      test_mixed_preset_selected_entry_regeneration
+      record 'C4 focused mixed-preset selector completes its image/report assertions' \
+        "$([[ $failures == "$failures_before" ]] && echo 1 || echo 0)" \
+        "${checks_before:+$((checks - checks_before))} result rows; direct-config image and regenerated sibling"
+      ;;
+    *)
+      echo 'focused case must be prepare, preset-assignment-edge, or mixed-preset' >&2
+      return 2
+      ;;
+  esac
+  ((failures == 0))
+}
+
 case $phase in
   preflight) preflight ;;
   preinstall) preinstall ;;
   postinstall) postinstall ;;
   reference) reference ;;
+  focused) focused_case "${2:-}" ;;
   r15-row) r15_row "${2:-${GOOARCHY_NVIDIA_HOLD_R15_ROW:-}}" ;;
   r15-release)
     verify_r15_boot_evidence "$held_row" "$held_stamp" "$held_plan_sha"
@@ -2867,5 +3349,5 @@ case $phase in
     [[ ${2:-} == "$held" ]] || { echo 'r15-release row changed during validation.' >&2; exit 2; }
     rm -f "$test_root/r15-boot-held"
     ;;
-  *) echo "usage: $0 preflight|preinstall|postinstall|reference|r15-row <row>|r15-release <row>" >&2; exit 2 ;;
+  *) echo "usage: $0 preflight|preinstall|postinstall|reference|focused <case>|r15-row <row>|r15-release <row>" >&2; exit 2 ;;
 esac
