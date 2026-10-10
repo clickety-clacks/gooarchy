@@ -126,9 +126,8 @@ sudo() {
     fi
   fi
   if [[ -n $fail_preset ]]; then
-    preset_images "/etc/mkinitcpio.d/$fail_preset.preset" || return 97
-    fail_image=${NV_TEST_IMAGES[0]:-}
-    [[ -n $fail_image ]] || return 97
+    fail_image=${GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE:-}
+    [[ -n $fail_image && $fail_image == /* ]] || return 97
     if ! gooarchy_test_install_mkinitcpio_hook; then return 97; fi
     hook_installed=1
     if ((is_upgrade)); then args+=(--ignore mkinitcpio); fi
@@ -162,22 +161,34 @@ driver_module_files() {
     -print0
 }
 preset_images() {
-  local preset=$1 line lhs body= started=0 closed=0 entry suffix key value
+  local preset=$1 line lhs body= operator tail started=0 found=0 reading=0 closed=0 invalid=0 entry suffix key value entry_image_count
   local -a entries=()
-  local -A seen=()
+  local -A seen=() seen_entries=()
   NV_IMAGES=()
   while IFS= read -r line || [[ -n $line ]]; do
     line=${line%%#*}
-    if ((started == 0)); then
-      [[ $line =~ ^[[:space:]]*PRESETS[[:space:]]*= ]] || continue
-      started=1
-      body=${line#*=}
+    if ((reading == 0)); then
+      if [[ $line =~ ^[[:space:]]*PRESETS[[:space:]]*(\+?=) ]]; then
+        operator=${BASH_REMATCH[1]}
+        ((found += 1))
+        if [[ $operator != '=' || $found > 1 ]]; then invalid=1; break; fi
+        body=${line#*=}
+        reading=1
+      else
+        continue
+      fi
     else
       body+=" $line"
     fi
-    if [[ $body == *')'* ]]; then closed=1; break; fi
+    if ((reading)) && [[ $body == *')'* ]]; then
+      closed=1
+      reading=0
+      tail=${body#*)}
+      tail=${tail#"${tail%%[![:space:]]*}"}
+      [[ -z $tail ]] || { invalid=1; break; }
+    fi
   done <"$preset"
-  ((started && closed)) || return 1
+  ((invalid == 0 && found == 1 && closed && reading == 0)) || return 1
   body=${body#"${body%%[![:space:]]*}"}
   [[ ${body:0:1} == '(' ]] || return 1
   body=${body:1}
@@ -191,29 +202,37 @@ preset_images() {
       \"*\") entry=${entry:1:${#entry}-2} ;;
     esac
     [[ $entry =~ ^[[:alnum:]_.+-]+$ ]] || return 1
+    [[ ! ${seen_entries[$entry]:-} ]] || return 1
+    seen_entries[$entry]=1
+    entry_image_count=0
     for suffix in image uki; do
       key=${entry}_${suffix}
-      value=
+      value= matches=0 appended=0
       while IFS= read -r line || [[ -n $line ]]; do
         line=${line%%#*}
         [[ $line == *=* ]] || continue
         lhs=${line%%=*}
         lhs=${lhs#"${lhs%%[![:space:]]*}"}
         lhs=${lhs%"${lhs##*[![:space:]]}"}
+        if [[ $lhs == "$key+" ]]; then appended=1; continue; fi
         [[ $lhs == "$key" ]] || continue
+        ((matches += 1))
         value=${line#*=}
         value=${value#"${value%%[![:space:]]*}"}
         value=${value%"${value##*[![:space:]]}"}
         value=${value#\"}; value=${value%\"}
         value=${value#\'}; value=${value%\'}
-        break
+        :
       done <"$preset"
+      ((appended == 0 && matches <= 1)) || return 1
       [[ -n $value ]] || continue
       [[ $value != *'$'* && $value != *'`'* ]] || return 1
       [[ ! ${seen[$value]:-} ]] || return 1
       seen[$value]=1
       NV_IMAGES+=("$value")
+      ((entry_image_count += 1))
     done
+    ((entry_image_count > 0)) || return 1
   done
   ((${#NV_IMAGES[@]} > 0))
 }
@@ -350,6 +369,16 @@ cleanup() {
   if [[ -f $test_root/90-mkinitcpio-install.hook.saved ]]; then
     sudo mv -f "$test_root/90-mkinitcpio-install.hook.saved" \
       /usr/share/libalpm/hooks/90-mkinitcpio-install.hook 2>/dev/null || status=1
+  fi
+  if [[ -f $test_root/linux.preset.mixed.saved ]]; then
+    sudo mv -f "$test_root/linux.preset.mixed.saved" /etc/mkinitcpio.d/linux.preset 2>/dev/null || status=1
+  fi
+  if [[ -f $test_root/r11-mixed-images.tsv ]]; then
+    if restore_kernel_images r11-mixed; then
+      rm -f "$test_root/r11-mixed-images.tsv"
+    else
+      status=1
+    fi
   fi
   sudo rm -f "$user_config" "$dynamic_modules" "$r11_config" "$test_root"/config-probe-*.img 2>/dev/null || true
   if [[ -f $test_root/owned-original.conf ]]; then sudo mv -f "$test_root/owned-original.conf" "$owned" 2>/dev/null || true; fi
@@ -599,9 +628,33 @@ report_count() {
 run_nvidia_step() {
   local name=$1 devices=${2:--} injected_failure=${3:--}
   local log=$test_root/$name.log install_log=$test_root/$name.step.log
+  local fail_kernel fail_pkgbase fail_preset fail_image
   local -a overrides=()
   [[ $devices == - ]] || overrides+=("GOOARCHY_TEST_NVIDIA_DEVICES=$devices")
   [[ $injected_failure == - ]] || overrides+=("GOOARCHY_TEST_NVIDIA_FAIL=$injected_failure")
+  if [[ $injected_failure == *pacman-hook:* ]]; then
+    fail_kernel=${injected_failure#*pacman-hook:}
+    fail_kernel=${fail_kernel%%,*}
+    if [[ ! $fail_kernel =~ ^[[:alnum:]_.+-]+$ || ! -r /usr/lib/modules/$fail_kernel/pkgbase ]]; then
+      last_status=97
+      printf '%s\n' 'could not resolve the injected pacman-hook kernel for its image fixture.' >"$log"
+      return
+    fi
+    fail_pkgbase=$(</usr/lib/modules/$fail_kernel/pkgbase)
+    fail_preset=/etc/mkinitcpio.d/$fail_pkgbase.preset
+    if [[ -z $fail_pkgbase ]] || ! preset_images "$fail_preset"; then
+      last_status=97
+      printf '%s\n' "could not resolve active image paths in $fail_preset for the injected pacman-hook fixture." >"$log"
+      return
+    fi
+    fail_image=${NV_TEST_IMAGES[0]:-}
+    if [[ -z $fail_image ]]; then
+      last_status=97
+      printf '%s\n' "no active output image found in $fail_preset for the injected pacman-hook fixture." >"$log"
+      return
+    fi
+    overrides+=("GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE=$fail_image")
+  fi
   if env -u GOOARCHY_TEST_NVIDIA_DEVICES -u GOOARCHY_TEST_NVIDIA_FAIL \
     GOOARCHY_INSTALL="$repo/install" GOOARCHY_STATE="$state" \
     GOOARCHY_INSTALL_LOG_FILE="$install_log" BASH_ENV="$test_root/nvidia-test-bash-env.sh" \
@@ -617,9 +670,24 @@ run_nvidia_step() {
 
 run_full_installer() {
   local name=$1 failpoint=${2:--} hook_fail_preset=${3:-linux} log=$test_root/$1.full-install.log
+  local fail_image
   local -a overrides=("GOOARCHY_TEST_CAPTURE_ARCH_UPGRADE=1")
   [[ $hook_fail_preset == - ]] || overrides+=("GOOARCHY_TEST_ARCH_UPGRADE_HOOK_FAIL_PRESET=$hook_fail_preset")
   [[ $failpoint == - ]] || overrides+=("GOOARCHY_TEST_NVIDIA_FAIL=$failpoint")
+  if [[ $hook_fail_preset != - ]]; then
+    if ! preset_images "/etc/mkinitcpio.d/$hook_fail_preset.preset"; then
+      last_status=97
+      printf '%s\n' "could not resolve active image paths in /etc/mkinitcpio.d/$hook_fail_preset.preset for the Arch-upgrade hook fixture." >"$log"
+      return
+    fi
+    fail_image=${NV_TEST_IMAGES[0]:-}
+    if [[ -z $fail_image ]]; then
+      last_status=97
+      printf '%s\n' "no active output image found in /etc/mkinitcpio.d/$hook_fail_preset.preset for the Arch-upgrade hook fixture." >"$log"
+      return
+    fi
+    overrides+=("GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE=$fail_image")
+  fi
   rm -f "$test_root/arch-upgrade-state.tsv"
   : >"$test_root/systemctl.trace"
   if (cd "$repo" && env -u GOOARCHY_TEST_NVIDIA_FAIL -u GOOARCHY_TEST_NVIDIA_DEVICES \
@@ -648,23 +716,36 @@ unit_states() {
 }
 
 preset_images() {
-  local preset=$1 line lhs value body= started=0 closed=0 entry suffix key
+  local preset=$1 line lhs value body= operator tail found=0 reading=0 closed=0 invalid=0 entry suffix key matches appended entry_image_count
   local -a entries=()
-  local -A seen=()
+  local -A seen=() seen_entries=()
   NV_TEST_IMAGES=()
   NV_TEST_PRESET_ENTRIES=()
+  NV_TEST_IMAGE_ENTRIES=()
   while IFS= read -r line || [[ -n $line ]]; do
     line=${line%%#*}
-    if ((started == 0)); then
-      [[ $line =~ ^[[:space:]]*PRESETS[[:space:]]*= ]] || continue
-      started=1
-      body=${line#*=}
+    if ((reading == 0)); then
+      if [[ $line =~ ^[[:space:]]*PRESETS[[:space:]]*(\+?=) ]]; then
+        operator=${BASH_REMATCH[1]}
+        ((found += 1))
+        if [[ $operator != '=' || $found > 1 ]]; then invalid=1; break; fi
+        body=${line#*=}
+        reading=1
+      else
+        continue
+      fi
     else
       body+=" $line"
     fi
-    if [[ $body == *')'* ]]; then closed=1; break; fi
+    if ((reading)) && [[ $body == *')'* ]]; then
+      closed=1
+      reading=0
+      tail=${body#*)}
+      tail=${tail#"${tail%%[![:space:]]*}"}
+      [[ -z $tail ]] || { invalid=1; break; }
+    fi
   done <"$preset"
-  ((started && closed)) || return 1
+  ((invalid == 0 && found == 1 && closed && reading == 0)) || return 1
   body=${body#"${body%%[![:space:]]*}"}
   [[ ${body:0:1} == '(' ]] || return 1
   body=${body:1}
@@ -678,30 +759,39 @@ preset_images() {
       \"*\") entry=${entry:1:${#entry}-2} ;;
     esac
     [[ $entry =~ ^[[:alnum:]_.+-]+$ ]] || return 1
+    [[ ! ${seen_entries[$entry]:-} ]] || return 1
+    seen_entries[$entry]=1
+    entry_image_count=0
     NV_TEST_PRESET_ENTRIES+=("$entry")
     for suffix in image uki; do
       key=${entry}_${suffix}
-      value=
+      value= matches=0 appended=0
       while IFS= read -r line || [[ -n $line ]]; do
         line=${line%%#*}
         [[ $line == *=* ]] || continue
         lhs=${line%%=*}
         lhs=${lhs#"${lhs%%[![:space:]]*}"}
         lhs=${lhs%"${lhs##*[![:space:]]}"}
+        if [[ $lhs == "$key+" ]]; then appended=1; continue; fi
         [[ $lhs == "$key" ]] || continue
+        ((matches += 1))
         value=${line#*=}
         value=${value#"${value%%[![:space:]]*}"}
         value=${value%"${value##*[![:space:]]}"}
         value=${value#\"}; value=${value%\"}
         value=${value#\'}; value=${value%\'}
-        break
+        :
       done <"$preset"
+      ((appended == 0 && matches <= 1)) || return 1
       [[ -n $value ]] || continue
       [[ $value != *'$'* && $value != *'`'* ]] || return 1
       [[ ! ${seen[$value]:-} ]] || return 1
       seen[$value]=1
       NV_TEST_IMAGES+=("$value")
+      NV_TEST_IMAGE_ENTRIES+=("$entry")
+      ((entry_image_count += 1))
     done
+    ((entry_image_count > 0)) || return 1
   done
   ((${#NV_TEST_IMAGES[@]} > 0))
 }
@@ -1220,6 +1310,7 @@ postinstall() {
   test_dynamic_full_list
   test_pre_enabled_units
   test_custom_preset
+  test_mixed_preset_selected_entry_regeneration
   test_r17_header_repair
   test_user_partial_kernels
   test_foreign_driver
@@ -1484,6 +1575,132 @@ test_custom_preset() {
   sudo rm -f "$fallback_config"
   run_nvidia_step r11-restore-default "$supported" -
   record 'R11 default preset early KMS restored' "$([[ $last_status == 0 ]] && echo 1 || echo 0)" 'test preset removed and images regenerated'
+}
+
+restore_mixed_preset_fixture() {
+  local status=0
+  if [[ -f $test_root/linux.preset.mixed.saved ]]; then
+    sudo mv -f "$test_root/linux.preset.mixed.saved" /etc/mkinitcpio.d/linux.preset || status=1
+  fi
+  if [[ -f $test_root/r11-mixed-images.tsv ]]; then
+    restore_kernel_images r11-mixed || status=1
+  fi
+  if ((status == 0)); then
+    rm -f "$test_root/r11-mixed-images.tsv"
+    sudo rm -f "$r11_config"
+  fi
+  return "$status"
+}
+
+test_mixed_preset_selected_entry_regeneration() {
+  local preset=/etc/mkinitcpio.d/linux.preset saved=$test_root/linux.preset.mixed.saved
+  local test_copy=$test_root/linux.preset.mixed empty_config=$r11_config active_pattern kernel module_version
+  local preset_hash config_hash image modules status image_ok=1 first_entry entry idx
+  local first_after= other_images_ok=1 other_changed=1 image_hash
+  local -a active_entries=() other_entries=() first_images=() other_images=() first_hashes=() other_hashes=()
+  if [[ ! -f $preset ]]; then
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 "$preset missing"
+    return
+  fi
+  if ! kernel=$(kernel_for_pkgbase linux 2>/dev/null || true) || [[ -z $kernel ]]; then
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'linux kernel modules missing'
+    return
+  fi
+  sudo cp -a "$preset" "$saved"
+  if ! preset_images "$saved"; then
+    sudo mv -f "$saved" "$preset"
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'could not parse the stock preset'
+    return
+  fi
+  active_entries=("${NV_TEST_PRESET_ENTRIES[@]}")
+  if ((${#active_entries[@]} < 2)); then
+    sudo mv -f "$saved" "$preset"
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'preset has fewer than two active entries'
+    return
+  fi
+  if ! save_kernel_images linux r11-mixed; then
+    sudo mv -f "$saved" "$preset"
+    rm -f "$test_root/r11-mixed-images.tsv"
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'could not save the stock images'
+    return
+  fi
+  first_entry=${active_entries[0]}
+  other_entries=("${active_entries[@]:1}")
+  active_pattern=$(IFS='|'; printf '%s' "${active_entries[*]}")
+  awk -v first="$first_entry" -v entries="$active_pattern" -v config="$empty_config" '
+    {
+      key=$0
+      sub(/=.*/, "", key)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key == "ALL_config" || key ~ "^(" entries ")_config$") next
+      print
+    }
+    END { print first "_config=\"" config "\"" }
+  ' "$saved" >"$test_copy" || {
+    restore_mixed_preset_fixture || record 'R11 mixed preset fixture cleanup' 0 'could not restore the preset and saved images after setup failure'
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'could not prepare the mixed preset'
+    return
+  }
+  sudo cp "$test_copy" "$preset"
+  if ! preset_images "$preset"; then
+    restore_mixed_preset_fixture || record 'R11 mixed preset fixture cleanup' 0 'could not restore the preset and saved images after parse failure'
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'mixed preset did not parse'
+    return
+  fi
+  sudo cp /etc/mkinitcpio.conf "$empty_config"
+  if ! grep -Eq '^[[:space:]]*MODULES[[:space:]]*=[[:space:]]*\(\)[[:space:]]*$' "$empty_config"; then
+    restore_mixed_preset_fixture || record 'R11 mixed preset fixture cleanup' 0 'could not restore the preset and saved images after config failure'
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'default mkinitcpio MODULES setting is not empty'
+    return
+  fi
+  for idx in "${!NV_TEST_IMAGES[@]}"; do
+    image=${NV_TEST_IMAGES[$idx]}
+    entry=${NV_TEST_IMAGE_ENTRIES[$idx]}
+    if ! sudo mkinitcpio -k "$kernel" -g "$image" -c "$empty_config" \
+      >"$test_root/r11-mixed-prepare.log" 2>&1; then
+      image_ok=0
+      break
+    fi
+    sudo lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
+    modules=$(image_modules "$image" 2>/dev/null) || image_ok=0
+    [[ -z $modules ]] || image_ok=0
+    if [[ $entry == "$first_entry" ]]; then first_images+=("$image"); else other_images+=("$image"); fi
+  done
+  if ((image_ok == 0)) || ((${#first_images[@]} == 0 || ${#other_images[@]} == 0)); then
+    restore_mixed_preset_fixture || record 'R11 mixed preset fixture cleanup' 0 'could not restore the preset and saved images after image setup failure'
+    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'could not prepare listable module-free fixture images for both entry classes'
+    return
+  fi
+  for image in "${first_images[@]}"; do first_hashes+=("$(sudo sha256sum -- "$image" | awk '{print $1}')"); done
+  for image in "${other_images[@]}"; do other_hashes+=("$(sudo sha256sum -- "$image" | awk '{print $1}')"); done
+  preset_hash=$(sha256sum "$preset" | awk '{print $1}')
+  config_hash=$(sha256sum "$empty_config" | awk '{print $1}')
+  module_version=$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")
+  run_nvidia_step r11-mixed-selected-repair "$supported" -
+  status=$last_status
+  first_after= other_changed=1
+  for idx in "${!first_images[@]}"; do
+    image=${first_images[$idx]}
+    image_hash=$(sudo sha256sum -- "$image" | awk '{print $1}')
+    [[ $image_hash == "${first_hashes[$idx]}" ]] || first_after=changed
+  done
+  for idx in "${!other_images[@]}"; do
+    image=${other_images[$idx]}
+    image_hash=$(sudo sha256sum -- "$image" | awk '{print $1}')
+    [[ $image_hash != "${other_hashes[$idx]}" ]] || other_changed=0
+    image_has_modules_at_version "$image" "$module_version" nvidia nvidia_modeset nvidia_uvm nvidia_drm || other_images_ok=0
+  done
+  record 'R11 mixed preset repair regenerates drop-in entries and preserves direct-config images' \
+    "$([[ $status == 0 && -z $first_after && $other_changed == 1 && $other_images_ok == 1 && \
+          $preset_hash == "$(sha256sum "$preset" | awk '{print $1}')" && \
+          $config_hash == "$(sha256sum "$empty_config" | awk '{print $1}')" ]] && echo 1 || echo 0)" \
+    "$first_entry images byte-identical; ${other_entries[*]} regenerated with NVIDIA modules; preset and direct config preserved"
+  if ! restore_mixed_preset_fixture; then
+    record 'R11 mixed preset fixture restores stock images and preset' 0 'could not restore saved stock images or preset'
+    return
+  fi
+  run_nvidia_step r11-mixed-restore-default "$supported" -
+  record 'R11 mixed preset fixture returns to the stock installer state' "$([[ $last_status == 0 ]] && echo 1 || echo 0)" 'stock preset and images restored'
 }
 
 test_r17_header_repair() {

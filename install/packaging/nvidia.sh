@@ -290,22 +290,30 @@ nvidia_headers_target() {
 }
 
 nvidia_read_assignment() {
-  local file=$1 key=$2 line lhs value
+  local file=$1 key=$2 line lhs value= matches=0 appended=0
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line == *\#* ]] && line=${line%%\#*}
     [[ $line == *=* ]] || continue
     lhs=${line%%=*}
     lhs=${lhs#"${lhs%%[![:space:]]*}"}
     lhs=${lhs%"${lhs##*[![:space:]]}"}
+    if [[ $lhs == "$key+" ]]; then
+      appended=1
+      continue
+    fi
     [[ $lhs == "$key" ]] || continue
+    ((matches += 1))
     value=${line#*=}
     value=${value#"${value%%[![:space:]]*}"}
     value=${value%"${value##*[![:space:]]}"}
     value=${value#\"}; value=${value%\"}
     value=${value#\'}; value=${value%\'}
-    printf '%s\n' "$value"
-    return 0
   done <"$file"
+  if ((appended || matches > 1)); then
+    printf '%s\n' __GOOARCHY_UNRESOLVED_ASSIGNMENT__
+  elif ((matches == 1)); then
+    printf '%s\n' "$value"
+  fi
   return 0
 }
 
@@ -317,31 +325,40 @@ nvidia_preset_files() {
 }
 
 nvidia_preset_entries() {
-  local file=$1 line body= tail token entry found=0 closed=0
+  local file=$1 line body= tail token entry found=0 reading=0 closed=0 invalid=0 operator
   local -a tokens=()
   local -A seen=()
   NV_PRESET_ENTRIES=()
   NV_PRESET_ENTRIES_UNRESOLVED=0
   while IFS= read -r line || [[ -n $line ]]; do
     line=${line%%\#*}
-    if ((found == 0)); then
-      [[ $line =~ ^[[:space:]]*PRESETS[[:space:]]*= ]] || continue
-      found=1
-      body=${line#*=}
+    if ((reading == 0)); then
+      if [[ $line =~ ^[[:space:]]*PRESETS[[:space:]]*(\+?=) ]]; then
+        operator=${BASH_REMATCH[1]}
+        ((found += 1))
+        if [[ $operator != '=' || $found > 1 ]]; then invalid=1; break; fi
+        body=${line#*=}
+        reading=1
+      else
+        continue
+      fi
     else
       body+=" $line"
     fi
-    if [[ $body == *')'* ]]; then closed=1; break; fi
+    if ((reading)) && [[ $body == *')'* ]]; then
+      closed=1
+      reading=0
+      tail=${body#*)}
+      tail=${tail#"${tail%%[![:space:]]*}"}
+      [[ -z $tail ]] || { invalid=1; break; }
+    fi
   done <"$file"
-  if ((found == 0 || closed == 0)); then
+  if ((invalid || found != 1 || closed == 0 || reading)); then
     NV_PRESET_ENTRIES_UNRESOLVED=1
     return 1
   fi
   body=${body#"${body%%[![:space:]]*}"}
   [[ ${body:0:1} == '(' ]] || { NV_PRESET_ENTRIES_UNRESOLVED=1; return 1; }
-  tail=${body#*)}
-  tail=${tail#"${tail%%[![:space:]]*}"}
-  [[ -z $tail ]] || { NV_PRESET_ENTRIES_UNRESOLVED=1; return 1; }
   body=${body:1}
   body=${body%)}
   [[ $body != *'$'* && $body != *'`'* && $body != *';'* && $body != *'('* && $body != *')'* ]] || {
@@ -380,6 +397,10 @@ nvidia_preset_images() {
     for suffix in image uki; do
       key=${entry}_${suffix}
       value=$(nvidia_read_assignment "$file" "$key")
+      if [[ $value == __GOOARCHY_UNRESOLVED_ASSIGNMENT__ ]]; then
+        NV_IMAGES_UNRESOLVED=1
+        continue
+      fi
       [[ -n $value ]] || continue
       if [[ $value == *'$'* || $value == *'`'* ]]; then
         NV_IMAGES_UNRESOLVED=1
@@ -407,9 +428,25 @@ nvidia_preset_config() {
   entry=${entry%.preset}
   name=${entry}_config
   config=$(nvidia_read_assignment "$file" "$name")
+  if [[ $config == __GOOARCHY_UNRESOLVED_ASSIGNMENT__ ]]; then
+    printf '%s\n' __GOOARCHY_UNRESOLVED_CONFIG__
+    return 0
+  fi
   [[ -n $config ]] || config=$(nvidia_read_assignment "$file" ALL_config)
+  if [[ $config == __GOOARCHY_UNRESOLVED_ASSIGNMENT__ ]]; then
+    printf '%s\n' __GOOARCHY_UNRESOLVED_CONFIG__
+    return 0
+  fi
   opts=$(nvidia_read_assignment "$file" "${entry}_options")
+  if [[ $opts == __GOOARCHY_UNRESOLVED_ASSIGNMENT__ ]]; then
+    printf '%s\n' __GOOARCHY_UNRESOLVED_CONFIG__
+    return 0
+  fi
   [[ -n $opts ]] || opts=$(nvidia_read_assignment "$file" ALL_options)
+  if [[ $opts == __GOOARCHY_UNRESOLVED_ASSIGNMENT__ ]]; then
+    printf '%s\n' __GOOARCHY_UNRESOLVED_CONFIG__
+    return 0
+  fi
   if [[ $config == *'$'* || $config == *'`'* || $opts == *'$'* || $opts == *'`'* ||
         ( $opts == *'('* && $opts != *')'* ) ]]; then
     printf '%s\n' __GOOARCHY_UNRESOLVED_CONFIG__
@@ -628,7 +665,7 @@ nvidia_record_package_hook_errors() {
 }
 
 nvidia_run_pacman_transaction() {
-  local output rc kernel hook_failures=
+  local output rc kernel
   output=$(mktemp "${TMPDIR:-/var/tmp}/gooarchy-nvidia-pacman.XXXXXXXX") || return 1
   if command -v mkinitcpio >/dev/null 2>&1; then
     if ! nvidia_preserve_preset_images; then
@@ -659,10 +696,15 @@ nvidia_run_pacman_transaction() {
     fi
   fi
   if ((${#NV_PACKAGE_HOOK_FAILURES[@]})); then
-    for kernel in "${!NV_PACKAGE_HOOK_FAILURES[@]}"; do
-      hook_failures+="${hook_failures:+; }${kernel}: ${NV_PACKAGE_HOOK_FAILURES[$kernel]}"
+    for kernel in "${NV_KERNELS[@]}"; do
+      if [[ -n ${NV_PACKAGE_HOOK_FAILURES[$kernel]:-} ]]; then
+        nvidia_fail_if_package_hook_failed "$kernel"
+      fi
     done
-    nvidia_fail "pacman's post-transaction mkinitcpio hook reported an image-generation error: $hook_failures. Gooarchy restored the images from before the transaction; resolve the hook error and rerun."
+    if [[ -n ${NV_PACKAGE_HOOK_FAILURES[unknown]:-} ]]; then
+      nvidia_report_other_user_partial_kernels "__unknown__"
+      nvidia_fail "pacman's post-transaction mkinitcpio hook reported an image-generation error for an unknown kernel: ${NV_PACKAGE_HOOK_FAILURES[unknown]}. Gooarchy restored the images from before the transaction; resolve the hook error and rerun."
+    fi
   fi
   return "$rc"
 }
@@ -929,21 +971,13 @@ nvidia_preserve_preset_images() {
 }
 
 nvidia_restore_preset_images() {
-  local idx image backup_file backup_dir parent restore_dir restore_file failed=0
+  local idx image backup_file backup_dir failed=0
   for idx in "${!NV_IMAGE_BACKUP_IMAGES[@]}"; do
     image=${NV_IMAGE_BACKUP_IMAGES[$idx]}
     if [[ ${NV_IMAGE_BACKUP_PRESENT[$idx]} == 1 ]]; then
       backup_file=${NV_IMAGE_BACKUP_FILES[$idx]}
       backup_dir=${NV_IMAGE_BACKUP_DIRS[$idx]}
-      parent=$(dirname "$image")
-      restore_dir=$(sudo mktemp -d "$parent/.gooarchy-nvidia-restore.XXXXXXXX") || { failed=1; continue; }
-      restore_file=$restore_dir/${image##*/}
-      if ! sudo cp -a -- "$backup_file" "$restore_file" || ! sudo mv -f -- "$restore_file" "$image"; then
-        sudo rm -rf -- "$restore_dir" || true
-        failed=1
-        continue
-      fi
-      sudo rm -rf -- "$restore_dir" || failed=1
+      if ! sudo mv -f -- "$backup_file" "$image"; then failed=1; continue; fi
       [[ -d $backup_dir ]] || failed=1
     elif sudo test -e "$image" || sudo test -L "$image"; then
       sudo rm -f -- "$image" || failed=1
@@ -954,9 +988,11 @@ nvidia_restore_preset_images() {
 }
 
 nvidia_regenerate_kernel_images() {
-  local kernel=$1 context=${2:-} only_preset=${3:-} expected=${4:-${NV_DRIVER_MODULE_VERSION:-unknown}}
+  local kernel=$1 context=${2:-} only_preset=${3:-} expected=${4:-${NV_DRIVER_MODULE_VERSION:-unknown}} requested
   local preset status output preset_wrapper entry failed_by_test uncovered=0 image idx
-  local -a presets=() entries=()
+  local -a presets=() entries=() requested_entries=()
+  local -A requested_seen=()
+  if (($# > 4)); then requested_entries=("${@:5}"); fi
   if [[ -n $only_preset ]]; then
     presets=("$only_preset")
   else
@@ -973,6 +1009,25 @@ nvidia_regenerate_kernel_images() {
       return 98
     fi
     entries=("${NV_PRESET_ENTRIES[@]}")
+    if ((${#requested_entries[@]})); then
+      [[ -n $only_preset ]] || { nvidia_report "selected-entry regeneration requires one named preset."; return 98; }
+      local -A active_entries=()
+      local -a selected_entries=()
+      for entry in "${entries[@]}"; do active_entries[$entry]=1; done
+      for requested in "${requested_entries[@]}"; do
+        [[ ${active_entries[$requested]:-} ]] || {
+          nvidia_report "requested regeneration entry $requested is not active in ${preset##*/}."
+          return 98
+        }
+        [[ ! ${requested_seen[$requested]:-} ]] || {
+          nvidia_report "requested regeneration entry $requested was duplicated."
+          return 98
+        }
+        requested_seen[$requested]=1
+        selected_entries+=("$requested")
+      done
+      entries=("${selected_entries[@]}")
+    fi
     nvidia_preserve_preset_images "$preset" || {
       nvidia_report "could not preserve the active images in ${preset##*/} before regeneration."
       return 98
@@ -1497,9 +1552,9 @@ nvidia_report_partial_failure_if_present() {
 }
 
 nvidia_ensure_uncovered_images() {
-  local kernel=$1 reason=$2 preset image config preset_early_kms r11_preset needs_regeneration=0 idx entry
-  local -a regenerate_presets=()
-  local -A regenerate_seen=()
+  local kernel=$1 reason=$2 preset image config preset_early_kms r11_preset needs_regeneration=0 idx entry entry_key selected_entry_text
+  local -a regenerate_presets=() selected_entries=()
+  local -A regenerate_seen=() regenerate_entry_seen=() regenerate_entry_list=()
   nvidia_collect_kernel_presets "$kernel"
   if ((${#NV_KERNEL_PRESETS[@]} == 0)); then
     NV_USER_PARTIAL=0
@@ -1535,6 +1590,11 @@ nvidia_ensure_uncovered_images() {
           regenerate_seen[$preset]=1
           regenerate_presets+=("$preset")
         fi
+        entry_key="$preset|$entry"
+        if [[ ! ${regenerate_entry_seen[$entry_key]:-} ]]; then
+          regenerate_entry_seen[$entry_key]=1
+          regenerate_entry_list[$preset]+="${regenerate_entry_list[$preset]:+ }$entry"
+        fi
         continue
       fi
       if ! nvidia_image_module_state "$image" "$NV_DRIVER_MODULE_VERSION"; then
@@ -1548,6 +1608,11 @@ nvidia_ensure_uncovered_images() {
           regenerate_seen[$preset]=1
           regenerate_presets+=("$preset")
         fi
+        entry_key="$preset|$entry"
+        if [[ ! ${regenerate_entry_seen[$entry_key]:-} ]]; then
+          regenerate_entry_seen[$entry_key]=1
+          regenerate_entry_list[$preset]+="${regenerate_entry_list[$preset]:+ }$entry"
+        fi
       fi
     done
   done
@@ -1557,7 +1622,14 @@ nvidia_ensure_uncovered_images() {
       return 1
     }
     for preset in "${regenerate_presets[@]}"; do
-      if ! nvidia_regenerate_kernel_images "$kernel" uncovered "$preset" "$NV_DRIVER_MODULE_VERSION"; then
+      selected_entry_text=${regenerate_entry_list[$preset]:-}
+      selected_entries=()
+      read -r -a selected_entries <<<"$selected_entry_text"
+      if ((${#selected_entries[@]} == 0)); then
+        nvidia_report "no active preset entries were selected for uncovered-image repair in ${preset##*/}."
+        return 1
+      fi
+      if ! nvidia_regenerate_kernel_images "$kernel" uncovered "$preset" "$NV_DRIVER_MODULE_VERSION" "${selected_entries[@]}"; then
         nvidia_report_partial_failure_if_present "$kernel" "$NV_DRIVER_MODULE_VERSION" "$reason"
         return 1
       fi
@@ -1824,9 +1896,9 @@ nvidia_install() {
         nvidia_fail_if_package_hook_failed "$kernel"
         continue
       fi
-      local regenerate=0 preset_early_kms r11_preset
-      local -a regenerate_presets=()
-      local -A regenerate_seen=()
+      local regenerate=0 preset_early_kms r11_preset entry_key selected_entry_text
+      local -a regenerate_presets=() selected_entries=()
+      local -A regenerate_seen=() regenerate_entry_seen=() regenerate_entry_list=()
       for preset in "${NV_KERNEL_PRESETS[@]}"; do
         nvidia_preset_images "$preset"
         if ((${#NV_IMAGES[@]} == 0)) || ((NV_IMAGES_UNRESOLVED)); then
@@ -1858,7 +1930,12 @@ nvidia_install() {
               regenerate_seen[$preset]=1
               regenerate_presets+=("$preset")
             fi
-            break
+            entry_key="$preset|$entry"
+            if [[ ! ${regenerate_entry_seen[$entry_key]:-} ]]; then
+              regenerate_entry_seen[$entry_key]=1
+              regenerate_entry_list[$preset]+="${regenerate_entry_list[$preset]:+ }$entry"
+            fi
+            continue
           fi
           if ! nvidia_image_module_state "$image" "$expected"; then
             if ((r11_preset)); then
@@ -1870,18 +1947,34 @@ nvidia_install() {
               regenerate_seen[$preset]=1
               regenerate_presets+=("$preset")
             fi
+            entry_key="$preset|$entry"
+            if [[ ! ${regenerate_entry_seen[$entry_key]:-} ]]; then
+              regenerate_entry_seen[$entry_key]=1
+              regenerate_entry_list[$preset]+="${regenerate_entry_list[$preset]:+ }$entry"
+            fi
           elif ((preset_early_kms)) && ((NV_IMAGE_HAS_ALL == 0)); then
             regenerate=1
             if [[ ! ${regenerate_seen[$preset]:-} ]]; then
               regenerate_seen[$preset]=1
               regenerate_presets+=("$preset")
             fi
+            entry_key="$preset|$entry"
+            if [[ ! ${regenerate_entry_seen[$entry_key]:-} ]]; then
+              regenerate_entry_seen[$entry_key]=1
+              regenerate_entry_list[$preset]+="${regenerate_entry_list[$preset]:+ }$entry"
+            fi
           fi
         done
       done
       if ((regenerate)); then
         for preset in "${regenerate_presets[@]}"; do
-          if ! nvidia_regenerate_kernel_images "$kernel" "" "$preset" "$expected"; then
+          selected_entry_text=${regenerate_entry_list[$preset]:-}
+          selected_entries=()
+          read -r -a selected_entries <<<"$selected_entry_text"
+          if ((${#selected_entries[@]} == 0)); then
+            nvidia_fail "no active preset entries were selected for early-KMS regeneration in ${preset##*/}."
+          fi
+          if ! nvidia_regenerate_kernel_images "$kernel" "" "$preset" "$expected" "${selected_entries[@]}"; then
             nvidia_report_other_user_partial_kernels "$kernel"
             nvidia_fail "mkinitcpio failed while generating early-KMS images for ${NV_PKGBASE[$kernel]} kernel $kernel using ${preset##*/}; the NVIDIA package is installed. Read the step log, restore a complete image, then rerun."
           fi
