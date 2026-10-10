@@ -523,6 +523,106 @@ boot_disk() {
   log "booted from the disk: $(guest 'uname -r')"
 }
 
+qemu_uses_direct_kernel() {
+  running || return 1
+  local pid
+  pid=$(cat "$run/qemu.pid") || return 1
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  tr '\0' '\n' <"/proc/$pid/cmdline" | grep -Fxq -- -kernel
+}
+
+prepare_r15_grub() {
+  local row=$1 out log_path
+  # R15 needs a real disk-bootloader reboot for every sound kernel. If the optional-kernel
+  # acceptance left QEMU running with -kernel, return to the disk first; changing a shell flag
+  # cannot change the arguments of an already running emulator.
+  if qemu_uses_direct_kernel; then
+    log "R15 is switching from QEMU direct-kernel boot to the guest's disk GRUB"
+    boot_disk
+  fi
+  export GOOARCHY_VM_KERNEL_BOOT=0
+  guest 'command -v grub-mkconfig >/dev/null && command -v grub-reboot >/dev/null && test -d /boot/grub' ||
+    die "R15 per-kernel checks require the fixture's GRUB bootloader"
+  out=$(artifacts)
+  log_path=$out/r15-grub-mkconfig-$row.log
+  guest 'sudo grub-mkconfig -o /boot/grub/grub.cfg' >"$log_path" 2>&1 || {
+    tail -n 30 "$log_path" >&2
+    die "could not prepare GRUB entries for the held R15 kernels"
+  }
+  guest 'test -s /boot/grub/grub.cfg' || die "GRUB did not leave a usable menu for the held R15 kernels"
+}
+
+r15_grub_selector() {
+  local grub_cfg=$1 pkgbase=$2
+  python3 - "$grub_cfg" "$pkgbase" <<'PY'
+import os
+import re
+import sys
+
+path, pkgbase = sys.argv[1:]
+lines = open(path, encoding="utf-8").read().splitlines()
+stack = []
+depth = 0
+entries = []
+
+for line in lines:
+    header = re.match(r"^\s*(submenu|menuentry)\s+", line)
+    delta = line.count("{") - line.count("}")
+    if header:
+        kind = header.group(1)
+        menu_id = re.search(r"\$menuentry_id_option\s+(['\"])([^'\"]+)\1", line)
+        title = re.match(r"^\s*(?:submenu|menuentry)\s+(['\"])(.*?)\1", line)
+        node = {
+            "kind": kind,
+            "id": menu_id.group(2) if menu_id else None,
+            "title": title.group(2) if title else "",
+            "level": depth + delta,
+            "linux": [],
+            "initrd": [],
+        }
+        stack.append(node)
+        if kind == "menuentry":
+            node["selector_parts"] = [
+                parent["id"] for parent in stack
+                if parent["kind"] in ("submenu", "menuentry")
+            ]
+            entries.append(node)
+    else:
+        entry = next((node for node in reversed(stack) if node["kind"] == "menuentry"), None)
+        if entry is not None:
+            linux = re.match(r"^\s*linux(?:efi)?\s+(\S+)", line)
+            if linux:
+                entry["linux"].append(linux.group(1))
+            initrd = re.match(r"^\s*initrd(?:efi)?\s+(.+)$", line)
+            if initrd:
+                entry["initrd"].extend(initrd.group(1).split())
+
+    depth += delta
+    while stack and stack[-1]["level"] > depth:
+        stack.pop()
+
+matches = []
+for entry in entries:
+    if not any(os.path.basename(image) == "vmlinuz-" + pkgbase for image in entry["linux"]):
+        continue
+    if not entry["initrd"]:
+        continue
+    parts = entry["selector_parts"]
+    if not parts or any(not part for part in parts):
+        continue
+    selector = ">".join(parts)
+    if not re.fullmatch(r"[A-Za-z0-9_.+-]+(?:>[A-Za-z0-9_.+-]+)*", selector):
+        continue
+    fallback = any("fallback" in os.path.basename(image).lower() for image in entry["initrd"])
+    matches.append((fallback, selector, entry["title"]))
+
+regular = [candidate for candidate in matches if not candidate[0]]
+if not regular:
+    raise SystemExit(f"no non-fallback GRUB entry with an initrd for vmlinuz-{pkgbase}")
+print(regular[0][1])
+PY
+}
+
 plugin_state() {
   guest 'printf "%s %s\n" "$(pacman -Q scottland | cut -d" " -f2)" \
            "$(sha256sum "$(pacman -Qlq scottland | grep "/libscottland.so$")" | cut -c1-16)"'
@@ -736,7 +836,7 @@ cmd_nvidia_install() {
 cmd_nvidia_r15_row() {
   running || die "the guest isn't running"
   local row=${1:-} stamp test_root held_data held_row held_stamp plan_sha plan
-  local kernel pkgbase boot_json entry_id current_kernel boot_id suffix evidence
+  local kernel pkgbase grub_cfg grub_map entry_selector current_kernel boot_id suffix evidence
   local -a sound_kernels=()
   local -A kernel_pkgbase=()
   case $row in
@@ -785,35 +885,27 @@ cmd_nvidia_r15_row() {
   done <"$plan"
   ((${#sound_kernels[@]} > 0)) || die "the R15 manifest has no sound kernel to boot"
 
+  prepare_r15_grub "$row"
+  grub_cfg=$(artifacts)/nvidia-matrix/$stamp/grub-r15-$row-$stamp-$$.cfg
+  grub_map=$(artifacts)/nvidia-matrix/$stamp/grub-r15-$row-$stamp-$$.tsv
+  mkdir -p "$(dirname "$grub_cfg")"
+  guest 'sudo cat /boot/grub/grub.cfg' >"$grub_cfg" || {
+    copy_nvidia_artifacts "$stamp" || true
+    die "could not capture the prepared GRUB menu while R15 row $row is held"
+  }
+  printf 'schema\t1\nrow\t%s\n' "$row" >"$grub_map"
+
   for kernel in "${sound_kernels[@]}"; do
     pkgbase=${kernel_pkgbase[$kernel]}
-    boot_json=$(artifacts)/nvidia-matrix/$stamp/bootctl-$row-$kernel.json
-    guest 'bootctl list --json=short --no-pager' >"$boot_json" || {
+    if ! entry_selector=$(r15_grub_selector "$grub_cfg" "$pkgbase"); then
       copy_nvidia_artifacts "$stamp" || true
-      die "could not read boot entries for $kernel while the R15 failure is held"
-    }
-    if ! entry_id=$(python3 - "$boot_json" "$pkgbase" <<'PY'
-import json, os, re, sys
-with open(sys.argv[1], encoding="utf-8") as stream:
-    entries = json.load(stream)
-pkgbase = sys.argv[2]
-matches = []
-for entry in entries if isinstance(entries, list) else entries.get("entries", []):
-    linux = os.path.basename(entry.get("linux", ""))
-    entry_id = entry.get("id", "")
-    if linux == "vmlinuz-" + pkgbase and re.fullmatch(r"[A-Za-z0-9_.@+-]+", entry_id):
-        matches.append(entry_id)
-if len(matches) != 1:
-    raise SystemExit(f"expected one systemd-boot entry for {pkgbase}, found {len(matches)}")
-print(matches[0])
-PY
-    ); then
-      copy_nvidia_artifacts "$stamp" || true
-      die "could not uniquely select the $pkgbase boot entry while the R15 failure is held"
+      die "could not select a GRUB entry for $pkgbase while the R15 failure is held"
     fi
-    guest "sudo bootctl set-oneshot '$entry_id'" || {
+    printf 'kernel\t%s\npkgbase\t%s\ngrub-one-shot\t%s\n' \
+      "$kernel" "$pkgbase" "$entry_selector" >>"$grub_map"
+    guest "sudo grub-reboot '$entry_selector'" || {
       copy_nvidia_artifacts "$stamp" || true
-      die "systemd-boot refused the one-shot entry for $kernel; the R15 state remains held"
+      die "GRUB refused the one-shot entry for $kernel; the R15 state remains held"
     }
     cmd_reboot
     current_kernel=$(guest 'uname -r')
