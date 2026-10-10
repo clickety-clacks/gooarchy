@@ -162,7 +162,7 @@ driver_module_files() {
     -print0
 }
 preset_images() {
-  local preset=$1 line body= started=0 closed=0 entry suffix key value
+  local preset=$1 line lhs body= started=0 closed=0 entry suffix key value
   local -a entries=()
   local -A seen=()
   NV_IMAGES=()
@@ -196,7 +196,11 @@ preset_images() {
       value=
       while IFS= read -r line || [[ -n $line ]]; do
         line=${line%%#*}
-        [[ $line =~ ^[[:space:]]*${key}[[:space:]]*= ]] || continue
+        [[ $line == *=* ]] || continue
+        lhs=${line%%=*}
+        lhs=${lhs#"${lhs%%[![:space:]]*}"}
+        lhs=${lhs%"${lhs##*[![:space:]]}"}
+        [[ $lhs == "$key" ]] || continue
         value=${line#*=}
         value=${value#"${value%%[![:space:]]*}"}
         value=${value%"${value##*[![:space:]]}"}
@@ -644,7 +648,7 @@ unit_states() {
 }
 
 preset_images() {
-  local preset=$1 line value body= started=0 closed=0 entry suffix key
+  local preset=$1 line lhs value body= started=0 closed=0 entry suffix key
   local -a entries=()
   local -A seen=()
   NV_TEST_IMAGES=()
@@ -680,7 +684,11 @@ preset_images() {
       value=
       while IFS= read -r line || [[ -n $line ]]; do
         line=${line%%#*}
-        [[ $line =~ ^[[:space:]]*${key}[[:space:]]*= ]] || continue
+        [[ $line == *=* ]] || continue
+        lhs=${line%%=*}
+        lhs=${lhs#"${lhs%%[![:space:]]*}"}
+        lhs=${lhs%"${lhs##*[![:space:]]}"}
+        [[ $lhs == "$key" ]] || continue
         value=${line#*=}
         value=${value#"${value%%[![:space:]]*}"}
         value=${value%"${value##*[![:space:]]}"}

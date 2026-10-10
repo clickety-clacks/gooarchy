@@ -290,18 +290,21 @@ nvidia_headers_target() {
 }
 
 nvidia_read_assignment() {
-  local file=$1 key=$2 line value
+  local file=$1 key=$2 line lhs value
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line == *\#* ]] && line=${line%%\#*}
-    if [[ $line =~ ^[[:space:]]*${key}[[:space:]]*= ]]; then
-      value=${line#*=}
-      value=${value#"${value%%[![:space:]]*}"}
-      value=${value%"${value##*[![:space:]]}"}
-      value=${value#\"}; value=${value%\"}
-      value=${value#\'}; value=${value%\'}
-      printf '%s\n' "$value"
-      return 0
-    fi
+    [[ $line == *=* ]] || continue
+    lhs=${line%%=*}
+    lhs=${lhs#"${lhs%%[![:space:]]*}"}
+    lhs=${lhs%"${lhs##*[![:space:]]}"}
+    [[ $lhs == "$key" ]] || continue
+    value=${line#*=}
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    value=${value#\"}; value=${value%\"}
+    value=${value#\'}; value=${value%\'}
+    printf '%s\n' "$value"
+    return 0
   done <"$file"
   return 0
 }
