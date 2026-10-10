@@ -488,7 +488,7 @@ plugin_state() {
 }
 
 scottland_build_commit() {
-  guest "awk -F '\\t' '\\$1 == \\\"scottland\\\" { ref = \\$3 } END { print ref }' ~/.local/state/gooarchy/builds.tsv"
+  guest "awk -F '\\t' '\$1 == \"scottland\" { ref = \$3 } END { print ref }' ~/.local/state/gooarchy/builds.tsv"
 }
 
 cmd_rebuild_check() {
