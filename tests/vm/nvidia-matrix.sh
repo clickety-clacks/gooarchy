@@ -29,7 +29,8 @@ last_status=0
 
 driver_module_files() {
   find "$1" -type f \
-    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \
+       -o -name 'nvidia-modeset.ko*' -o -name 'nvidia-uvm.ko*' -o -name 'nvidia-drm.ko*' \) \
     -print0
 }
 
@@ -107,7 +108,7 @@ systemctl() {
 }
 
 sudo() {
-  local fail_preset= fail_kernel pkgbase rc is_upgrade=0 hook_installed=0
+  local fail_preset= fail_kernel fail_image= pkgbase rc is_upgrade=0 hook_installed=0
   local -a args=("$@")
   if [[ ${args[0]:-} == systemctl ]]; then
     printf '%s\n' "${args[*]}" >>"${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/systemctl.trace"
@@ -125,10 +126,14 @@ sudo() {
     fi
   fi
   if [[ -n $fail_preset ]]; then
+    preset_images "/etc/mkinitcpio.d/$fail_preset.preset" || return 97
+    fail_image=${NV_TEST_IMAGES[0]:-}
+    [[ -n $fail_image ]] || return 97
     if ! gooarchy_test_install_mkinitcpio_hook; then return 97; fi
     hook_installed=1
     if ((is_upgrade)); then args+=(--ignore mkinitcpio); fi
     if command sudo env GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET="$fail_preset" \
+      GOOARCHY_TEST_PACMAN_HOOK_FAIL_AFTER_WRITE=1 GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE="$fail_image" \
       PATH="${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/bin:$PATH" "${args[@]}"; then
       rc=0
     else
@@ -150,6 +155,64 @@ EOF
 cat >"$test_root/capture-upgrade-state.sh" <<'EOF'
 #!/bin/bash
 set -euo pipefail
+driver_module_files() {
+  find "$1" -type f \
+    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \
+       -o -name 'nvidia-modeset.ko*' -o -name 'nvidia-uvm.ko*' -o -name 'nvidia-drm.ko*' \) \
+    -print0
+}
+preset_images() {
+  local preset=$1 line body= started=0 closed=0 entry suffix key value
+  local -a entries=()
+  local -A seen=()
+  NV_IMAGES=()
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    if ((started == 0)); then
+      [[ $line =~ ^[[:space:]]*PRESETS[[:space:]]*= ]] || continue
+      started=1
+      body=${line#*=}
+    else
+      body+=" $line"
+    fi
+    if [[ $body == *')'* ]]; then closed=1; break; fi
+  done <"$preset"
+  ((started && closed)) || return 1
+  body=${body#"${body%%[![:space:]]*}"}
+  [[ ${body:0:1} == '(' ]] || return 1
+  body=${body:1}
+  body=${body%)}
+  [[ $body != *'$'* && $body != *'`'* && $body != *';'* && $body != *'('* && $body != *')'* ]] || return 1
+  read -r -a entries <<<"$body"
+  ((${#entries[@]} > 0)) || return 1
+  for entry in "${entries[@]}"; do
+    case $entry in
+      \'*\') entry=${entry:1:${#entry}-2} ;;
+      \"*\") entry=${entry:1:${#entry}-2} ;;
+    esac
+    [[ $entry =~ ^[[:alnum:]_.+-]+$ ]] || return 1
+    for suffix in image uki; do
+      key=${entry}_${suffix}
+      value=
+      while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%%#*}
+        [[ $line =~ ^[[:space:]]*${key}[[:space:]]*= ]] || continue
+        value=${line#*=}
+        value=${value#"${value%%[![:space:]]*}"}
+        value=${value%"${value##*[![:space:]]}"}
+        value=${value#\"}; value=${value%\"}
+        value=${value#\'}; value=${value%\'}
+        break
+      done <"$preset"
+      [[ -n $value ]] || continue
+      [[ $value != *'$'* && $value != *'`'* ]] || return 1
+      [[ ! ${seen[$value]:-} ]] || return 1
+      seen[$value]=1
+      NV_IMAGES+=("$value")
+    done
+  done
+  ((${#NV_IMAGES[@]} > 0))
+}
 pacman -Q nvidia-utils nvidia-open-dkms | sort
 if [[ -e /etc/mkinitcpio.conf.d/gooarchy-nvidia.conf ]]; then
   sha256sum /etc/mkinitcpio.conf.d/gooarchy-nvidia.conf
@@ -163,18 +226,14 @@ for module_dir in /usr/lib/modules/*; do
   driver_module_files "$module_dir" | sort -z | xargs -0r sha256sum
 done
 if [[ -r /etc/mkinitcpio.d/linux.preset ]]; then
-while IFS= read -r line || [[ -n $line ]]; do
-  line=${line%%#*}
-  [[ $line =~ ^[[:space:]]*[[:alnum:]_-]+_(image|uki)[[:space:]]*= ]] || continue
-  image=${line#*=}
-  image=${image#"${image%%[![:space:]]*}"}
-  image=${image%"${image##*[![:space:]]}"}
-  image=${image#\"}; image=${image%\"}
-  image=${image#\'}; image=${image%\'}
-  [[ -n $image && $image != *'$'* ]] || { printf 'unresolved  %s\n' "$line"; continue; }
+if ! preset_images /etc/mkinitcpio.d/linux.preset; then
+  printf 'unresolved-preset  /etc/mkinitcpio.d/linux.preset\n'
+  exit 1
+fi
+for image in "${NV_IMAGES[@]}"; do
   if [[ -f $image ]]; then sha256sum "$image"; else printf 'missing  %s\n' "$image"; fi
   [[ -f $image ]] && images+=("$image")
-done </etc/mkinitcpio.d/linux.preset
+done
 else
   printf 'missing-preset  /etc/mkinitcpio.d/linux.preset\n'
 fi
@@ -188,7 +247,8 @@ for image in "${images[@]}"; do
       version=$(modinfo -F version "$module_file" 2>/dev/null || true)
       printf 'image-module  %s  %s  %s\n' "$image" "$module_name" "${version:-unknown}"
     done < <(find "$tmp" -type f \
-      \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+      \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \
+         -o -name 'nvidia-modeset.ko*' -o -name 'nvidia-uvm.ko*' -o -name 'nvidia-drm.ko*' \) \
       -print0)
   fi
   rm -rf "$tmp"
@@ -205,7 +265,18 @@ if [[ -n ${GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET:-} && ${1:-} == -P ]]; then
     pkgbase=${pkgbase%.preset}
     if [[ $pkgbase == "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET" ]]; then
       printf '==> Building image from preset: %s\n' "$preset"
-      printf 'ERROR: Gooarchy VM test injected package-hook failure for %s\n' "$pkgbase"
+      if [[ ${GOOARCHY_TEST_PACMAN_HOOK_FAIL_AFTER_WRITE:-} == 1 &&
+            -n ${GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE:-} ]]; then
+        /usr/bin/mkinitcpio -p "$pkgbase" || { status=1; continue; }
+        if ! : >"$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE"; then
+          printf 'ERROR: Gooarchy VM could not truncate the injected image %s\n' "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE"
+        else
+          printf 'ERROR: Gooarchy VM injected package-hook failure after writing %s\n' \
+            "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE"
+        fi
+      else
+        printf 'ERROR: Gooarchy VM test injected package-hook failure for %s\n' "$pkgbase"
+      fi
       status=1
     elif ! /usr/bin/mkinitcpio -p "$pkgbase"; then
       status=1
@@ -573,19 +644,57 @@ unit_states() {
 }
 
 preset_images() {
-  local preset=$1 line value
+  local preset=$1 line value body= started=0 closed=0 entry suffix key
+  local -a entries=()
+  local -A seen=()
   NV_TEST_IMAGES=()
+  NV_TEST_PRESET_ENTRIES=()
   while IFS= read -r line || [[ -n $line ]]; do
     line=${line%%#*}
-    [[ $line =~ ^[[:space:]]*[[:alnum:]_-]+_(image|uki)[[:space:]]*= ]] || continue
-    value=${line#*=}
-    value=${value#"${value%%[![:space:]]*}"}
-    value=${value%"${value##*[![:space:]]}"}
-    value=${value#\"}; value=${value%\"}
-    value=${value#\'}; value=${value%\'}
-    [[ -n $value && $value != *'$'* ]] || return 1
-    NV_TEST_IMAGES+=("$value")
+    if ((started == 0)); then
+      [[ $line =~ ^[[:space:]]*PRESETS[[:space:]]*= ]] || continue
+      started=1
+      body=${line#*=}
+    else
+      body+=" $line"
+    fi
+    if [[ $body == *')'* ]]; then closed=1; break; fi
   done <"$preset"
+  ((started && closed)) || return 1
+  body=${body#"${body%%[![:space:]]*}"}
+  [[ ${body:0:1} == '(' ]] || return 1
+  body=${body:1}
+  body=${body%)}
+  [[ $body != *'$'* && $body != *'`'* && $body != *';'* && $body != *'('* && $body != *')'* ]] || return 1
+  read -r -a entries <<<"$body"
+  ((${#entries[@]} > 0)) || return 1
+  for entry in "${entries[@]}"; do
+    case $entry in
+      \'*\') entry=${entry:1:${#entry}-2} ;;
+      \"*\") entry=${entry:1:${#entry}-2} ;;
+    esac
+    [[ $entry =~ ^[[:alnum:]_.+-]+$ ]] || return 1
+    NV_TEST_PRESET_ENTRIES+=("$entry")
+    for suffix in image uki; do
+      key=${entry}_${suffix}
+      value=
+      while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%%#*}
+        [[ $line =~ ^[[:space:]]*${key}[[:space:]]*= ]] || continue
+        value=${line#*=}
+        value=${value#"${value%%[![:space:]]*}"}
+        value=${value%"${value##*[![:space:]]}"}
+        value=${value#\"}; value=${value%\"}
+        value=${value#\'}; value=${value%\'}
+        break
+      done <"$preset"
+      [[ -n $value ]] || continue
+      [[ $value != *'$'* && $value != *'`'* ]] || return 1
+      [[ ! ${seen[$value]:-} ]] || return 1
+      seen[$value]=1
+      NV_TEST_IMAGES+=("$value")
+    done
+  done
   ((${#NV_TEST_IMAGES[@]} > 0))
 }
 
@@ -597,7 +706,8 @@ image_modules() {
     return 1
   fi
   sudo find "$tmp" -type f \
-    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \
+       -o -name 'nvidia-modeset.ko*' -o -name 'nvidia-uvm.ko*' -o -name 'nvidia-drm.ko*' \) \
     -printf '%f\n' |
     sed -E 's/\.ko.*$//; s/-/_/g' | sort -u
   sudo rm -rf "$tmp"
@@ -622,7 +732,8 @@ check_image_versions_and_firmware() {
       [[ -n $firmware_path ]] || { sudo rm -rf "$tmp"; return 1; }
     done < <(sudo modinfo -F firmware "$file" 2>/dev/null || true)
   done < <(sudo find "$tmp" -type f \
-    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \) \
+    \( -name 'nvidia.ko*' -o -name 'nvidia_modeset.ko*' -o -name 'nvidia_uvm.ko*' -o -name 'nvidia_drm.ko*' \
+       -o -name 'nvidia-modeset.ko*' -o -name 'nvidia-uvm.ko*' -o -name 'nvidia-drm.ko*' \) \
     -print0)
   sudo rm -rf "$tmp"
 }
@@ -673,7 +784,7 @@ restore_kernel_images() {
 kernel_image_hashes() {
   local pkgbase=$1 image
   image_set_for_kernel "$pkgbase" || return 1
-  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do sha256sum "$image"; done
+  for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do sudo sha256sum -- "$image"; done
 }
 
 module_version_from_package() {
@@ -746,7 +857,7 @@ hold_r15_failure_row() {
       if kernel_sounds_for_boot "$kernel" "$pkgbase" "$module_version"; then
         printf 'kernel\tsound\t%s\t%s\n' "$kernel" "$pkgbase"
         for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
-          image_hash=$(sha256sum "$image" | awk '{print $1}') || exit 1
+          image_hash=$(sudo sha256sum -- "$image" | awk '{print $1}') || exit 1
           image_path=$image
           printf 'image\t%s\t%s\t%s\n' "$kernel" "$image_path" "$image_hash"
         done
@@ -813,7 +924,7 @@ verify_r15_boot_evidence() {
           return 1
         }
         [[ -f $path ]] || { echo "R15 image disappeared before fixture recovery: $path" >&2; return 1; }
-        actual_hash=$(sha256sum -- "$path" | awk '{print $1}') || return 1
+        actual_hash=$(sudo sha256sum -- "$path" | awk '{print $1}') || return 1
         [[ $actual_hash == "$expected_hash" ]] || {
           echo "R15 image changed before fixture recovery: $path" >&2
           return 1
@@ -1282,8 +1393,11 @@ EOF
 
 test_custom_preset() {
   local preset=/etc/mkinitcpio.d/linux.preset saved=$test_root/linux.preset.saved test_copy=$test_root/linux.preset.custom
-  local before_images after_images before_etc before_packages preset_hash config_hash hook_seen=0 report_seen=0 rerun_report_seen=0
-  local image image_ok=1 module_version modules status
+  local fallback_config=$test_root/r11-fallback-config.conf
+  local before_images after_images before_etc before_packages preset_hash config_hash hook_seen=0 report_seen=0 fallback_report_seen=0 rerun_report_seen=0
+  local image image_ok=1 module_version modules status disabled_image=$test_root/inactive-fallback.img
+  local entry entry_index=0 first_entry= second_entry=
+  local -a active_entries=()
   if [[ ! -f $preset ]]; then record 'R11 custom preset case available' 0 "$preset missing"; return; fi
   if ! grep -Eq '^[[:space:]]*MODULES[[:space:]]*=[[:space:]]*\(\)[[:space:]]*$' /etc/mkinitcpio.conf; then
     record 'R11 empty-MODULES config fixture is available' 0 '/etc/mkinitcpio.conf must be the fresh VM empty-MODULES default'
@@ -1291,9 +1405,29 @@ test_custom_preset() {
   fi
   sudo cp -a "$preset" "$saved"
   sudo cp -a "$preset" "$test_copy"
-  printf '\nALL_config="/etc/mkinitcpio.conf"\n' | sudo tee -a "$test_copy" >/dev/null
+  preset_images "$test_copy" || {
+    sudo mv "$saved" "$preset"
+    record 'R11 active preset-entry fixture is available' 0 'could not parse literal active entries and output paths'
+    return
+  }
+  active_entries=("${NV_TEST_PRESET_ENTRIES[@]}")
+  first_entry=${active_entries[0]}
+  second_entry=${active_entries[1]:-}
+  if [[ -n $second_entry ]]; then sudo cp /etc/mkinitcpio.conf "$fallback_config"; fi
+  for entry in "${active_entries[@]}"; do
+    if ((entry_index == 0)); then
+      printf '\n%s_config="/etc/mkinitcpio.conf"\n' "$entry" | sudo tee -a "$test_copy" >/dev/null
+    else
+      printf '\n%s_config="%s"\n' "$entry" "$fallback_config" | sudo tee -a "$test_copy" >/dev/null
+    fi
+    ((entry_index += 1))
+  done
+  printf '\ngooarchy_inactive_image="%s"\n' "$disabled_image" | sudo tee -a "$test_copy" >/dev/null
   sudo cp "$test_copy" "$preset"
   preset_images "$preset" || { sudo mv "$saved" "$preset"; record 'R11 preset paths resolve' 0 'could not parse preset'; return; }
+  record 'R11 inactive preset image path is excluded from the active image set' \
+    "$([[ ${#NV_TEST_IMAGES[@]} -gt 0 ]] && ! printf '%s\n' "${NV_TEST_IMAGES[@]}" | grep -Fxq "$disabled_image" && echo 1 || echo 0)" \
+    "active entries ${active_entries[*]}; inactive path $disabled_image ignored"
   preset_hash=$(sha256sum "$preset" | awk '{print $1}')
   config_hash=$(sha256sum /etc/mkinitcpio.conf | awk '{print $1}')
   before_etc=$(tree_hash /etc)
@@ -1301,7 +1435,12 @@ test_custom_preset() {
   run_nvidia_step r11-custom-config-pacman-hook "$supported" pacman:force-transaction
   status=$last_status
   grep -Fq "Building image from preset: $preset" "$test_root/r11-custom-config-pacman-hook.log" && hook_seen=1
-  grep -Fq 'linux.preset reads /etc/mkinitcpio.conf directly' "$test_root/r11-custom-config-pacman-hook.log" && report_seen=1
+  grep -Fq "$first_entry image in linux.preset reads /etc/mkinitcpio.conf directly" "$test_root/r11-custom-config-pacman-hook.log" && report_seen=1
+  if [[ -n $second_entry ]]; then
+    grep -Fq "$second_entry image in linux.preset reads $fallback_config directly" "$test_root/r11-custom-config-pacman-hook.log" && fallback_report_seen=1
+  else
+    fallback_report_seen=1
+  fi
   module_version=$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")
   for image in "${NV_TEST_IMAGES[@]}"; do
     sudo lsinitcpio "$image" >/dev/null 2>&1 || image_ok=0
@@ -1317,20 +1456,24 @@ test_custom_preset() {
     "$preset and /etc/mkinitcpio.conf"
   record 'R11 package-hook run reports missing early KMS for the named preset' \
     "$([[ $status == 0 && $report_seen == 1 ]] && echo 1 || echo 0)" "$preset"
+  record 'R11 active fallback entry uses its own configuration' \
+    "$([[ $status == 0 && $fallback_report_seen == 1 ]] && echo 1 || echo 0)" \
+    "$preset; ${second_entry:-single active entry}; ${fallback_config}"
 
-  before_images=$(sha256sum "${NV_TEST_IMAGES[@]}")
+  before_images=$(sudo sha256sum -- "${NV_TEST_IMAGES[@]}")
   before_etc=$(tree_hash /etc)
   before_packages=$(package_manifest)
   run_nvidia_step r11-custom-config "$supported" -
-  after_images=$(sha256sum "${NV_TEST_IMAGES[@]}")
+  after_images=$(sudo sha256sum -- "${NV_TEST_IMAGES[@]}")
   record 'R11 bypassed drop-in is left alone, reported, and unchanged on rerun' \
     "$([[ $last_status == 0 && $before_images == "$after_images" && $before_etc == "$(tree_hash /etc)" && $before_packages == "$(package_manifest)" && $preset_hash == "$(sha256sum "$preset" | awk '{print $1}')" && $config_hash == "$(sha256sum /etc/mkinitcpio.conf | awk '{print $1}')" ]] && echo 1 || echo 0)" \
     "$preset; no package transaction on rerun"
-  grep -Fq 'linux.preset reads /etc/mkinitcpio.conf directly' "$test_root/r11-custom-config.log" && rerun_report_seen=1
+  grep -Fq "$first_entry image in linux.preset reads /etc/mkinitcpio.conf directly" "$test_root/r11-custom-config.log" && rerun_report_seen=1
   record 'R11 rerun reports missing early KMS for the named preset' \
     "$([[ $last_status == 0 && $rerun_report_seen == 1 ]] && echo 1 || echo 0)" "$preset"
   cmp -s "$test_copy" "$preset" || record 'R11 preset bytes are preserved' 0 "$preset changed during the step"
   sudo mv "$saved" "$preset"
+  sudo rm -f "$fallback_config"
   run_nvidia_step r11-restore-default "$supported" -
   record 'R11 default preset early KMS restored' "$([[ $last_status == 0 ]] && echo 1 || echo 0)" 'test preset removed and images regenerated'
 }
@@ -1946,7 +2089,7 @@ test_pacman_hook_failure_with_partial_kernel() {
     modules=$(image_modules "$image" 2>/dev/null || true)
     [[ -z $modules ]] || r11_image_ok=0
   done
-  if grep -Fq "linux.preset reads $r11_config directly" "$step_log"; then r11_report_ok=1; fi
+  if grep -Fq "image in linux.preset reads $r11_config directly" "$step_log"; then r11_report_ok=1; fi
   if [[ $linux_preset_hash == "$(sha256sum "$linux_preset" | awk '{print $1}')" &&
         $r11_config_hash == "$(sha256sum "$r11_config" | awk '{print $1}')" ]]; then
     r11_files_unchanged=1
