@@ -1686,9 +1686,35 @@ nvidia_report_other_user_partial_kernels() {
   return 0
 }
 
+nvidia_report_direct_config_hook_failure() {
+  local kernel=$1 pkgbase=${NV_PKGBASE[$1]:-} preset entry config reason idx
+  local -A reported_entries=()
+  [[ -n $pkgbase ]] || return 0
+  preset=/etc/mkinitcpio.d/$pkgbase.preset
+  [[ -f $preset ]] || return 0
+  nvidia_preset_images "$preset"
+  ((NV_IMAGES_UNRESOLVED == 0)) || return 0
+  for idx in "${!NV_IMAGES[@]}"; do
+    entry=${NV_IMAGE_ENTRIES[$idx]}
+    [[ ! ${reported_entries[$entry]:-} ]] || continue
+    reported_entries[$entry]=1
+    config=${NV_IMAGE_CONFIGS[$idx]}
+    [[ -n $config && $config != __GOOARCHY_UNRESOLVED_CONFIG__ &&
+       $config != "$NV_OWNED_CONFIG" && -f $config ]] || continue
+    nvidia_config_has_all_modules "$config" && continue
+    if ((NV_CONFIG_DYNAMIC)); then
+      reason="its dynamic MODULES effect could not be determined"
+    else
+      reason="its literal MODULES value does not contain all four NVIDIA modules"
+    fi
+    nvidia_report "the ${entry} image in ${preset##*/} reads $config directly; $reason. Gooarchy left that named config and the prior image unchanged after the package hook failure. To load NVIDIA early, add nvidia nvidia_modeset nvidia_uvm nvidia_drm to that file, then run sudo mkinitcpio -P."
+  done
+}
+
 nvidia_fail_if_package_hook_failed() {
   local kernel=$1 failure=${NV_PACKAGE_HOOK_FAILURES[$1]:-}
   [[ -n $failure ]] || return 0
+  nvidia_report_direct_config_hook_failure "$kernel"
   nvidia_report_other_user_partial_kernels "$kernel"
   nvidia_fail "pacman's post-transaction mkinitcpio hook reported an image-generation error for ${NV_PKGBASE[$kernel]} kernel $kernel: $failure. The step checked or repaired the image state where possible, but the hook error remains a failure; resolve it and rerun."
 }
