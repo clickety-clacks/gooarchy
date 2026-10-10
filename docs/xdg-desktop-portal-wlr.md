@@ -57,10 +57,11 @@ Upstream context, for reading upstream changes against the fork:
   `pacman -Syu` keeps Gooarchy's build: Arch's package doesn't declare that it replaces it.
   Running `./install.sh` again rebuilds it. Screen sharing also needs Scottland's
   `scottland-portals.conf`. The 2026.11 release line builds Scottland locally from the unreleased
-  `0.3` branch by name. Its current remote head is `e5f0f439680af0efdcedc9ab7a5b014f12a79056`,
-  where the config is blob `c6ac951050a7cdeecad5fdd34126c9c03c7e0343`, and the package recipe installs it as
+  `0.3` branch by name. Read-only ref checks on 2026-10-10 resolved `0.3` to
+  `070eeb04e8a2db6dafa973bcb421fd5996335975`, where the config is blob
+  `c6ac951050a7cdeecad5fdd34126c9c03c7e0343`, and the package recipe installs it as
   `/usr/share/xdg-desktop-portal/scottland-portals.conf`. Scottland main at
-  `21273828a427885202f8b5dce1543994184867ee` has no such file, so the 0.3 source is confined to the
+  `7671a1f6a1213c994def9495d731caf7f9161a51` has no such file, so the 0.3 source is confined to the
   2026.11 release line; replace the branch selector with Scottland's final version tag before the
   distro tag. The exact combined VM run must still verify the installed backend selection, portal
   version, request reaching capture, and clean exit before this candidate is accepted. This source
