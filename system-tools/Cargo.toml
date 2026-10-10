@@ -1,0 +1,12 @@
+# Gooarchy's system tools: one binary per subsystem (gooarchy-<subsystem>), the `gooarchy` front
+# command that runs them, and the library they share. Each tool is a member here, and the
+# workspace builds and tests as a whole. packaging/arch/PKGBUILD builds and installs it.
+[workspace]
+resolver = "3"
+members = ["common", "gooarchy"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "LicenseRef-unlicensed"
+publish = false

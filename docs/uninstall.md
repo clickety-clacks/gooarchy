@@ -94,6 +94,20 @@ set, edit or remove:
 | Light/dark preference | `gsettings reset org.gnome.desktop.interface color-scheme` |
 | Standard folders | `~/Desktop`, `~/Documents`, `~/Downloads`, ... (created by `xdg-user-dirs-update`; empty ones can go) |
 
+## 5. The experimental kernel (only with `--kernel`)
+
+`linux-gooarchy` and `linux-gooarchy-headers` are installed alongside your kernel, not as
+dependencies of `gooarchy`, so section 1 leaves them. Boot your ordinary kernel, then:
+
+```sh
+sudo pacman -Rns linux-gooarchy linux-gooarchy-headers
+```
+
+The installer did not change your bootloader. If you added a `GRUB_TOP_LEVEL` line to
+`/etc/default/grub` as it suggested, you may keep it or remove it. If you had regenerated GRUB's
+menu to add linux-gooarchy, regenerate it again (`sudo grub-mkconfig -o /boot/grub/grub.cfg`).
+The kernel's built packages and downloaded sources stay in `~/.cache/gooarchy/build/linux-gooarchy`.
+
 Gooarchy's own state lives in `~/.local/state/gooarchy` (install logs and manifests, build records,
 reports, markers of applied defaults) and its build checkouts in `~/.cache/gooarchy`. Both can be
 deleted. Scottland keeps its own state in `~/.local/state/scottland` and `~/.config/scottland`.

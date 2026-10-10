@@ -12,13 +12,15 @@
 #   tests/vm/run.sh boot    fresh disk from the cloud image, boot, wait for SSH
 #   tests/vm/run.sh install copy this checkout in; ./install.sh made to fail at one step first, then
 #                           run again (it must recover); with --autologin
-#   tests/vm/run.sh rebuild-check   rebuild Scottland at another commit with the same upstream
-#                           version and back, plus an identical rebuild; the installed plugin must
+#   tests/vm/run.sh rebuild-check   rebuild Scottland from a distinct source ref, return to the
+#                           configured ref, then repeat it; the plugin and resolved commits must
 #                           follow each time
 #   tests/vm/run.sh reboot  reboot the guest and wait for the new boot
 #   tests/vm/run.sh check   check the running session (guest-check.py); screenshots and logs
 #   tests/vm/run.sh login-check     password logins typed at the consoles (login-check.py)
 #   tests/vm/run.sh upgrade-guard   a newer Wayfire must not install over the Scottland built for this one
+#   tests/vm/run.sh no-toolchain    the Rust toolchain is optional: the install leaves none, and
+#                           without one the gooarchy package installs and its command runs
 #   tests/vm/run.sh start   boot the existing disk again (after stop)
 #   tests/vm/run.sh ssh [CMD]   a shell (or CMD) in the guest
 #   tests/vm/run.sh stop    power the guest off
@@ -28,6 +30,12 @@
 # The seed server and the guest's network stay as the test uses them.
 #
 # Configuration (environment):
+#   GOOARCHY_VM_KERNEL      1: install the opt-in kernel and direct-boot it in this test VM for
+#                           the desktop checks; then build a module against its headers, check
+#                           that the opt-in left GRUB alone, follow its advice, regenerate the
+#                           disk's GRUB menu and check that the ordinary kernel still boots from
+#                           it by default.
+#   GOOARCHY_VM_KERNEL_JOBS kernel build parallelism (default 2; use 1 on a shared host)
 #   GOOARCHY_VM_DIR         work directory (default ~/.cache/gooarchy-vm-test): image, disk, logs
 #   GOOARCHY_VM_IMAGE_URL   Arch cloud image (default: the latest official one; to repeat a run,
 #                           use the dated image named in its manifest.json)
@@ -38,8 +46,8 @@
 #   GOOARCHY_VM_RENDERNODE  host render node for virgl (default: the first /dev/dri/renderD*)
 #   GOOARCHY_VM_SIZE        guest screen size (default 1920x1080)
 #   GOOARCHY_VM_VNC         1: show the screen over VNC on 127.0.0.1:5900 (software graphics only)
-#   GOOARCHY_VM_REBUILD_REF Scottland commit for rebuild-check (default: a later commit whose
-#                           PKGBUILD has the same version as the pinned one)
+#   GOOARCHY_VM_REBUILD_REF Scottland ref for rebuild-check (default: branch main); it must resolve
+#                           to a different commit from the configured source
 #   GOOARCHY_VM_MEMORY, GOOARCHY_VM_CPUS, GOOARCHY_VM_DISK   (default 6144 MiB, 4, 40G)
 #   The guest's pacman cache is kept in GOOARCHY_VM_DIR/pkgcache (shared into the guest over 9p).
 #   GOOARCHY_VM_SSH_PORT    host port forwarded to the guest's SSH (default 2222, bound to loopback)
@@ -59,6 +67,8 @@ size=${GOOARCHY_VM_SIZE:-1920x1080}
 memory=${GOOARCHY_VM_MEMORY:-6144}
 disk=${GOOARCHY_VM_DISK:-40G}
 cpus=${GOOARCHY_VM_CPUS:-4}
+kernel_jobs=${GOOARCHY_VM_KERNEL_JOBS:-2}
+[[ $kernel_jobs =~ ^[1-9][0-9]*$ ]] || { echo "invalid GOOARCHY_VM_KERNEL_JOBS" >&2; exit 2; }
 port=${GOOARCHY_VM_SSH_PORT:-2222}
 proxy=${GOOARCHY_VM_PROXY:-}
 run=$dir/run
@@ -151,7 +161,7 @@ EOF
 ensure_seed() {
   # cloud-init asks for its seed at every boot; without it, it re-initializes the instance (new
   # host keys, no SSH key). Keep serving it on the port the guest was booted with.
-  [[ -f $run/seed-http.pid ]] && kill -0 "$(cat "$run/seed-http.pid")" 2>/dev/null && return 0
+  seed_running && return 0
   local seed_port
   seed_port=$(tr '\0' '\n' <"/proc/$(cat "$run/qemu.pid")/cmdline" | sed -n 's|.*10\.0\.2\.2:\([0-9]*\)/.*|\1|p')
   setsid python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
@@ -159,12 +169,38 @@ ensure_seed() {
   echo $! >"$run/seed-http.pid"
 }
 
+seed_running() {
+  local pid
+  local -a args
+  [[ -f $run/seed-http.pid ]] || return 1
+  pid=$(cat "$run/seed-http.pid")
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+  mapfile -d '' -t args 2>/dev/null <"/proc/$pid/cmdline" || return 1
+  [[ ${args[0]:-} == */python3 || ${args[0]:-} == python3 ]] &&
+    [[ ${args[1]:-} == -m && ${args[2]:-} == http.server &&
+       ${args[3]:-} == --bind && ${args[4]:-} == 127.0.0.1 &&
+       ${args[5]:-} == --directory && ${args[6]:-} == "$run/seed" ]]
+}
+
 stop_seed() {
-  [[ -f $run/seed-http.pid ]] && kill "$(cat "$run/seed-http.pid")" 2>/dev/null || true
+  seed_running && kill "$(cat "$run/seed-http.pid")" 2>/dev/null || true
   rm -f "$run/seed-http.pid"
 }
 
-running() { [[ -f $run/qemu.pid ]] && kill -0 "$(cat "$run/qemu.pid")" 2>/dev/null; }
+running() {
+  # A PID file can survive a host restart; verify the process before stop/kill uses it.
+  local pid arg
+  local -a args
+  [[ -f $run/qemu.pid ]] || return 1
+  pid=$(cat "$run/qemu.pid")
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+  mapfile -d '' -t args 2>/dev/null <"/proc/$pid/cmdline" || return 1
+  [[ ${args[0]:-} == */qemu-system-x86_64 || ${args[0]:-} == qemu-system-x86_64 ]] || return 1
+  for arg in "${args[@]}"; do
+    [[ $arg == "file=$run/disk.qcow2,if=virtio,discard=unmap" ]] && return 0
+  done
+  return 1
+}
 
 wait_ssh() {
   local deadline=$((SECONDS + ${1:-300}))
@@ -209,6 +245,13 @@ cmd_start() {
 
 start_qemu() {
   local seed_port display
+  local kernel_args=()
+  if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
+    [[ -s $run/kernel/vmlinuz && -s $run/kernel/initramfs.img && -s $run/kernel/cmdline ]] ||
+      die "candidate kernel boot files are missing"
+    kernel_args=(-kernel "$run/kernel/vmlinuz" -initrd "$run/kernel/initramfs.img"
+                 -append "$(cat "$run/kernel/cmdline")")
+  fi
   seed_port=$(seed)
   local xres=${size%x*} yres=${size#*x}
   case $gpu in
@@ -228,6 +271,7 @@ start_qemu() {
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
   setsid "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
+    "${kernel_args[@]}" \
     -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
     -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.2:$seed_port/" \
@@ -275,6 +319,12 @@ cmd_install() {
   local out; out=$(artifacts)
   copy_checkout
   local status=0
+  local kernel_option= kernel_build_env=
+  if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+    kernel_option=--kernel
+    kernel_build_env=MAKEFLAGS=-j$kernel_jobs
+    grub_snapshot
+  fi
   if [[ ${GOOARCHY_VM_RETRY_TEST:-1} == 1 ]]; then
     # A failed attempt (made to fail at the Strata step), then a retry that must complete.
     log "running ./install.sh, made to fail at packaging/strata.sh (log: $out/install-failed-attempt.log)"
@@ -289,7 +339,7 @@ cmd_install() {
     status=0
   fi
   log "running ./install.sh --yes --autologin (log: $out/install.log)"
-  guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes --autologin" >"$out/install.log" 2>&1 || status=$?
+  guest "cd ~/gooarchy && $kernel_build_env $(guest_proxy_env) ./install.sh --yes --autologin $kernel_option" >"$out/install.log" 2>&1 || status=$?
   tail -n 30 "$out/install.log" >&2
   guest 'tar -C ~/.local/state/gooarchy -cf - logs builds.tsv reports.log 2>/dev/null' | tar -C "$out" -xf - 2>/dev/null || true
   hcheck "./install.sh completes (after the failed attempt, when the retry test runs)" "$(( status == 0 ))" "exit $status"
@@ -300,7 +350,138 @@ cmd_install() {
       "$attempts attempt logs, $manifests manifests"
   fi
   (( status == 0 )) || die "install.sh exited with $status"
+  if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+    prepare_kernel_boot
+  fi
   log "install finished"
+}
+
+prepare_kernel_boot() {
+  mkdir -p "$run/kernel"
+  guest 'sudo cat /boot/vmlinuz-linux-gooarchy' >"$run/kernel/vmlinuz"
+  guest 'sudo cat /boot/initramfs-linux-gooarchy.img' >"$run/kernel/initramfs.img"
+  guest 'sed -E "s/(^| )BOOT_IMAGE=[^ ]*//g" /proc/cmdline' >"$run/kernel/cmdline"
+  guest 'pacman -Qlq linux-gooarchy | sed -n "s|/usr/lib/modules/\([^/]*\)/pkgbase|\1|p"' >"$run/kernel/version"
+  [[ $(cat "$run/kernel/version") =~ ^[a-zA-Z0-9._+-]+-gooarchy$ ]] || die "cannot identify the candidate kernel"
+  export GOOARCHY_VM_KERNEL_BOOT=1
+}
+
+cmd_kernel_check() {
+  # An already installed test VM: exercise just the installer kernel step, then boot and test.
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  copy_checkout
+  grub_snapshot
+  guest "cd ~/gooarchy && export GOOARCHY_PATH=\$PWD GOOARCHY_INSTALL=\$PWD/install
+         export GOOARCHY_STATE=\$HOME/.local/state/gooarchy GOOARCHY_BUILD=\$HOME/.cache/gooarchy/build
+         export GOOARCHY_INSTALL_LOG_FILE=\$GOOARCHY_STATE/kernel-check-install.log
+         MAKEFLAGS=-j$kernel_jobs $(guest_proxy_env) bash -e -o pipefail install/packaging/kernel.sh" >"$out/kernel-install.log" 2>&1
+  cmd_kernel_boot_check
+}
+
+cmd_kernel_boot_check() {
+  # Boot an already installed candidate, e.g. after an interrupted build was recovered.
+  running || die "the guest is not running"
+  prepare_kernel_boot
+  cmd_reboot
+  local status=0
+  cmd_check || status=$?
+  kernel_headers_check
+  kernel_bootloader_check
+  return "$status"
+}
+
+grub_snapshot() {
+  # The disk bootloader before the kernel opt-in: GRUB's menu (hash) and /etc/default/grub.
+  mkdir -p "$run/kernel"
+  guest 'sudo sha256sum /boot/grub/grub.cfg | cut -d" " -f1; cat /etc/default/grub' >"$run/kernel/grub-before.txt"
+  cp "$run/kernel/grub-before.txt" "$(artifacts)/grub-before-kernel.txt"
+}
+
+kernel_headers_check() {
+  # The installed headers build an external module whose version magic is the candidate's.
+  local result ok=0
+  result=$(guest 'bash -s' 2>&1 <<'EOF'
+set -euo pipefail
+version=$(pacman -Qlq linux-gooarchy | sed -n 's|/usr/lib/modules/\([^/]*\)/pkgbase|\1|p')
+dir=$(mktemp -d /tmp/gooarchy-header-probe.XXXXXX)
+trap 'rm -rf "$dir"' EXIT
+cat >"$dir/gooarchy_probe.c" <<'SOURCE'
+#include <linux/module.h>
+static int __init probe_init(void) { return 0; }
+static void __exit probe_exit(void) { }
+module_init(probe_init);
+module_exit(probe_exit);
+MODULE_LICENSE("GPL");
+SOURCE
+echo 'obj-m += gooarchy_probe.o' >"$dir/Makefile"
+make -C "/usr/lib/modules/$version/build" M="$dir" modules >"$dir/make.log" 2>&1 || { tail -n 20 "$dir/make.log"; exit 1; }
+vermagic=$(modinfo -F vermagic "$dir/gooarchy_probe.ko")
+echo "built against $version; vermagic: $vermagic"
+[[ $vermagic == "$version "* ]]
+EOF
+  ) && ok=1
+  echo "$result" >"$(artifacts)/kernel-headers-probe.log"
+  hcheck "the installed linux-gooarchy headers build an external module for it" "$ok" "$(tail -n 1 <<<"$result")"
+}
+
+kernel_bootloader_check() {
+  # The disk bootloader after the opt-in: GRUB's menu and /etc/default/grub exactly as they were.
+  # Then a user's next steps: add the GRUB_TOP_LEVEL line the opt-in printed, regenerate the menu
+  # (how linux-gooarchy gets into it), and the ordinary kernel still boots by default, through the
+  # disk's own GRUB.
+  local out; out=$(artifacts)
+  local after=$out/grub-after-kernel.txt before=$run/kernel/grub-before.txt ok=0
+  guest 'sudo sha256sum /boot/grub/grub.cfg | cut -d" " -f1; cat /etc/default/grub' >"$after"
+  if [[ -f $before ]]; then
+    cmp -s "$before" "$after" && ok=1
+    hcheck "the kernel opt-in leaves GRUB's menu and /etc/default/grub as they were" "$ok" \
+      "$(diff "$before" "$after" | head -n 5)"
+  else
+    log "no GRUB state from before the kernel opt-in; not comparing"
+  fi
+  # Regenerating as it stands, for comparison only (left in a scratch file).
+  guest 'sudo grub-mkconfig -o /tmp/grub-control.cfg >/dev/null 2>&1; s=$?; sudo cat /tmp/grub-control.cfg; sudo rm -f /tmp/grub-control.cfg; exit $s' \
+    >"$out/grub-control-without-top-level.cfg" || die "control regeneration failed"
+  if guest 'grep -q "^GRUB_TOP_LEVEL=" /etc/default/grub'; then
+    log "/etc/default/grub already sets GRUB_TOP_LEVEL; not adding the opt-in's advice"
+  else
+    local advice
+    advice=$(guest 'grep -o "GRUB_TOP_LEVEL=\"/boot/[^\"]*\"" ~/.local/state/gooarchy/reports.log | tail -n 1')
+    ok=0
+    [[ $advice =~ ^GRUB_TOP_LEVEL=\"/boot/vmlinuz-[^\"]+\"$ && $advice != *vmlinuz-linux-gooarchy* ]] && ok=1
+    hcheck "the kernel opt-in reports the GRUB_TOP_LEVEL line that keeps the booted kernel the default" "$ok" \
+      "advice: ${advice:-none}"
+    (( ok )) || die "no GRUB_TOP_LEVEL advice to follow"
+    guest "printf '%s\\n' '$advice' | sudo tee -a /etc/default/grub >/dev/null"
+  fi
+  guest 'sudo grub-mkconfig -o /boot/grub/grub.cfg' >"$out/grub-mkconfig.log" 2>&1 || die "grub-mkconfig failed"
+  guest 'sudo cat /boot/grub/grub.cfg' >"$out/grub-regenerated.cfg"
+  local first control offered=0
+  first=$(awk '$1 == "linux" {print $2; exit}' "$out/grub-regenerated.cfg")
+  control=$(awk '$1 == "linux" {print $2; exit}' "$out/grub-control-without-top-level.cfg")
+  grep -qE '^\s*linux\s+\S*/vmlinuz-linux-gooarchy\s' "$out/grub-regenerated.cfg" && offered=1
+  hcheck "the regenerated GRUB menu offers linux-gooarchy" "$offered"
+  boot_disk
+  local version stock
+  version=$(guest 'uname -r')
+  stock=$(guest 'pacman -Qlq linux | sed -n "s|/usr/lib/modules/\([^/]*\)/pkgbase|\1|p"')
+  guest 'cat /proc/cmdline' >"$out/stock-boot-cmdline.txt"
+  ok=0
+  [[ -n $stock && $version == "$stock" && ${first##*/} == vmlinuz-linux ]] && ok=1
+  hcheck "with that line added and GRUB regenerated, the disk bootloader boots the ordinary kernel by default" "$ok" \
+    "booted $version (ordinary: $stock); first entry $first; without GRUB_TOP_LEVEL it would be $control"
+}
+
+boot_disk() {
+  # Power the guest off properly, then boot it through its own disk bootloader.
+  guest 'sudo systemctl poweroff' || true
+  local deadline=$((SECONDS + 120))
+  while running && (( SECONDS < deadline )); do sleep 2; done
+  export GOOARCHY_VM_KERNEL_BOOT=0
+  cmd_stop
+  start_qemu
+  log "booted from the disk: $(guest 'uname -r')"
 }
 
 plugin_state() {
@@ -308,31 +489,39 @@ plugin_state() {
            "$(sha256sum "$(pacman -Qlq scottland | grep "/libscottland.so$")" | cut -c1-16)"'
 }
 
+scottland_build_commit() {
+  guest "awk -F '\\t' '\$1 == \"scottland\" { ref = \$3 } END { print ref }' ~/.local/state/gooarchy/builds.tsv"
+}
+
 cmd_rebuild_check() {
-  # A branch rebuild (or one for another Wayfire) must still replace the installed plugin, and
-  # the package version must say what was built.
+  # Rebuild from a distinct source ref, then restore the configured ref. Compare resolved commits
+  # as well as plugin hashes so identical selectors cannot pass or fail by coincidence.
   running || die "the guest isn't running"
   local out; out=$(artifacts)
-  local other=${GOOARCHY_VM_REBUILD_REF:-0.3}
+  local other=${GOOARCHY_VM_REBUILD_REF:-main}
   local other_kind=${GOOARCHY_VM_REBUILD_REF_KIND:-branch}
-  local a b c d other_commit default_version status=0
+  local a b c d initial_commit other_commit restored_commit status=0
   a=$(plugin_state)
+  initial_commit=$(scottland_build_commit)
+  [[ $initial_commit =~ ^[[:xdigit:]]{40}$ ]] || die "the configured Scottland build has no resolved commit"
   guest "cd ~/gooarchy && GOOARCHY_SCOTTLAND_REF=$other GOOARCHY_SCOTTLAND_REF_KIND=$other_kind $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-b.log" 2>&1 || status=$?
   b=$(plugin_state)
-  other_commit=$(guest "awk -F '\t' '\$1 == \"scottland\" { ref = \$3 } END { print ref }' ~/.local/state/gooarchy/builds.tsv")
+  other_commit=$(scottland_build_commit)
   local ok=0
-  [[ $status == 0 && $other_commit =~ ^[[:xdigit:]]{40}$ &&
+  [[ $status == 0 && $other_commit =~ ^[[:xdigit:]]{40}$ && $initial_commit != "$other_commit" &&
     ${a#* } != "${b#* }" && $b == *g${other_commit:0:7}* ]] && ok=1
-  hcheck "rebuilding Scottland from a branch pin replaces the installed plugin" "$ok" \
-    "A: $a; B: $b; branch resolved to $other_commit"
+  hcheck "rebuilding Scottland from a distinct source ref replaces the installed plugin" "$ok" \
+    "configured: $initial_commit ($a); alternate: $other_commit ($b)"
   status=0
   guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-a.log" 2>&1 || status=$?
   c=$(plugin_state)
+  restored_commit=$(scottland_build_commit)
   ok=0
-  default_version=${c%% *}
-  [[ $status == 0 && $default_version =~ \.g[[:xdigit:]]{7}\.wf &&
+  [[ $status == 0 && $restored_commit == "$initial_commit" &&
+    $c == *g${initial_commit:0:7}.wf* &&
     ${c#* } != "${b#* }" ]] && ok=1
-  hcheck "returning to the configured main pin replaces the branch build" "$ok" "now: $c"
+  hcheck "returning to the configured Scottland source restores the exact initial revision" "$ok" \
+    "initial: $initial_commit ($a); alternate: $other_commit ($b); restored: $restored_commit ($c)"
   status=0
   guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/rebuild-same.log" 2>&1 || status=$?
   d=$(plugin_state)
@@ -367,8 +556,63 @@ EOF
   hcheck "pacman refuses a newer Wayfire under the Scottland built for this one" "$ok" \
     "$(grep -m1 -E 'breaks dependency|required by' <<<"$result")"
 }
+# What Rust toolchain the guest has, if any: nothing when there is none.
+guest_toolchain() {
+  guest '{ pacman -Qq rust rustup 2>/dev/null; command -v cargo rustc; ls ~/.cargo/bin/cargo 2>/dev/null; } || true'
+}
+
+cmd_no_toolchain() {
+  # The Rust toolchain is optional (docs/rulings.md): the gooarchy package doesn't require it, the
+  # install leaves none behind, and on this guest without one the built package installs again
+  # without pulling one in, and the gooarchy command runs. The package is the one install.sh built
+  # from this checkout; the toolchain was there only for that build.
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  local deps; deps=$(guest 'awk '\''/^%/ { s = $0; next } NF && s == "%DEPENDS%" { print "depends " $0 }
+                                 NF && s == "%OPTDEPENDS%" { print "optdepends " $0 }'\'' /var/lib/pacman/local/gooarchy-[0-9]*/desc')
+  echo "$deps" >"$out/gooarchy-dependencies.txt"
+  local ok=0
+  grep -q '^optdepends rust:' <<<"$deps" && ! grep -qE '^depends (rust|rustup|cargo)([<>=]|$)' <<<"$deps" && ok=1
+  hcheck "the gooarchy package lists the Rust toolchain as optional, not required" "$ok" \
+    "$(grep -E '^(opt)?depends (rust|rustup|cargo)' <<<"$deps" | tr '\n' ' ')"
+  local left; left=$(guest_toolchain)
+  hcheck "the install leaves no Rust toolchain behind" "$([[ -z $left ]] && echo 1 || echo 0)" "$left"
+
+  local status=0
+  guest 'source ~/gooarchy/install/helpers/packages.sh &&
+         GOOARCHY_PATH=~/gooarchy built_files ~/.cache/gooarchy/build/gooarchy-packaging gooarchy >~/no-toolchain-package &&
+         sudo pacman -U --noconfirm "$(cat ~/no-toolchain-package)"' >"$out/no-toolchain-install.log" 2>&1 || status=$?
+  local after; after=$(guest_toolchain)
+  ok=0
+  [[ $status == 0 && -z $left && -z $after ]] && ok=1
+  hcheck "without a Rust toolchain, the built gooarchy package installs without pulling one in" "$ok" \
+    "exit $status; toolchain before: ${left:-none}, after: ${after:-none}"
+  local built head
+  built=$(guest 'sed -n "s/^checkout \([0-9a-f]*\).*/\1/p" /usr/share/gooarchy/build-info')
+  head=$(guest 'git -C ~/gooarchy rev-parse HEAD')
+  hcheck "the installed package is built from the checkout under test" "$([[ -n $head && $built == "$head" ]] && echo 1 || echo 0)" \
+    "build-info: $built; checkout: $head"
+  local listing; listing=$(guest 'gooarchy' 2>&1) || true
+  ok=0
+  grep -qx '  theme' <<<"$listing" && [[ -z $(guest_toolchain) ]] && ok=1
+  hcheck "gooarchy runs without a Rust toolchain" "$ok" "$(head -c 300 <<<"$listing")"
+}
+
 cmd_reboot() {
   running || die "the guest isn't running"
+  if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
+    # QMP quit stops the emulator without shutting down the guest. Persist the
+    # just-installed modules and package database before replacing its kernel.
+    guest 'sync'
+    cmd_stop
+    start_qemu
+    local version correct=0; version=$(guest 'uname -r')
+    [[ $version == "$(cat "$run/kernel/version")" ]] && correct=1
+    hcheck "the VM runs the opt-in Gooarchy kernel" "$correct" "$version"
+    ((correct)) || die "the VM booted a different kernel ($version)"
+    log "rebooted into $version (direct kernel boot; disk bootloader unchanged)"
+    return
+  fi
   ensure_seed
   local before; before=$(guest 'cat /proc/sys/kernel/random/boot_id')
   guest 'sudo systemctl reboot' || true
@@ -455,7 +699,8 @@ EOF
 cmd_stop() {
   stop_seed
   if running; then
-    python3 "$here/qmp.py" "$run/qmp.sock" quit >/dev/null 2>&1 || kill "$(cat "$run/qemu.pid")" 2>/dev/null || true
+    python3 "$here/qmp.py" "$run/qmp.sock" quit >/dev/null 2>&1 ||
+      { running && kill "$(cat "$run/qemu.pid")" 2>/dev/null; } || true
     local deadline=$((SECONDS + 20))
     while running && (( SECONDS < deadline )); do sleep 1; done
     running && kill -9 "$(cat "$run/qemu.pid")" 2>/dev/null || true
@@ -471,8 +716,11 @@ case ${1:-all} in
   rebuild-check) cmd_rebuild_check ;;
   reboot) cmd_reboot ;;
   check) cmd_check ;;
+  kernel-check) cmd_kernel_check ;;
+  kernel-boot-check) cmd_kernel_boot_check ;;
   login-check) cmd_login_check ;;
   upgrade-guard) cmd_upgrade_guard ;;
+  no-toolchain) cmd_no_toolchain ;;
   ssh) shift; guest -t "$@" ;;
   stop) cmd_stop ;;
   all)
@@ -486,6 +734,11 @@ case ${1:-all} in
     cmd_check || true
     cmd_login_check || true
     cmd_upgrade_guard
+    if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+      kernel_headers_check
+      kernel_bootloader_check
+    fi
+    cmd_no_toolchain
     manifest
     log "artifacts: $(artifacts)"
     summary

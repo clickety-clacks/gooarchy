@@ -33,6 +33,14 @@ What you get:
 | Audio | PipeWire with WirePlumber; the volume keys work, with no on-screen indicator |
 | Defaults | tmux titles read "session on host", mosh adds no title prefix, touchpad tap and tap-and-drag on, Print saves into your Pictures folder, Claude Code and Codex set to ring the terminal bell (Scottland shows a bell as attention) |
 
+Foot was evaluated as the default terminal and is not it. In software and virgl VM comparisons,
+Foot passed 30 of 31 terminal checks and Ghostty 29 of 31. The switch depended on every check
+passing, and copying to the system clipboard from inside tmux did not pass: a program's OSC 52
+copy inside tmux failed with both terminals under tmux's inherited `set-clipboard external` policy
+([upstream behavior](https://github.com/tmux/tmux/wiki/Clipboard)). tmux's own copy worked with
+Foot and failed with Ghostty. Ghostty stays the default. The Foot work and its comparison checks
+are kept on the `foot` branch, which is not merged.
+
 ## Trying it
 
 ### In a VM (recommended)
@@ -65,7 +73,9 @@ GOOARCHY_VM_GPU=software GOOARCHY_VM_VNC=1 tests/vm/run.sh start
 What the run does, in order: an install made to fail at one step and then rerun (it must recover);
 rebuilding Scottland from another branch pin and returning to the fixed pin (the installed plugin
 must follow); a reboot into the autologin session; the session check; password logins typed at the
-consoles; and a check that a newer Wayfire can't install over the Scottland built for this one.
+consoles; a check that a newer Wayfire can't install over the Scottland built for this one; and the
+Rust toolchain being optional: the install leaves none behind, and without one the `gooarchy`
+package installs and its command runs.
 
 The session check drives the desktop the way a person would, through Wayfire's virtual input, and
 checks each step against Scottland's own model and against the screen: Super+Enter opens Ghostty,
@@ -78,10 +88,11 @@ shell on tty1 instead of a restart loop. Checks named "config:" only read config
 title bar setting, tmux, touchpad, the agents' bell settings); they don't show the behavior. It also
 records what's missing (notifications, lock, portals, ...) for [DEFICIT.md](DEFICIT.md). On
 2026-10-05, fresh runs passed every check with virgl graphics (65) and with software graphics (66,
-including the login check restoring autologin). `tests/vm/selftest.py` checks the harness, and
-`tests/scottland-source-plan-test.sh` checks when a branch selector builds locally.
+including the login check restoring autologin). `tests/vm/selftest.py` and
+`tests/vm/process-guard-test.sh` check the harness;
+`tests/scottland-source-plan-test.sh` checks when a branch selector builds locally, and
 `tests/flavorings-pkgbuild-source-test.sh` checks the final-tag-only package source selector without
-a VM; the defaults tool's tests live in
+a VM. The defaults tool's tests live in
 gooarchy-flavorings.
 
 What it doesn't show: it's the Arch cloud image (cloud-init gives it an SSH key and passwordless
@@ -150,6 +161,8 @@ without Gooarchy:
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
+| `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
+| `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem as they are written. The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 

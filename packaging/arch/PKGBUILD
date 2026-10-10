@@ -1,8 +1,8 @@
 # Gooarchy's own package, built from this repository. install/packaging/gooarchy.sh builds it
 # during install; by hand: cd packaging/arch && makepkg.
-#   gooarchy  the distro: the tty1 session start and its helpers, and dependencies on everything
-#             Gooarchy is made of (removing it takes them along)
-# gooarchy-flavorings, the curated defaults, has its own recipe in packaging/gooarchy-flavorings/.
+#   gooarchy  the distro: the tty1 session start and helpers, the Rust system tools, and
+#             dependencies on everything Gooarchy is made of (removing it takes them along)
+# gooarchy-flavorings is a separate package with its own recipe in packaging/gooarchy-flavorings/.
 #
 # This is a local build of a checkout, not a self-contained source package: package() reads the
 # checkout ($GOOARCHY_PATH, or two levels up) directly, so makepkg --source would not capture it.
@@ -16,18 +16,34 @@ _dirty=$(git -C "$_repo" status --porcelain 2>/dev/null | grep -q . && echo .dir
 pkgver=0.0.1.r$(git -C "$_repo" rev-list --count HEAD 2>/dev/null || echo 0).g$(git -C "$_repo" rev-parse --short HEAD 2>/dev/null || echo none)$_dirty
 pkgrel=1
 pkgdesc="Gooarchy, a desktop Linux distribution built around Scottland"
-arch=('any')
+arch=('x86_64')
 url="https://github.com/clickety-clacks/gooarchy"
 license=('LicenseRef-unlicensed')
-makedepends=('git')
+makedepends=('git' 'cargo')
 options=('!debug')
 
+build() {
+  # Build into $srcdir so the checkout remains clean. The workspace has no external dependencies.
+  CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release \
+    --manifest-path "$_repo/system-tools/Cargo.toml"
+}
+
+check() {
+  CARGO_TARGET_DIR="$srcdir/target" cargo test --frozen --release \
+    --manifest-path "$_repo/system-tools/Cargo.toml"
+}
+
 package() {
-  depends=('scottland' 'strata-bin' 'gooarchy-flavorings'
+  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'glibc' 'gcc-libs'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
+  # Optional, not required: editing the system tools is the exception, and package upgrades work
+  # without a toolchain (docs/rulings.md).
+  optdepends=('rust: rebuild system tools from edited source')
   install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
   install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
   install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
+  install -Dm755 "$srcdir/target/release/gooarchy" "$pkgdir/usr/bin/gooarchy"
+  install -Dm644 "$_repo/system-tools/LICENSE-omarchy" "$pkgdir/usr/share/licenses/gooarchy/LICENSE-omarchy"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
 gooarchy $pkgver
 checkout $(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo unknown)${_dirty:+ with uncommitted changes}
