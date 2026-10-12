@@ -19,7 +19,7 @@ pkgdesc="Gooarchy, a desktop Linux distribution built around Scottland"
 arch=('x86_64')
 url="https://github.com/clickety-clacks/gooarchy"
 license=('LicenseRef-unlicensed')
-makedepends=('git' 'cargo')
+makedepends=('git' 'cargo' 'pam')
 options=('!debug')
 
 build() {

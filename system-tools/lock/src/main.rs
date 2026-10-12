@@ -33,6 +33,12 @@ struct Keyboard {
     compose: Option<(xkb::compose::ComposeTable, xkb::compose::State)>,
 }
 
+fn reset_compose(compose: &mut Option<(xkb::compose::ComposeTable, xkb::compose::State)>) {
+    if let Some((table, state)) = compose.as_mut() {
+        *state = table.create_state();
+    }
+}
+
 enum Worker {
     Auth(bool),
     Theme(render::Palette),
@@ -171,10 +177,12 @@ impl State {
         for output in outputs {
             let symbol = output.keysym();
             if symbol == syms::Return || symbol == syms::KP_Enter {
+                reset_compose(&mut keyboard.compose);
                 self.submit(qh);
                 return;
             }
             if symbol == syms::BackSpace {
+                reset_compose(&mut keyboard.compose);
                 if let Ok(value) = std::str::from_utf8(&self.password) {
                     let len = value
                         .char_indices()
@@ -188,6 +196,7 @@ impl State {
                 continue;
             }
             if symbol == syms::Escape {
+                reset_compose(&mut keyboard.compose);
                 self.password.zeroize();
                 changed = true;
                 continue;
@@ -593,5 +602,30 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("gooarchy-lock: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clearing_or_submitting_cancels_pending_compose() {
+        let context = xkb::Context::default();
+        let mut builder = context.compose_table_builder();
+        builder.buffer("<dead_acute> <e>: \"é\"\n");
+        let table = builder.build(xkb::diagnostic::WriteToLog).unwrap();
+        let mut compose = Some((table.clone(), table.create_state()));
+
+        for _ in 0..2 {
+            let (table, state) = compose.as_mut().unwrap();
+            assert_eq!(
+                table.feed(state, syms::dead_acute),
+                Some(xkb::compose::FeedResult::Pending)
+            );
+            reset_compose(&mut compose);
+            let (table, state) = compose.as_mut().unwrap();
+            assert_eq!(table.feed(state, syms::e), None);
+        }
     }
 }

@@ -60,6 +60,12 @@ unsafe extern "C" {
 struct Secret {
     bytes: Zeroizing<Vec<u8>>,
     prompts: usize,
+    rejected: bool,
+}
+
+fn reject(secret: &mut Secret) -> c_int {
+    secret.rejected = true;
+    PAM_CONV_ERR
 }
 
 unsafe extern "C" fn converse(
@@ -68,38 +74,41 @@ unsafe extern "C" fn converse(
     responses: *mut *mut PamResponse,
     data: *mut c_void,
 ) -> c_int {
-    if count <= 0 || messages.is_null() || responses.is_null() || data.is_null() {
+    if data.is_null() {
         return PAM_CONV_ERR;
     }
     let secret = unsafe { &mut *(data.cast::<Secret>()) };
+    if count <= 0 || messages.is_null() || responses.is_null() {
+        return reject(secret);
+    }
     let mut prompt = None;
     for index in 0..count as usize {
         let message = unsafe { *messages.add(index) };
         if message.is_null() {
-            return PAM_CONV_ERR;
+            return reject(secret);
         }
         if unsafe { (*message).msg_style } == PAM_PROMPT_ECHO_OFF {
             if prompt.is_some() || secret.prompts != 0 {
-                return PAM_CONV_ERR;
+                return reject(secret);
             }
             prompt = Some(index);
         } else {
             // No informational, echo-on or further secret prompts are part of this service.
-            return PAM_CONV_ERR;
+            return reject(secret);
         }
     }
     let Some(index) = prompt else {
-        return PAM_CONV_ERR;
+        return reject(secret);
     };
     let response = unsafe { libc::calloc(count as usize, mem::size_of::<PamResponse>()) }
         .cast::<PamResponse>();
     if response.is_null() {
-        return PAM_CONV_ERR;
+        return reject(secret);
     }
     let password = unsafe { libc::malloc(secret.bytes.len() + 1) }.cast::<c_char>();
     if password.is_null() {
         unsafe { libc::free(response.cast()) };
-        return PAM_CONV_ERR;
+        return reject(secret);
     }
     unsafe {
         ptr::copy_nonoverlapping(
@@ -160,6 +169,7 @@ pub fn authenticate(account: &str, password: Zeroizing<Vec<u8>>) -> bool {
     let mut secret = Secret {
         bytes: password,
         prompts: 0,
+        rejected: false,
     };
     let conversation = PamConv {
         conv: converse,
@@ -189,5 +199,65 @@ pub fn authenticate(account: &str, password: Zeroizing<Vec<u8>>) -> bool {
         && !item.is_null()
         && unsafe { CStr::from_ptr(item.cast::<c_char>()) } == account.as_c_str();
     let ended = unsafe { pam_end(handle, status) } == PAM_SUCCESS;
-    status == PAM_SUCCESS && same_user && secret.prompts == 1 && ended && valid_service()
+    may_unlock(status, same_user, &secret, ended, valid_service())
+}
+
+fn may_unlock(
+    status: c_int,
+    same_user: bool,
+    secret: &Secret,
+    ended: bool,
+    service_valid: bool,
+) -> bool {
+    status == PAM_SUCCESS
+        && same_user
+        && secret.prompts == 1
+        && !secret.rejected
+        && ended
+        && service_valid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_later_callback_denies_even_with_successful_pam_status() {
+        let mut secret = Secret {
+            bytes: Zeroizing::new(b"example-password".to_vec()),
+            prompts: 0,
+            rejected: false,
+        };
+        let data = (&mut secret as *mut Secret).cast();
+        let prompt = PamMessage {
+            msg_style: PAM_PROMPT_ECHO_OFF,
+            msg: c"Password: ".as_ptr(),
+        };
+        let prompts = [&prompt as *const PamMessage];
+        let mut response = ptr::null_mut();
+        assert_eq!(
+            unsafe { converse(1, prompts.as_ptr(), &mut response, data) },
+            PAM_SUCCESS
+        );
+        assert!(!response.is_null());
+        assert!(may_unlock(PAM_SUCCESS, true, &secret, true, true));
+        unsafe {
+            libc::explicit_bzero((*response).resp.cast(), secret.bytes.len() + 1);
+            libc::free((*response).resp.cast());
+            libc::free(response.cast());
+        }
+
+        let remark = PamMessage {
+            msg_style: 4, // PAM_TEXT_INFO, which pam_unix may ignore during account checks.
+            msg: c"Password expires soon".as_ptr(),
+        };
+        let messages = [&remark as *const PamMessage];
+        response = ptr::null_mut();
+        assert_eq!(
+            unsafe { converse(1, messages.as_ptr(), &mut response, data) },
+            PAM_CONV_ERR
+        );
+        assert!(response.is_null());
+        assert!(!may_unlock(PAM_SUCCESS, true, &secret, true, true));
+    }
 }
