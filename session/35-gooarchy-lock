@@ -1,0 +1,6 @@
+#!/bin/sh
+cat <<'CONFIG'
+[command]
+binding_gooarchy_lock = <super> KEY_L
+command_gooarchy_lock = /usr/bin/gooarchy lock
+CONFIG

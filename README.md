@@ -111,9 +111,10 @@ cd gooarchy
 ./install.sh
 ```
 
-Then reboot, or log in on tty1. Super+Enter opens a terminal; Super+Shift+Escape logs out. Read
-[DEFICIT.md](DEFICIT.md) first: there is no lock screen, no network or Bluetooth UI, no
-notifications and no bar. [docs/uninstall.md](docs/uninstall.md) explains how to remove it, and
+Then reboot, or log in on tty1. Super+Enter opens a terminal; Super+L requests the
+[session lock](docs/lock.md); Super+Shift+Escape logs out. Read [DEFICIT.md](DEFICIT.md) first:
+there is no automatic idle, suspend or lid lock, no network or Bluetooth UI, no notifications
+and no bar. [docs/uninstall.md](docs/uninstall.md) explains how to remove it, and
 how to back out of an install that failed partway (running `./install.sh` again retries it).
 
 How logging in works: any ordinary account that logs in on tty1 from a bash or zsh login shell gets
@@ -156,9 +157,9 @@ without Gooarchy:
 | `install/sources.conf` | Scottland and Strata, pinned to the versions tested together |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
-| `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
+| `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, keyboard-layout config fragment, and Gooarchy's Super+L lock binding |
 | `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
-| `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem as they are written. The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
+| `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem, including [the session lock](docs/lock.md). The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
@@ -180,7 +181,7 @@ In order:
    Scottland and the portal and kernel packages. Arch and AUR repositories keep supplying
    everything else, including Strata.
 4. **Defaults**: gooarchy-flavorings as its own package, and Gooarchy's own bar, notifications,
-   launcher, lock screen and the rest of the deficit.
+   launcher, automatic idle/suspend locking and the rest of the deficit.
 5. **Hardware**: a supported hardware matrix with GPU, firmware, power and laptop quirks.
 6. **ISO**: an installer image (partitioning, encryption, accounts) instead of "install Arch first".
 7. **Updates**: an update command with migrations for user and system configuration.
