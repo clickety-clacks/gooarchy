@@ -126,6 +126,14 @@ export PATH="$tmp/bin:$PATH"
 export PORTAL_TEST_CALLS="$tmp/pacman-calls.log"
 export PORTAL_TEST_REPO_VERSION=0.8.4.gooarchy.1-1
 
+assert_no_match() {
+  local pattern=$1 file=$2 description=$3
+  if grep -q -- "$pattern" "$file"; then
+    printf 'unexpected %s: %s\n' "$description" "$pattern" >&2
+    return 1
+  fi
+}
+
 run_consumer() {
   local label=$1
   : >"$tmp/install.log"
@@ -162,7 +170,10 @@ EOF
       cat "$tmp/$label.out" >&2
       return 1
     }
-  ! awk -F '\t' '$1 == "xdg-desktop-portal-wlr" { found=1 } END { exit !found }' "$PORTAL_TEST_INSTALLED"
+  if awk -F '\t' '$1 == "xdg-desktop-portal-wlr" { found=1 } END { exit !found }' "$PORTAL_TEST_INSTALLED"; then
+    echo 'Arch portal package remains installed beside Gooarchy provider' >&2
+    return 1
+  fi
   awk -F '\t' '$1 == "xdg-desktop-portal-wlr-gooarchy" { found=1 } END { exit !found }' "$PORTAL_TEST_INSTALLED"
   [[ $(awk -F '\t' '$1 == "xdg-desktop-portal-wlr-gooarchy" {print $2}' "$PORTAL_TEST_INSTALLED") == \
     "$PORTAL_TEST_REPO_VERSION" ]]
@@ -170,9 +181,9 @@ EOF
   if [[ ${EXPECT_INSTALL:-0} == 1 ]]; then
     grep -q -- '-U ' "$PORTAL_TEST_CALLS"
   else
-    ! grep -q -- '-U ' "$PORTAL_TEST_CALLS"
+    assert_no_match '-U ' "$PORTAL_TEST_CALLS" 'pacman install call' || return 1
   fi
-  ! grep -q 'unexpected portal makepkg invocation' "$tmp/$label.out"
+  assert_no_match 'unexpected portal makepkg invocation' "$tmp/$label.out" 'portal makepkg invocation' || return 1
 }
 
 portal_version=0.8.4.gooarchy.1-1
@@ -221,10 +232,13 @@ run_consumer provider-alias "xdg-desktop-portal-wlr-gooarchy\t$portal_version\tg
 [[ $(pacman -Qq xdg-desktop-portal-wlr) == xdg-desktop-portal-wlr-gooarchy ]]
 [[ $(pacman -Q xdg-desktop-portal-wlr) == "xdg-desktop-portal-wlr-gooarchy $portal_version" ]]
 source "$GOOARCHY_INSTALL/helpers/repository.sh"
-! package_is_installed xdg-desktop-portal-wlr
+if package_is_installed xdg-desktop-portal-wlr; then
+  echo 'a Provides match was mistaken for the exact Arch portal package' >&2
+  exit 1
+fi
 package_is_installed xdg-desktop-portal-wlr-gooarchy
-! grep -q -- '-U ' "$PORTAL_TEST_CALLS"
-! grep -q -- '-Sw ' "$PORTAL_TEST_CALLS"
+assert_no_match '-U ' "$PORTAL_TEST_CALLS" 'provider-alias pacman install call'
+assert_no_match '-Sw ' "$PORTAL_TEST_CALLS" 'provider-alias package download'
 unset EXPECT_INSTALL
 
 # R22: after the ordinary repository upgrade advances an already signed copy, the consumer stays
@@ -253,8 +267,8 @@ grep -Fq 'from 0.8.4.gooarchy.1-1 to 0.8.4.gooarchy.2-1 through the repository u
 [[ $(awk -F '\t' '$1 == "xdg-desktop-portal-wlr-gooarchy" {print $2}' "$PORTAL_TEST_INSTALLED") == \
   "$PORTAL_TEST_REPO_VERSION" ]]
 [[ $(awk -F '\t' '$1 == "xdg-desktop-portal-wlr-gooarchy" {print $3}' "$PORTAL_TEST_INSTALLED") == gooarchy ]]
-! grep -q -- '-U ' "$PORTAL_TEST_CALLS"
-! grep -q -- '-Sw ' "$PORTAL_TEST_CALLS"
+assert_no_match '-U ' "$PORTAL_TEST_CALLS" 'repository-upgrade pacman install call'
+assert_no_match '-Sw ' "$PORTAL_TEST_CALLS" 'repository-upgrade package download'
 
 # The consumer remains between base/repository setup and Scottland's later source step.
 GOOARCHY_INSTALL="$repo_root/install"
