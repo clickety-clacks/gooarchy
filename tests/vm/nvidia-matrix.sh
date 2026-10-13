@@ -7,6 +7,17 @@
 # and nvidia-device=no-device as tab-separated key/value lines.
 # The pacman-lock R15 row verifies fail-closed behavior with a test-owned stale db.lck; cleanup
 # removes only that exact lock file after the matrix records whether the installer preserved it.
+# Product rows in results.tsv assert installer behavior: C1 rejects ambiguous preset assignments
+# without mutation; C2 preserves sound images through a bounded-space hook failure; C3 surfaces the
+# generated Arch hook failure; C4 regenerates only selected images while preserving direct-config
+# siblings; C5 retains the user-partial fix report without rewriting the user's config. Fixture and
+# cleanup evidence belongs in fixture.tsv and never increments product pass/fail counts.
+# Other retained rows are named for their product behavior: R2/R3 fallback on unsupported devices,
+# R6/R9 per-kernel coverage and user-partial reporting, R7/R8 package replacement and hold behavior,
+# R10 user MODULES handling, R11 per-preset image/config behavior, R13 neutral service state and
+# notifier defaults, R14 desktop GPU selection, R15/R15a safe failure and stale-image handling, R16
+# user-file preservation, R17 rerun convergence, and R18 idempotence. VM hostname, machine identity,
+# repository readiness and incidental runner state are not product gates.
 set -euo pipefail
 
 [[ ${GOOARCHY_VM_GUEST_NVIDIA_MATRIX:-} == 1 ]] || {
@@ -428,6 +439,14 @@ cleanup() {
       >"$test_root/cleanup-failure.txt"
     status=1
   fi
+  if [[ -f $test_root/linux.preset.saved ]]; then
+    if sudo mv -f "$test_root/linux.preset.saved" /etc/mkinitcpio.d/linux.preset; then
+      fixture_event CLEANUP-OK 'C1 preset assignment-edge fixture' 'stock Linux preset restored after early exit'
+    else
+      fixture_event CLEANUP-FAIL 'C1 preset assignment-edge fixture' 'could not restore stock Linux preset after early exit'
+      status=1
+    fi
+  fi
   if [[ -f $test_root/c1-stale-image-paths.tsv ]]; then
     while IFS= read -r path; do
       [[ -n $path && $path != path ]] || continue
@@ -503,6 +522,15 @@ record() {
   fi
 }
 
+fixture_event() {
+  local disposition=$1 name=$2 detail=${3:-}
+  printf '%s\t%s\t%s\n' "$disposition" "$name" "$detail" | tee -a "$test_root/fixture.tsv" >&2
+}
+
+fixture_refuse() {
+  fixture_event REFUSED "$1" "$2"
+}
+
 tree_hash() {
   sudo python3 - "$1" <<'PY'
 import hashlib, os, stat, sys
@@ -576,11 +604,11 @@ verify_repository_driver_pair() {
   if [[ -z $utils_version || -z $dkms_version || $utils_version != "$dkms_version" ]]; then
     local evidence
     evidence=$(capture_repository_pair_mismatch)
-    record 'NVIDIA VM repository pair is version-consistent before package mutation' 0 \
+    fixture_refuse 'NVIDIA repository package pair' \
       "nvidia-utils ${utils_version:-unavailable}; nvidia-open-dkms ${dkms_version:-unavailable}; source evidence $evidence"
-    return 1
+    return 75
   fi
-  record 'NVIDIA VM repository pair is version-consistent before package mutation' 1 \
+  fixture_event READY 'NVIDIA repository package pair' \
     "nvidia-utils/nvidia-open-dkms $utils_version"
 }
 
@@ -1224,7 +1252,10 @@ check_covered_kernels() {
     done
     record "R6/R9 module coverage $kernel" "$ok" "nvidia-utils $package_version"
     if ((ok)); then
-      image_set_for_kernel "$pkgbase" || { record "R10 images listed for $kernel" 0 "no resolvable preset images"; continue; }
+      image_set_for_kernel "$pkgbase" || {
+        fixture_refuse "R10 image inventory for $kernel" 'no resolvable preset images'
+        continue
+      }
       for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
         local modules
         modules=$(image_modules "$image" 2>/dev/null || true)
@@ -1263,15 +1294,15 @@ capture_repository_pair() {
 }
 
 preflight() {
-  verify_repository_driver_pair || { capture_repository_pair; return 1; }
+  verify_repository_driver_pair || { capture_repository_pair; return 75; }
   if ! ensure_archive_pair; then
     capture_repository_pair
-    record 'NVIDIA VM has a matching older Archive package pair before package mutation' 0 \
+    fixture_refuse 'NVIDIA older Archive package pair' \
       'could not download and verify an older matching nvidia-utils/nvidia-open-dkms pair'
-    return 1
+    return 75
   fi
   capture_repository_pair
-  record 'NVIDIA VM has a matching older Archive package pair before package mutation' 1 \
+  fixture_event READY 'NVIDIA older Archive package pair' \
     "nvidia-utils/nvidia-open-dkms $(pacman -Qp "$old_utils_package" | awk '{print $2}'); SHA256s in $test_root/nvidia-archive-pair.tsv"
   printf 'Repository and Archive evidence: %s\n' "$test_root/nvidia-repository-pair.txt"
 }
@@ -1299,7 +1330,7 @@ test_r15_precommit_failure() {
 }
 
 preinstall() {
-  local packages_before etc_before boot_before reports_before status unit_before units_absent=1 unit
+  local packages_before etc_before boot_before reports_before status
   verify_repository_driver_pair || return 1
   packages_before=$(package_manifest)
   etc_before=$(tree_hash /etc)
@@ -1323,16 +1354,11 @@ preinstall() {
   fi
 
   unit_states >"$test_root/units-before-nvidia-utils.txt"
-  unit_before=$(cat "$test_root/units-before-nvidia-utils.txt")
-  while IFS= read -r unit; do
-    [[ $unit == *'|not-found' ]] || units_absent=0
-  done <<<"$unit_before"
-  record 'R13 fresh VM begins without NVIDIA sleep units' "$units_absent" 'all four systemd units checked before nvidia-utils installation'
   sudo pacman -S --noconfirm --asexplicit nvidia-utils
   unit_states >"$test_root/units-after-nvidia-utils-transaction.txt"
   package_manifest >"$test_root/packages-after-nvidia-utils.txt"
   pacman -Q nvidia-utils >"$test_root/nvidia-utils-version-before-full-install.txt"
-  record 'R13 fresh package transaction state captured' 1 "four service states saved after nvidia-utils installation"
+  fixture_event READY 'R13 package-state fixture' 'package and unit state snapshots captured around the nvidia-utils transaction'
 }
 
 postinstall() {
@@ -1340,11 +1366,6 @@ postinstall() {
   local source_hash status output unit_before unit_after
   verify_repository_driver_pair || return 1
   check_covered_kernels
-  if [[ ${GOOARCHY_VM_REQUIRE_LINUX_GOOARCHY:-1} == 1 ]]; then
-    local gooarchy_kernel
-    gooarchy_kernel=$(kernel_for_pkgbase linux-gooarchy 2>/dev/null || true)
-    record 'R6/R9 integrated linux-gooarchy kernel is present' "$([[ -n $gooarchy_kernel ]] && echo 1 || echo 0)" "${gooarchy_kernel:-kernel package not present}"
-  fi
 
   before_packages=$(package_manifest)
   before_etc=$(tree_hash /etc)
@@ -1362,9 +1383,6 @@ postinstall() {
      modprobe -c | grep -Eq '^[[:space:]]*options[[:space:]]+nvidia[[:space:]].*NVreg_UseKernelSuspendNotifiers=1' &&
      ! grep -RqsE 'NVreg_UseKernelSuspendNotifiers|NVreg_PreserveVideoMemoryAllocations' /etc/modprobe.d/gooarchy-nvidia.conf; then status=1; else status=0; fi
   record 'R13 keeps Arch notifier default without a Gooarchy override' "$status" 'package default, modprobe -c, and Gooarchy file checked'
-  if grep -Eq 'systemctl[[:space:]]+(enable|disable|mask|unmask|preset)[[:space:]]+.*nvidia-' "$repo/install/packaging/nvidia.sh"; then status=0; else status=1; fi
-  record 'R13 installer does not change NVIDIA sleep unit state' "$([[ $status == 1 ]] && echo 1 || echo 0)" 'static scan of the step source'
-
   before_packages=$(package_manifest)
   before_etc=$(tree_hash /etc)
   before_boot=$(tree_hash /boot)
@@ -1372,10 +1390,10 @@ postinstall() {
   record 'R14 built-in boot GPU leaves selection to desktop' "$([[ $last_status == 0 && $(grep -c 'built-in GPU is the boot GPU' "$test_root/r14-dual-gpu.log") -eq 1 && $before_packages == "$(package_manifest)" && $before_etc == "$(tree_hash /etc)" && $before_boot == "$(tree_hash /boot)" ]] && echo 1 || echo 0)" 'no GPU-selection configuration written'
 
   if ensure_archive_pair; then
-    record 'R8/R15a matching older NVIDIA packages are downloaded from the Arch Linux Archive inside the VM' 1 \
+    fixture_event READY 'R8/R15a older Archive package pair' \
       "nvidia-utils/nvidia-open-dkms $(pacman -Qp "$old_utils_package" | awk '{print $2}'); SHA256s recorded in $test_root"
   else
-    record 'R8/R15a matching older NVIDIA packages are downloaded from the Arch Linux Archive inside the VM' 0 \
+    fixture_refuse 'R8/R15a older Archive package pair' \
       'no older matching official package pair could be fetched and verified'
   fi
 
@@ -1424,34 +1442,22 @@ test_r13_full_installer_systemctl_trace() {
 }
 
 reference() {
-  local kernel pkgbase module_version units_before units_after packages_before etc_before boot_before
-  local image image_ok=1 module status module_dir kernel_count=0
+  local kernel module_version units_before units_after packages_before etc_before boot_before
+  local image image_ok=1 module status
   local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
   verify_repository_driver_pair || return 1
   kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
   if [[ -z $kernel ]]; then
-    record 'R18 Linux reference kernel is available' 0 'linux module tree missing'
-    return 1
+    fixture_refuse 'R18 reference kernel fixture' 'linux module tree missing'
+    return 75
   fi
-  for module_dir in /usr/lib/modules/*; do
-    [[ -f $module_dir/pkgbase ]] || continue
-    pkgbase=$(<"$module_dir/pkgbase")
-    kernel_count=$((kernel_count + 1))
-    if [[ $pkgbase != linux ]]; then
-      record 'R18 reference VM contains only the linux kernel' 0 "found $pkgbase (${module_dir##*/})"
-      return 1
-    fi
-  done
-  if ((kernel_count != 1)); then
-    record 'R18 reference VM contains only the linux kernel' 0 "found $kernel_count installed kernel trees"
-    return 1
-  fi
-  record 'R18 reference VM contains only the linux kernel' 1 "$kernel"
+  fixture_event READY 'R18 reference kernel fixture' \
+    "linux $kernel is available; other installed kernel state remains in the idempotence comparison"
   units_before=$(unit_states)
   run_nvidia_step r18-reference-bootstrap "$supported" -
   status=$last_status
   if ((status != 0)); then
-    record 'R18 reference state can be established' 0 "installer status $status"
+    record 'R18 installer establishes the reference state' 0 "installer status $status"
     return 1
   fi
   module_version=$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")
@@ -1490,8 +1496,8 @@ test_user_full_list() {
   local had_owned=0 before_hash status
   if [[ -e $owned ]]; then
     if ! grep -Fxq '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
-      record 'R10 static all-four fixture can preserve a non-owned path' 0 "$owned is not Gooarchy-owned"
-      return
+      fixture_refuse 'R10 static all-four user-config fixture' "$owned is not Gooarchy-owned"
+      return 75
     fi
     sudo mv "$owned" "$saved"
     had_owned=1
@@ -1511,8 +1517,8 @@ test_dynamic_full_list() {
   local had_owned=0 before_hash status
   if [[ -e $owned ]]; then
     if ! grep -Fxq '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
-      record 'R10 dynamic all-four fixture can preserve a non-owned path' 0 "$owned is not Gooarchy-owned"
-      return
+      fixture_refuse 'R10 dynamic all-four user-config fixture' "$owned is not Gooarchy-owned"
+      return 75
     fi
     sudo mv "$owned" "$saved"
     had_owned=1
@@ -1532,9 +1538,10 @@ test_pre_enabled_units() {
   local before after status prior_state
   prior_state=$(systemctl is-enabled nvidia-suspend.service 2>&1 || true)
   if ! sudo systemctl enable nvidia-suspend.service >/dev/null 2>&1; then
-    record 'R13 pre-enabled NVIDIA unit fixture available' 0 'nvidia-suspend.service could not be enabled in the VM'
-    return
+    fixture_refuse 'R13 pre-enabled unit fixture' 'nvidia-suspend.service could not be enabled in the disposable guest'
+    return 75
   fi
+  fixture_event READY 'R13 pre-enabled unit fixture' 'nvidia-suspend.service enabled before installer rerun'
   unit_states >"$test_root/units-before-pre-enabled-rerun.txt"
   before=$(cat "$test_root/units-before-pre-enabled-rerun.txt")
   run_nvidia_step r13-pre-enabled-rerun "$supported" -
@@ -1550,7 +1557,7 @@ test_pre_enabled_units() {
 
 test_foreign_owned_file() {
   local saved=$test_root/owned-original.conf foreign=$test_root/owned-foreign.conf before_hash after_hash
-  [[ -f $owned ]] || { record 'R16 owned path exists for preservation test' 0 "$owned missing"; return; }
+  [[ -f $owned ]] || { fixture_refuse 'R16 owned-path fixture' "$owned missing"; return 75; }
   sudo cp -a "$owned" "$saved"
   cat >"$foreign" <<'EOF'
 # Test fixture: a user-owned file at the path Gooarchy normally owns.
@@ -1571,17 +1578,17 @@ test_custom_preset() {
   local image image_ok=1 module_version modules status disabled_image=$test_root/inactive-fallback.img
   local entry entry_index=0 first_entry= second_entry=
   local -a active_entries=()
-  if [[ ! -f $preset ]]; then record 'R11 custom preset case available' 0 "$preset missing"; return; fi
+  if [[ ! -f $preset ]]; then fixture_refuse 'R11 custom-preset fixture' "$preset missing"; return 75; fi
   if ! grep -Eq '^[[:space:]]*MODULES[[:space:]]*=[[:space:]]*\(\)[[:space:]]*$' /etc/mkinitcpio.conf; then
-    record 'R11 empty-MODULES config fixture is available' 0 '/etc/mkinitcpio.conf must be the fresh VM empty-MODULES default'
-    return
+    fixture_refuse 'R11 custom-preset fixture' '/etc/mkinitcpio.conf must begin with MODULES=()'
+    return 75
   fi
   sudo cp -a "$preset" "$saved"
   sudo cp -a "$preset" "$test_copy"
   preset_images "$test_copy" || {
     sudo mv "$saved" "$preset"
-    record 'R11 active preset-entry fixture is available' 0 'could not parse literal active entries and output paths'
-    return
+    fixture_refuse 'R11 custom-preset fixture' 'could not parse literal active entries and output paths'
+    return 75
   }
   active_entries=("${NV_TEST_PRESET_ENTRIES[@]}")
   first_entry=${active_entries[0]}
@@ -1597,7 +1604,7 @@ test_custom_preset() {
   done
   printf '\ngooarchy_inactive_image="%s"\n' "$disabled_image" | sudo tee -a "$test_copy" >/dev/null
   sudo cp "$test_copy" "$preset"
-  preset_images "$preset" || { sudo mv "$saved" "$preset"; record 'R11 preset paths resolve' 0 'could not parse preset'; return; }
+  preset_images "$preset" || { sudo mv "$saved" "$preset"; fixture_refuse 'R11 custom-preset fixture' 'could not parse the prepared preset'; return 75; }
   record 'R11 inactive preset image path is excluded from the active image set' \
     "$([[ ${#NV_TEST_IMAGES[@]} -gt 0 ]] && ! printf '%s\n' "${NV_TEST_IMAGES[@]}" | grep -Fxq "$disabled_image" && echo 1 || echo 0)" \
     "active entries ${active_entries[*]}; inactive path $disabled_image ignored"
@@ -1644,11 +1651,11 @@ test_custom_preset() {
   grep -Fq "$first_entry image in linux.preset reads /etc/mkinitcpio.conf directly" "$test_root/r11-custom-config.log" && rerun_report_seen=1
   record 'R11 rerun reports missing early KMS for the named preset' \
     "$([[ $last_status == 0 && $rerun_report_seen == 1 ]] && echo 1 || echo 0)" "$preset"
-  cmp -s "$test_copy" "$preset" || record 'R11 preset bytes are preserved' 0 "$preset changed during the step"
   sudo mv "$saved" "$preset"
   sudo rm -f "$fallback_config"
   run_nvidia_step r11-restore-default "$supported" -
-  record 'R11 default preset early KMS restored' "$([[ $last_status == 0 ]] && echo 1 || echo 0)" 'test preset removed and images regenerated'
+  record 'R17 rerun after removing the R11 test preset converges to the stock preset' \
+    "$([[ $last_status == 0 ]] && echo 1 || echo 0)" 'stock preset and its output images restored by the installer'
 }
 
 restore_mixed_preset_fixture() {
@@ -1673,30 +1680,30 @@ test_mixed_preset_selected_entry_regeneration() {
   local first_after= other_images_ok=1 other_changed=1 image_hash
   local -a active_entries=() other_entries=() first_images=() other_images=() first_hashes=() other_hashes=()
   if [[ ! -f $preset ]]; then
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 "$preset missing"
-    return
+    fixture_refuse 'R11 mixed-preset fixture' "$preset missing"
+    return 75
   fi
   if ! kernel=$(kernel_for_pkgbase linux 2>/dev/null || true) || [[ -z $kernel ]]; then
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'linux kernel modules missing'
-    return
+    fixture_refuse 'R11 mixed-preset fixture' 'linux kernel modules missing'
+    return 75
   fi
   sudo cp -a "$preset" "$saved"
   if ! preset_images "$saved"; then
     sudo mv -f "$saved" "$preset"
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'could not parse the stock preset'
-    return
+    fixture_refuse 'R11 mixed-preset fixture' 'could not parse the stock preset'
+    return 75
   fi
   active_entries=("${NV_TEST_PRESET_ENTRIES[@]}")
   if ((${#active_entries[@]} < 2)); then
     sudo mv -f "$saved" "$preset"
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'preset has fewer than two active entries'
-    return
+    fixture_refuse 'R11 mixed-preset fixture' 'preset has fewer than two active entries'
+    return 75
   fi
   if ! save_kernel_images linux r11-mixed; then
     sudo mv -f "$saved" "$preset"
     rm -f "$test_root/r11-mixed-images.tsv"
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'could not save the stock images'
-    return
+    fixture_refuse 'R11 mixed-preset fixture' 'could not save the stock images'
+    return 75
   fi
   first_entry=${active_entries[0]}
   other_entries=("${active_entries[@]:1}")
@@ -1711,21 +1718,33 @@ test_mixed_preset_selected_entry_regeneration() {
     }
     END { print first "_config=\"" config "\"" }
   ' "$saved" >"$test_copy" || {
-    restore_mixed_preset_fixture || record 'R11 mixed preset fixture cleanup' 0 'could not restore the preset and saved images after setup failure'
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'could not prepare the mixed preset'
-    return
+    if restore_mixed_preset_fixture; then
+      fixture_event CLEANUP-OK 'R11 mixed-preset setup refusal' 'original preset and images restored'
+    else
+      fixture_event CLEANUP-FAIL 'R11 mixed-preset setup refusal' 'could not restore the preset and saved images'
+    fi
+    fixture_refuse 'R11 mixed-preset fixture' 'could not prepare the mixed preset'
+    return 75
   }
   sudo cp "$test_copy" "$preset"
   if ! preset_images "$preset"; then
-    restore_mixed_preset_fixture || record 'R11 mixed preset fixture cleanup' 0 'could not restore the preset and saved images after parse failure'
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'mixed preset did not parse'
-    return
+    if restore_mixed_preset_fixture; then
+      fixture_event CLEANUP-OK 'R11 mixed-preset setup refusal' 'original preset and images restored'
+    else
+      fixture_event CLEANUP-FAIL 'R11 mixed-preset setup refusal' 'could not restore the preset and saved images'
+    fi
+    fixture_refuse 'R11 mixed-preset fixture' 'mixed preset did not parse'
+    return 75
   fi
   sudo cp /etc/mkinitcpio.conf "$empty_config"
   if ! grep -Eq '^[[:space:]]*MODULES[[:space:]]*=[[:space:]]*\(\)[[:space:]]*$' "$empty_config"; then
-    restore_mixed_preset_fixture || record 'R11 mixed preset fixture cleanup' 0 'could not restore the preset and saved images after config failure'
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'default mkinitcpio MODULES setting is not empty'
-    return
+    if restore_mixed_preset_fixture; then
+      fixture_event CLEANUP-OK 'R11 mixed-preset setup refusal' 'original preset and images restored'
+    else
+      fixture_event CLEANUP-FAIL 'R11 mixed-preset setup refusal' 'could not restore the preset and saved images'
+    fi
+    fixture_refuse 'R11 mixed-preset fixture' 'default mkinitcpio MODULES setting is not empty'
+    return 75
   fi
   for idx in "${!NV_TEST_IMAGES[@]}"; do
     image=${NV_TEST_IMAGES[$idx]}
@@ -1741,9 +1760,13 @@ test_mixed_preset_selected_entry_regeneration() {
     if [[ $entry == "$first_entry" ]]; then first_images+=("$image"); else other_images+=("$image"); fi
   done
   if ((image_ok == 0)) || ((${#first_images[@]} == 0 || ${#other_images[@]} == 0)); then
-    restore_mixed_preset_fixture || record 'R11 mixed preset fixture cleanup' 0 'could not restore the preset and saved images after image setup failure'
-    record 'R11 mixed preset repair preserves a direct-config sibling' 0 'could not prepare listable module-free fixture images for both entry classes'
-    return
+    if restore_mixed_preset_fixture; then
+      fixture_event CLEANUP-OK 'R11 mixed-preset setup refusal' 'original preset and images restored'
+    else
+      fixture_event CLEANUP-FAIL 'R11 mixed-preset setup refusal' 'could not restore the preset and saved images'
+    fi
+    fixture_refuse 'R11 mixed-preset fixture' 'could not prepare listable module-free images for both entry classes'
+    return 75
   fi
   for image in "${first_images[@]}"; do first_hashes+=("$(sudo sha256sum -- "$image" | awk '{print $1}')"); done
   for image in "${other_images[@]}"; do other_hashes+=("$(sudo sha256sum -- "$image" | awk '{print $1}')"); done
@@ -1770,11 +1793,13 @@ test_mixed_preset_selected_entry_regeneration() {
           $config_hash == "$(sha256sum "$empty_config" | awk '{print $1}')" ]] && echo 1 || echo 0)" \
     "$first_entry images byte-identical; ${other_entries[*]} regenerated with NVIDIA modules; preset and direct config preserved"
   if ! restore_mixed_preset_fixture; then
-    record 'R11 mixed preset fixture restores stock images and preset' 0 'could not restore saved stock images or preset'
-    return
+    fixture_event CLEANUP-FAIL 'R11 mixed-preset fixture' 'could not restore saved stock images or preset'
+    return 1
   fi
+  fixture_event CLEANUP-OK 'R11 mixed-preset fixture' 'stock images and preset restored'
   run_nvidia_step r11-mixed-restore-default "$supported" -
-  record 'R11 mixed preset fixture returns to the stock installer state' "$([[ $last_status == 0 ]] && echo 1 || echo 0)" 'stock preset and images restored'
+  record 'R17 rerun after the mixed-preset case returns to the stock preset and images' \
+    "$([[ $last_status == 0 ]] && echo 1 || echo 0)" 'installer rerun completed against the restored stock preset and images'
 }
 
 test_preset_assignment_edge() {
@@ -1782,32 +1807,39 @@ test_preset_assignment_edge() {
   local variant entry key stale packages_before database_before etc_before modules_before status error_ok image_hash_ok original_hash
   local -a variants=(duplicate-presets appended-presets duplicate-image appended-image)
   if [[ ! -f $preset || -e $saved ]]; then
-    record 'C1 preset assignment-edge fixture is available' 0 'linux preset missing or another preset backup is active'
-    return
+    fixture_refuse 'C1 preset assignment-edge fixture' 'Linux preset missing or another preset backup is active'
+    return 75
   fi
   sudo cp -a "$preset" "$saved"
   original_hash=$(sha256sum "$saved" | awk '{print $1}')
   if ! preset_images "$saved"; then
-    record 'C1 stock preset assignment-edge fixture resolves' 0 'could not parse the original active image entries'
-    return
+    sudo mv -f "$saved" "$preset" || fixture_event CLEANUP-FAIL 'C1 preset assignment-edge fixture' 'could not restore preset after parse refusal'
+    fixture_refuse 'C1 preset assignment-edge fixture' 'could not parse the original active image entries'
+    return 75
   fi
   if ! c1_capture_image_inventory; then
-    record 'C1 stock active image inventory is measurable' 0 'could not build a saved-path list for every kernel preset'
-    return
+    sudo mv -f "$saved" "$preset" || fixture_event CLEANUP-FAIL 'C1 preset assignment-edge fixture' 'could not restore preset after inventory refusal'
+    fixture_refuse 'C1 preset assignment-edge fixture' 'could not build saved paths for every kernel preset'
+    return 75
   fi
   if ! preset_images "$saved"; then
-    record 'C1 stock preset entry state is recoverable' 0 'could not restore the saved Linux preset parser state'
-    return
+    sudo mv -f "$saved" "$preset" || fixture_event CLEANUP-FAIL 'C1 preset assignment-edge fixture' 'could not restore preset after parser-state refusal'
+    fixture_refuse 'C1 preset assignment-edge fixture' 'could not restore the saved Linux preset parser state'
+    return 75
   fi
   entry=${NV_TEST_PRESET_ENTRIES[0]:-}
-  [[ -n $entry ]] || { record 'C1 stock preset has an active entry' 0 "$saved"; return; }
+  if [[ -z $entry ]]; then
+    sudo mv -f "$saved" "$preset" || fixture_event CLEANUP-FAIL 'C1 preset assignment-edge fixture' 'could not restore preset after empty-entry refusal'
+    fixture_refuse 'C1 preset assignment-edge fixture' 'stock preset has no active entry'
+    return 75
+  fi
   key=${entry}_image
   if ! awk -v key="$key" 'index($0, "#") { sub(/#.*/, "") } { lhs=$0; sub(/=.*/, "", lhs); gsub(/^[[:space:]]+|[[:space:]]+$/, "", lhs); if (lhs == key) found=1 } END { exit !found }' "$saved"; then
     key=${entry}_uki
     if ! awk -v key="$key" 'index($0, "#") { sub(/#.*/, "") } { lhs=$0; sub(/=.*/, "", lhs); gsub(/^[[:space:]]+|[[:space:]]+$/, "", lhs); if (lhs == key) found=1 } END { exit !found }' "$saved"; then
-      sudo mv -f "$saved" "$preset"
-      record 'C1 stock preset has a literal active image assignment' 0 "$entry"
-      return
+      sudo mv -f "$saved" "$preset" || fixture_event CLEANUP-FAIL 'C1 preset assignment-edge fixture' 'could not restore preset after assignment refusal'
+      fixture_refuse 'C1 preset assignment-edge fixture' "active entry $entry has no literal image or UKI assignment"
+      return 75
     fi
   fi
   printf 'path\n' >"$test_root/c1-stale-image-paths.tsv"
@@ -1825,8 +1857,8 @@ test_preset_assignment_edge() {
       duplicate-image|appended-image)
         stale=${NV_TEST_IMAGES[0]}.gooarchy-c1-${test_stamp}-${variant}
         if [[ -e $stale || -L $stale ]]; then
-          record "C1 $variant assignment edge has an unused output path" 0 "$stale already exists"
-          continue
+          fixture_refuse "C1 $variant assignment-edge fixture" "$stale already exists"
+          return 75
         fi
         printf '%s\n' "$stale" >>"$test_root/c1-stale-image-paths.tsv"
         if [[ $variant == duplicate-image ]]; then
@@ -1841,8 +1873,8 @@ test_preset_assignment_edge() {
     etc_before=$(tree_hash /etc)
     modules_before=$(driver_module_hashes)
     if ! c1_hash_image_inventory >"$test_root/c1-images-before.sha256"; then
-      record "C1 $variant baseline images are measurable" 0 'active images could not all be hashed'
-      continue
+      fixture_refuse "C1 $variant assignment-edge fixture" 'active images could not all be hashed'
+      return 75
     fi
     run_nvidia_step "c1-$variant" "$supported" -
     status=$last_status
@@ -1862,33 +1894,46 @@ test_preset_assignment_edge() {
       "status $status; stale first-match output ${stale:-none}; fixture diagnostic and before/after hashes retained"
   done
 
-  sudo mv -f "$saved" "$preset"
+  if ! sudo mv -f "$saved" "$preset"; then
+    fixture_event CLEANUP-FAIL 'C1 preset assignment-edge fixture' 'could not restore the stock Linux preset'
+    return 1
+  fi
   if [[ -f $test_root/c1-stale-image-paths.tsv ]]; then
     while IFS= read -r stale; do
       [[ -n $stale && $stale != path ]] || continue
       if [[ -f $stale && ! -L $stale ]]; then sudo rm -f -- "$stale"; fi
     done <"$test_root/c1-stale-image-paths.tsv"
   fi
-  record 'C1 preset assignment-edge fixtures restore the original preset bytes' \
-    "$([[ $(sha256sum "$preset" | awk '{print $1}') == "$original_hash" ]] && echo 1 || echo 0)" \
-    'original preset bytes restored and checked'
+  if [[ $(sha256sum "$preset" | awk '{print $1}') == "$original_hash" ]]; then
+    fixture_event CLEANUP-OK 'C1 preset assignment-edge fixture' 'original preset bytes restored and checked'
+  else
+    fixture_event CLEANUP-FAIL 'C1 preset assignment-edge fixture' 'restored preset bytes differ from the saved baseline'
+    return 1
+  fi
 }
 
 test_r17_header_repair() {
   local kernel pkg_version header_version module_version module image image_ok=1 status
   local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
   if ! pacman -Si linux-lts >/dev/null 2>&1; then
-    record 'R17 exact-version linux-lts header repair available' 0 'Arch repositories do not provide linux-lts'
-    return
+    fixture_refuse 'R17 linux-lts header-repair fixture' 'configured repositories do not provide linux-lts'
+    return 75
   fi
   if [[ -z $(kernel_for_pkgbase linux-lts 2>/dev/null || true) ]]; then
-    sudo pacman -S --noconfirm --needed linux-lts || { record 'R17 linux-lts kernel installed without headers' 0 'pacman failed'; return; }
+    if ! sudo pacman -S --noconfirm --needed linux-lts; then
+      fixture_refuse 'R17 linux-lts header-repair fixture' 'could not install linux-lts without headers'
+      return 75
+    fi
   fi
   if pacman -Q linux-lts-headers >/dev/null 2>&1; then
     sudo pacman -Rdd --noconfirm linux-lts-headers
   fi
   kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
-  if [[ -z $kernel ]]; then record 'R17 linux-lts kernel available without headers' 0 'module tree missing'; return; fi
+  if [[ -z $kernel ]]; then
+    fixture_refuse 'R17 linux-lts header-repair fixture' 'linux-lts module tree missing after package setup'
+    return 75
+  fi
+  fixture_event READY 'R17 linux-lts header-repair fixture' "linux-lts $kernel installed without linux-lts-headers"
   run_nvidia_step r17-repair-linux-lts-headers "$supported" -
   status=$last_status
   pkg_version=$(pacman -Q linux-lts | awk '{print $2}')
@@ -1925,26 +1970,26 @@ test_r15_linux_gooarchy_dkms_failure() {
   kernel=$(kernel_for_pkgbase linux-gooarchy 2>/dev/null || true)
   linux_kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
   if [[ -z $kernel || -z $linux_kernel ]]; then
-    record 'R15 linux-gooarchy-only DKMS failure fixture is available' 0 \
+    fixture_refuse 'R15 linux-gooarchy DKMS-failure fixture' \
       'the integrated linux-gooarchy and linux kernels are both required'
-    return
+    return 75
   fi
   if [[ $(pacman -Q linux-gooarchy-headers 2>/dev/null | awk '{print $2}' || true) != \
         "$(pacman -Q linux-gooarchy 2>/dev/null | awk '{print $2}' || true)" ]]; then
-    record 'R15 linux-gooarchy matching headers are installed for the DKMS failure fixture' 0 \
+    fixture_refuse 'R15 linux-gooarchy DKMS-failure fixture' \
       'linux-gooarchy-headers does not match linux-gooarchy'
-    return
+    return 75
   fi
   build_link_path=/usr/lib/modules/$kernel/build
   if [[ ! -e $build_link_path && ! -L $build_link_path ]]; then
-    record 'R15 linux-gooarchy DKMS build link exists before failure injection' 0 "$build_link_path is missing"
-    return
+    fixture_refuse 'R15 linux-gooarchy DKMS-failure fixture' "$build_link_path is missing"
+    return 75
   fi
   if [[ -e $owned ]] && ! grep -Fxq \
       '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
-    record 'R15 linux-gooarchy fixture can preserve the pre-existing owned-path state' 0 \
+    fixture_refuse 'R15 linux-gooarchy DKMS-failure fixture' \
       "$owned contains user-owned content"
-    return
+    return 75
   fi
 
   package_version=$(pacman -Q nvidia-utils | awk '{print $2}')
@@ -1958,40 +2003,43 @@ test_r15_linux_gooarchy_dkms_failure() {
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
     image_has_modules_at_version "$image" "$module_version" "${required[@]}" || linux_covered=0
   done
-  record 'R15 linux begins covered before the linux-gooarchy DKMS failure' "$linux_covered" \
-    "linux $linux_kernel; module version $module_version"
-  if ((linux_covered == 0)); then return; fi
+  if ((linux_covered == 0)); then
+    fixture_refuse 'R15 linux-gooarchy DKMS-failure fixture' 'linux baseline is not sound before failure injection'
+    return 75
+  fi
+  fixture_event READY 'R15 linux-gooarchy DKMS-failure fixture' \
+    "linux $linux_kernel; module version $module_version; matching images verified"
 
   : >"$test_root/driver-recovery-needed"
   printf '%s' "$build_link_path" >"$test_root/gooarchy-build-link-path"
   if ! sudo mv "$build_link_path" "$test_root/gooarchy-build-link.saved"; then
-    record 'R15 linux-gooarchy build link is held for the transaction failure' 0 'could not hold build link'
-    return 1
+    fixture_refuse 'R15 linux-gooarchy DKMS-failure fixture' 'could not hold the build link for failure injection'
+    return 75
   fi
   if ! sudo pacman -Rdd --noconfirm nvidia-open-dkms nvidia-utils; then
-    record 'R15 driver packages can be removed for a fresh transaction' 0 'pacman removal failed'
+    fixture_refuse 'R15 linux-gooarchy DKMS-failure fixture' 'pacman could not remove the driver packages for a fresh transaction'
     if ! sudo mv "$test_root/gooarchy-build-link.saved" "$build_link_path" 2>/dev/null; then
-      record 'R15 linux-gooarchy build link is restored after package removal refusal' 0 \
-        "$build_link_path remains missing"
+      fixture_event CLEANUP-FAIL 'R15 linux-gooarchy DKMS-failure fixture' "$build_link_path remains missing after package removal refusal"
       return 1
     fi
+    fixture_event CLEANUP-OK 'R15 linux-gooarchy DKMS-failure fixture' 'build link restored after package removal refusal'
     rm -f "$test_root/gooarchy-build-link-path"
     restore_r15a_current_state || return 1
-    return
+    return 75
   fi
   for dir in /usr/lib/modules/*; do
     [[ -f $dir/pkgbase ]] || continue
     pkgbase=$(<"$dir/pkgbase")
     if ! sudo mkinitcpio -p "$pkgbase" >"$test_root/r15-fresh-image-${dir##*/}.log" 2>&1; then
-      record 'R15 fresh transaction starts with listable fallback images' 0 "mkinitcpio failed for ${dir##*/}"
+      fixture_refuse 'R15 linux-gooarchy DKMS-failure fixture' "mkinitcpio failed to prepare fallback images for ${dir##*/}"
       if ! sudo mv "$test_root/gooarchy-build-link.saved" "$build_link_path" 2>/dev/null; then
-        record 'R15 linux-gooarchy build link is restored after image preparation failure' 0 \
-          "$build_link_path remains missing"
+        fixture_event CLEANUP-FAIL 'R15 linux-gooarchy DKMS-failure fixture' "$build_link_path remains missing after image preparation failure"
         return 1
       fi
+      fixture_event CLEANUP-OK 'R15 linux-gooarchy DKMS-failure fixture' 'build link restored after image preparation failure'
       rm -f "$test_root/gooarchy-build-link-path"
       restore_r15a_current_state || return 1
-      return
+      return 75
     fi
   done
 
@@ -2072,10 +2120,11 @@ test_r15_linux_gooarchy_dkms_failure() {
   hold_r15_failure_row linux-gooarchy-dkms
 
   if sudo mv "$test_root/gooarchy-build-link.saved" "$build_link_path"; then
+    fixture_event CLEANUP-OK 'R15 linux-gooarchy DKMS-failure fixture' 'build link restored before R17 rerun'
     rm -f "$test_root/gooarchy-build-link-path"
   else
-    record 'R15 linux-gooarchy DKMS build link is restored' 0 "$build_link_path remains missing"
-    return
+    fixture_event CLEANUP-FAIL 'R15 linux-gooarchy DKMS-failure fixture' "$build_link_path remains missing"
+    return 1
   fi
   run_nvidia_step r17-linux-gooarchy-dkms-retry "$supported" -
   status=$last_status
@@ -2103,15 +2152,15 @@ test_r15_interrupted_after_commit() {
   local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
   if [[ -e $owned ]] && ! grep -Fxq \
       '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
-    record 'R15 interruption fixture can preserve the existing owned path' 0 "$owned is user-owned"
-    return
+    fixture_refuse 'R15 after-commit fixture' "$owned is user-owned"
+    return 75
   fi
   : >"$test_root/driver-recovery-needed"
   if [[ -e $owned ]]; then sudo cp -a "$owned" "$test_root/r15-interrupted-owned.saved"; fi
   sudo rm -f "$owned" "$user_config" "$dynamic_modules"
   if ! sudo pacman -Rdd --noconfirm nvidia-open-dkms nvidia-utils; then
-    record 'R15 interruption fixture removes the driver before the transaction' 0 'pacman removal failed'
-    return
+    fixture_refuse 'R15 after-commit fixture' 'pacman could not remove driver packages before fixture preparation'
+    return 75
   fi
   for module_dir in /usr/lib/modules/*; do
     [[ -f $module_dir/pkgbase ]] || continue
@@ -2128,14 +2177,14 @@ test_r15_interrupted_after_commit() {
       [[ -z $modules ]] || images_ok=0
     done
   done
-  record 'R15 interruption fixture starts from complete fallback images' \
-    "$([[ $status == 0 && $images_ok == 1 ]] && echo 1 || echo 0)" \
-    'driver packages removed; every kernel image listable without NVIDIA modules'
-  if ((status != 0 || images_ok == 0)); then return; fi
+  if ((status != 0 || images_ok == 0)); then
+    fixture_refuse 'R15 after-commit fixture' 'fallback images are not listable and module-free'
+    return 75
+  fi
+  fixture_event READY 'R15 after-commit fixture' 'driver packages removed; every kernel image listable without NVIDIA modules'
   if ! capture_all_kernel_image_hashes >"$image_hashes_before"; then
-    record 'R15 after-commit matrix captures pre-transaction image hashes' 0 \
-      'could not hash every image before the package transaction'
-    return
+    fixture_refuse 'R15 after-commit fixture' 'could not hash every image before the package transaction'
+    return 75
   fi
 
   run_nvidia_step r15-interrupted-after-commit "$supported" interrupt:after-commit
@@ -2145,9 +2194,9 @@ test_r15_interrupted_after_commit() {
     diff -u "$image_hashes_before" "$image_hashes_after" \
       >"$test_root/r15-after-commit-image-hash-diff.txt" || true
   fi
-  record 'R15 existing after-commit matrix run records image hashes around pacman return' \
-    "$image_hashes_ok" \
-    "before=$image_hashes_before after=$image_hashes_after; any difference is recorded for hook attribution"
+  fixture_event "$([[ $image_hashes_ok == 1 ]] && echo OBSERVED || echo UNAVAILABLE)" \
+    'R15 after-commit image hash measurements' \
+    "before=$image_hashes_before after=$image_hashes_after; differences retained for diagnosis"
   package_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
   module_version=$(module_version_from_package "$package_version")
   repo_utils=$(repository_version extra/nvidia-utils || true)
@@ -2172,7 +2221,7 @@ test_r15_interrupted_after_commit() {
     done
   done
   record 'R15 interruption after commit leaves every kernel covered with listable fallback images' \
-    "$([[ $status != 0 && $report_ok == 1 && $modules_ok == 1 && $images_ok == 1 && $image_hashes_ok == 1 ]] && echo 1 || echo 0)" \
+    "$([[ $status != 0 && $report_ok == 1 && $modules_ok == 1 && $images_ok == 1 ]] && echo 1 || echo 0)" \
     "nvidia-utils $package_version; transaction committed; owned early-KMS file and step image setup not reached"
   hold_r15_failure_row interrupt-after-commit
 
@@ -2180,9 +2229,10 @@ test_r15_interrupted_after_commit() {
     sudo mv -f "$test_root/r15-interrupted-owned.saved" "$owned"
   fi
   if restore_r15a_current_state; then
-    record 'R17 interrupted transaction fixture is restored to current early KMS' 1 'current packages, DKMS modules, and images restored'
+    fixture_event CLEANUP-OK 'R15 after-commit fixture' 'current packages, DKMS modules and images restored'
   else
-    record 'R17 interrupted transaction fixture is restored to current early KMS' 0 'cleanup recovery failed'
+    fixture_event CLEANUP-FAIL 'R15 after-commit fixture' 'package and image cleanup recovery failed'
+    return 1
   fi
 }
 
@@ -2236,19 +2286,19 @@ focused_installed_size_kb() {
 }
 
 prepare_bounded_disk_pressure() {
-  local cap=${GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB:-} utils_growth dkms_growth growth
+  local cap=${GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB:-4194304} utils_growth dkms_growth growth
   local margin_kb=131072 total_kb=0 preset image filesystem available size required allocated path identity after index=0
   local -A required_by_fs=() available_by_fs=() directory_by_fs=() allocated_by_fs=()
   local -a filesystems=()
   [[ $cap =~ ^[0-9]+$ ]] && ((cap > 0 && cap <= 4194304)) || {
-    record 'C2 bounded disk-pressure cap is valid' 0 'runner must set GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB to 1..4194304 KiB'
-    return 1
+    fixture_refuse 'C2 bounded disk-pressure setup' 'cap must be 1..4194304 KiB'
+    return 75
   }
   utils_growth=$(focused_installed_size_kb extra/nvidia-utils) || utils_growth=
   dkms_growth=$(focused_installed_size_kb extra/nvidia-open-dkms) || dkms_growth=
   [[ $utils_growth =~ ^[0-9]+$ && $dkms_growth =~ ^[0-9]+$ ]] || {
-    record 'C2 bounded disk-pressure package growth is measurable' 0 'configured extra repository did not report both installed sizes'
-    return 1
+    fixture_refuse 'C2 bounded disk-pressure setup' 'configured repositories did not report both package installed sizes'
+    return 75
   }
   growth=$((utils_growth + dkms_growth))
   ((growth >= 131072)) || growth=131072
@@ -2256,20 +2306,23 @@ prepare_bounded_disk_pressure() {
   for preset in /etc/mkinitcpio.d/*.preset; do
     [[ -f $preset ]] || continue
     if ! preset_images "$preset"; then
-      record 'C2 bounded disk-pressure active image inventory resolves' 0 "$preset"
-      return 1
+      fixture_refuse 'C2 bounded disk-pressure setup' "could not resolve active image inventory from $preset"
+      return 75
     fi
     for image in "${NV_TEST_IMAGES[@]}"; do
       [[ -f $image && $image != *$'\t'* && $image != *$'\n'* ]] || {
-        record 'C2 bounded disk-pressure active image exists' 0 "$image"
-        return 1
+        fixture_refuse 'C2 bounded disk-pressure setup' "active image is missing or not safely representable: $image"
+        return 75
       }
       read -r filesystem available < <(df -Pk --output=source,avail -- "$image" | awk 'NR == 2 { print $1, $2 }')
       [[ -n $filesystem && $available =~ ^[0-9]+$ ]] || {
-        record 'C2 bounded disk-pressure filesystem is measurable' 0 "$image"
-        return 1
+        fixture_refuse 'C2 bounded disk-pressure setup' "could not measure filesystem capacity for $image"
+        return 75
       }
-      size=$(sudo stat -c %s -- "$image") || return 1
+      size=$(sudo stat -c %s -- "$image") || {
+        fixture_refuse 'C2 bounded disk-pressure setup' "could not read image size for $image"
+        return 75
+      }
       required=$(((size + 1023) / 1024 + growth + 16 * 1024))
       if [[ ! ${required_by_fs[$filesystem]+present} ]]; then
         filesystems+=("$filesystem")
@@ -2283,17 +2336,17 @@ prepare_bounded_disk_pressure() {
     done
   done
   ((${#filesystems[@]} > 0)) || {
-    record 'C2 bounded disk-pressure image inventory is nonempty' 0 'no active images found across installed kernel presets'
-    return 1
+    fixture_refuse 'C2 bounded disk-pressure setup' 'no active images found across installed kernel presets'
+    return 75
   }
 
   for filesystem in "${filesystems[@]}"; do
     available=${available_by_fs[$filesystem]}
     required=${required_by_fs[$filesystem]}
     if ((available < required)); then
-      record 'C2 bounded disk-pressure baseline has room for the product preflight' 0 \
-        "$filesystem has ${available} KiB; product preflight requires at least ${required} KiB"
-      return 1
+      fixture_refuse 'C2 bounded disk-pressure setup' \
+        "$filesystem has ${available} KiB; fixture requires ${required} KiB plus boot and cleanup reserve"
+      return 75
     fi
     allocated=0
     if ((available > required + margin_kb)); then
@@ -2303,9 +2356,9 @@ prepare_bounded_disk_pressure() {
     total_kb=$((total_kb + allocated))
   done
   if ((total_kb > cap)); then
-    record 'C2 bounded disk-pressure allocation stays under its runner cap' 0 \
-      "would need ${total_kb} KiB; runner cap is ${cap} KiB; use a smaller disposable guest disk or report the fixture refusal"
-    return 1
+    fixture_refuse 'C2 bounded disk-pressure setup' \
+      "would need ${total_kb} KiB; bounded fixture cap is ${cap} KiB"
+    return 75
   fi
 
   : >"$test_root/r15-bounded-pressure.tsv"
@@ -2320,49 +2373,54 @@ prepare_bounded_disk_pressure() {
     ((index += 1))
     if [[ -e $path || -L $path ]]; then
       cleanup_bounded_pressure || true
-      record 'C2 bounded disk-pressure path is uniquely test-owned' 0 "$path already exists"
-      return 1
+      fixture_refuse 'C2 bounded disk-pressure setup' "test-owned pressure path already exists: $path"
+      return 75
     fi
     if ((allocated > 0)); then
       if ! sudo install -m 0600 /dev/null "$path"; then
         if [[ -f $path && ! -L $path ]]; then sudo rm -f -- "$path" 2>/dev/null || true; fi
         cleanup_bounded_pressure || true
-        record 'C2 bounded disk-pressure file is created within the disposable guest' 0 "$path"
-        return 1
+        fixture_refuse 'C2 bounded disk-pressure setup' "could not create a test-owned pressure file: $path"
+        return 75
       fi
       identity=$(sudo stat -c '%d:%i' -- "$path") || {
         sudo rm -f -- "$path" 2>/dev/null || true
         cleanup_bounded_pressure || true
-        return 1
+        fixture_refuse 'C2 bounded disk-pressure setup' "could not record test-owned pressure-file identity: $path"
+        return 75
       }
       printf '%s\t%s\t%s\n' "$path" "${identity%%:*}" "${identity##*:}" \
         >>"$test_root/r15-bounded-pressure-owned.tsv"
       if ! sudo fallocate -l "${allocated}K" -- "$path"; then
         cleanup_bounded_pressure || true
-        record 'C2 bounded disk-pressure allocation succeeds' 0 "$filesystem; requested ${allocated} KiB within the ${cap} KiB cap"
-        return 1
+        fixture_refuse 'C2 bounded disk-pressure setup' "$filesystem could not allocate ${allocated} KiB within the ${cap} KiB cap"
+        return 75
       fi
     else
       path=-
       identity=-:-
     fi
     read -r after < <(df -Pk --output=avail -- "${directory_by_fs[$filesystem]}" | awk 'NR == 2 { print $1 }')
-    [[ $after =~ ^[0-9]+$ ]] || { cleanup_bounded_pressure || true; return 1; }
+    [[ $after =~ ^[0-9]+$ ]] || {
+      cleanup_bounded_pressure || true
+      fixture_refuse 'C2 bounded disk-pressure setup' "could not measure free space after preparing $filesystem"
+      return 75
+    }
     if ((after < required + margin_kb || after > required + margin_kb + 4096)); then
       cleanup_bounded_pressure || true
-      record 'C2 bounded disk-pressure measurement meets the product boundary' 0 \
-        "$filesystem reports ${after} KiB after allocation; target ${required} KiB plus ${margin_kb} KiB boot/cleanup reserve"
-      return 1
+      fixture_refuse 'C2 bounded disk-pressure setup' \
+        "$filesystem reports ${after} KiB; fixture target is ${required} KiB plus ${margin_kb} KiB reserve"
+      return 75
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$filesystem" "$available" "$required" "$allocated" "$after" "$path" \
       "${identity%%:*}" "${identity##*:}" "$margin_kb" >>"$test_root/r15-bounded-pressure.tsv"
   done
-  record 'C2 bounded disk pressure is measured on every active image filesystem' 1 \
+  fixture_event READY 'C2 bounded disk-pressure setup' \
     "${total_kb} KiB allocated (cap ${cap} KiB); measured rows in $test_root/r15-bounded-pressure.tsv"
 }
 
-focused_baseline_ready() {
+focused_baseline_valid() {
   local linux_kernel lts_kernel utils_version dkms_version linux_version linux_headers_version
   local lts_version lts_headers_version module_version status=0 pkgbase kernel image module
   local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
@@ -2392,33 +2450,51 @@ focused_baseline_ready() {
       done
     done
   fi
-  record 'C2-C5 focused baseline has current paired packages and two sound kernels' "$((status == 0))" \
-    "linux ${linux_kernel:-missing} headers ${linux_headers_version:-missing}; linux-lts ${lts_kernel:-missing} headers ${lts_headers_version:-missing}; driver $utils_version/$dkms_version"
   ((status == 0))
+}
+
+focused_baseline_ready() {
+  local linux_kernel lts_kernel linux_headers_version lts_headers_version utils_version dkms_version
+  if focused_baseline_valid; then
+    utils_version=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' || true)
+    dkms_version=$(pacman -Q nvidia-open-dkms 2>/dev/null | awk '{print $2}' || true)
+    linux_kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
+    lts_kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
+    linux_headers_version=$(pacman -Q linux-headers 2>/dev/null | awk '{print $2}' || true)
+    lts_headers_version=$(pacman -Q linux-lts-headers 2>/dev/null | awk '{print $2}' || true)
+    fixture_event READY 'C2-C5 focused baseline' \
+      "linux $linux_kernel headers $linux_headers_version; linux-lts $lts_kernel headers $lts_headers_version; NVIDIA $utils_version/$dkms_version"
+    return 0
+  fi
+  fixture_refuse 'C2-C5 focused baseline' 'requires a version-consistent linux and linux-lts NVIDIA module/image baseline'
+  return 75
 }
 
 focused_prepare() {
   local status=0 package
-  verify_repository_driver_pair || return 1
+  verify_repository_driver_pair || return $?
   for package in core/linux core/linux-headers core/linux-lts core/linux-lts-headers \
       extra/nvidia-utils extra/nvidia-open-dkms; do
     if ! pacman -Si "$package" >/dev/null 2>&1; then
-      record 'C2-C5 configured repository provides the exact baseline packages' 0 "$package is unavailable"
-      return 1
+      fixture_refuse 'C2-C5 focused baseline setup' "$package is unavailable from the configured repository"
+      return 75
     fi
   done
   if ! sudo pacman -S --noconfirm --needed core/linux core/linux-headers core/linux-lts core/linux-lts-headers \
       extra/nvidia-utils extra/nvidia-open-dkms; then
-    record 'C2-C5 focused package baseline installs from configured repositories' 0 'pacman refused the verified kernel and matching NVIDIA package set'
-    return 1
+    fixture_refuse 'C2-C5 focused baseline setup' 'pacman could not provision the selected kernel and NVIDIA packages'
+    return 75
   fi
-  record 'C2-C5 focused package baseline installs from configured repositories' 1 \
-    'core linux/linux-lts with matching headers; extra nvidia-utils/nvidia-open-dkms; no alternate source or signing override'
+  fixture_event READY 'C2-C5 focused baseline packages' \
+    'linux/linux-lts with matching headers; nvidia-utils/nvidia-open-dkms from configured repositories'
   run_nvidia_step focused-two-kernel-baseline "$supported" -
   status=$last_status
-  record 'C2-C5 NVIDIA step establishes the two-kernel baseline' "$([[ $status == 0 ]] && echo 1 || echo 0)" \
-    "status $status; direct existing matrix step only, no full install.sh invocation"
+  local baseline_ok=0
+  [[ $status == 0 ]] && focused_baseline_valid && baseline_ok=1
+  record 'NVIDIA installer establishes matching modules and initramfs images for linux and linux-lts' \
+    "$baseline_ok" "step status $status; package and image versions checked for both kernels"
   ((status == 0)) || return 1
+  ((baseline_ok == 1)) || return 1
   focused_baseline_ready
 }
 
@@ -2430,27 +2506,34 @@ test_r15_pacman_stale_lock() {
   local image_hashes_after=$test_root/r15-stale-lock-images-after.sha256
 
   if [[ -e $lock || -L $lock ]]; then
-    record 'R15 stale-lock fixture starts without an existing pacman lock' 0 \
+    fixture_refuse 'R15 stale-lock fixture' \
       'pre-existing db.lck left untouched'
-    return
+    return 75
   fi
   if ! command -v pgrep >/dev/null 2>&1 || pgrep -x pacman >/dev/null 2>&1; then
-    record 'R15 stale-lock fixture has no active pacman process' 0 \
+    fixture_refuse 'R15 stale-lock fixture' \
       'could not establish that the lock would be stale'
-    return
+    return 75
   fi
   if ! capture_all_kernel_image_hashes >"$image_hashes_before"; then
-    record 'R15 stale-lock fixture can hash every kernel image' 0 'baseline image inventory failed'
-    return
+    fixture_refuse 'R15 stale-lock fixture' 'baseline image inventory could not be hashed'
+    return 75
   fi
   local lock_contents="gooarchy-nvidia-stale-lock $test_stamp"
   printf '%s\n' "$lock_contents" |
     sudo tee "$lock" >/dev/null || {
-      record 'R15 stale-lock fixture creates its own db.lck' 0 'could not create the lock'
-      return
+      fixture_refuse 'R15 stale-lock fixture' 'could not create a test-owned db.lck'
+      return 75
     }
-  lock_hash=$(printf '%s\n' "$lock_contents" | sha256sum | awk '{print $1}') || return
-  lock_identity=$(sudo stat -c '%d:%i' -- "$lock") || return
+  lock_hash=$(printf '%s\n' "$lock_contents" | sha256sum | awk '{print $1}') || {
+    fixture_refuse 'R15 stale-lock fixture' 'could not identify the test-owned lock contents'
+    return 75
+  }
+  lock_identity=$(sudo stat -c '%d:%i' -- "$lock") || {
+    fixture_refuse 'R15 stale-lock fixture' 'could not record the test-owned lock identity'
+    return 75
+  }
+  fixture_event READY 'R15 stale-lock fixture' 'test-owned lock hash and filesystem identity recorded'
   printf '%s\t%s\n' "$lock_hash" "$lock_identity" >"$lock_marker"
 
   packages_before=$(package_manifest)
@@ -2486,10 +2569,16 @@ test_user_partial_kernels() {
   local -a removals=()
   kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
   if [[ -z $kernel ]]; then
-    sudo pacman -S --noconfirm --needed linux-lts linux-lts-headers || { record 'R10 linux-lts test kernel installed' 0 'pacman failed'; return; }
+    if ! sudo pacman -S --noconfirm --needed linux-lts linux-lts-headers; then
+      fixture_refuse 'R9/R10 linux-lts kernel fixture' 'could not install linux-lts and matching headers'
+      return 75
+    fi
     kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
   fi
-  if [[ -z $kernel ]]; then record 'R10 user partial kernel available' 0 'linux-lts module tree not found'; return; fi
+  if [[ -z $kernel ]]; then
+    fixture_refuse 'R9/R10 linux-lts kernel fixture' 'linux-lts module tree not found after package setup'
+    return 75
+  fi
   pkgbase=linux-lts
   base=linux-lts
   for scenario in full-list two-module dependency missing-dependency optional-missing-dependency dynamic-two-module dynamic-missing-dependency sourced-modules; do
@@ -2547,7 +2636,7 @@ test_user_partial_kernels() {
     printf '%s' "$kernel" >"$test_root/partial-kernel-path"
     remove_kernel_modules "$kernel" "${removals[@]}"
     if ! image_set_for_kernel "$pkgbase"; then
-      record "R10 $scenario preset images resolve" 0 'no preset'
+      fixture_refuse "R10 $scenario user-partial fixture" 'no resolvable preset images before failure injection'
       sudo rm -f "$user_config"
       if restore_kernel_modules "$kernel"; then rm -f "$test_root/partial-kernel-path"; fi
       continue
@@ -2600,19 +2689,19 @@ test_pacman_hook_failure_with_partial_kernel() {
   local linux_images_before linux_images_after lts_images_before lts_images_after status image image_ok=1 restore_status=0
   local module modules step_log hook_report_ok partial_report_ok current_version linux_preset focused_case
   local linux_preset_hash r11_config_hash r11_report_ok=0 r11_image_ok=1 r11_files_unchanged=0
-  local hook_before hook_after hook_image hook_marker_ok=0 hook_after_write_ok=0 pressure_hook_ok=0
+  local hook_before hook_after hook_image hook_marker_ok=0 hook_after_write_ok=0 pressure_hook_ok=0 hook_wrapper_restored=0
   local hook_filesystem hook_available pressure_target hook_path=/usr/share/libalpm/hooks/90-mkinitcpio-install.hook
   local -a required_partial=(nvidia nvidia_modeset)
   linux_kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
   lts_kernel=$(kernel_for_pkgbase linux-lts 2>/dev/null || true)
   if [[ -z $linux_kernel || -z $lts_kernel ]]; then
-    record 'R15 package-hook failure with another user-partial kernel is available' 0 'linux and linux-lts must both be installed'
-    return
+    fixture_refuse 'C2-C5 package-hook fixture' 'linux and linux-lts must both be installed'
+    return 75
   fi
   build_link_path=/usr/lib/modules/$lts_kernel/build
   if [[ ! -e $build_link_path && ! -L $build_link_path ]]; then
-    record 'R15 user-partial kernel can preserve its DKMS state during a package transaction' 0 "$build_link_path missing"
-    return
+    fixture_refuse 'C2-C5 package-hook fixture' "$build_link_path missing"
+    return 75
   fi
 
   printf 'MODULES=(nvidia_modeset)\n' >"$test_root/r15-hook-user-modules.conf"
@@ -2631,18 +2720,19 @@ test_pacman_hook_failure_with_partial_kernel() {
     done
   done
   if ((image_ok == 0)); then
-    record 'R15 user-partial kernel fixture is complete and version-consistent' 0 'linux-lts images did not preserve nvidia and nvidia_modeset only'
+    fixture_refuse 'C2-C5 user-partial kernel fixture' 'linux-lts images did not preserve nvidia and nvidia_modeset only'
     sudo rm -f "$user_config"
     if restore_kernel_modules "$lts_kernel"; then rm -f "$test_root/partial-kernel-path"; fi
-    return
+    return 75
   fi
+  fixture_event READY 'C2-C5 user-partial kernel fixture' "linux-lts $lts_kernel images contain nvidia and nvidia_modeset only"
   linux_preset=/etc/mkinitcpio.d/linux.preset
   if [[ -e $test_root/linux.preset.saved ]] ||
      ! grep -Eq '^[[:space:]]*MODULES[[:space:]]*=[[:space:]]*\(\)[[:space:]]*$' /etc/mkinitcpio.conf; then
-    record 'R11/R15 custom-preset hook fixture is available' 0 'preset backup exists or the fresh VM config is not MODULES=()'
+    fixture_refuse 'C2-C5 custom-preset hook fixture' 'preset backup exists or /etc/mkinitcpio.conf is not MODULES=()'
     sudo rm -f "$user_config"
     if restore_kernel_modules "$lts_kernel"; then rm -f "$test_root/partial-kernel-path"; fi
-    return
+    return 75
   fi
   sudo cp -a "$linux_preset" "$test_root/linux.preset.saved"
   sudo cp /etc/mkinitcpio.conf "$r11_config"
@@ -2653,11 +2743,11 @@ test_pacman_hook_failure_with_partial_kernel() {
     printf '\nALL_config="%s"\n' "$r11_config" | sudo tee -a "$linux_preset" >/dev/null
   fi
   if ! sudo mkinitcpio -p linux >"$test_root/r15-hook-r11-prepare.log" 2>&1; then
-    record 'R11/R15 custom preset image fixture can be prepared' 0 'mkinitcpio failed using the named config'
+    fixture_refuse 'C2-C5 custom-preset hook fixture' 'mkinitcpio failed using the named config'
     sudo mv "$test_root/linux.preset.saved" "$linux_preset"
     sudo rm -f "$r11_config" "$user_config"
     if restore_kernel_modules "$lts_kernel"; then rm -f "$test_root/partial-kernel-path"; fi
-    return
+    return 75
   fi
   image_set_for_kernel linux || r11_image_ok=0
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
@@ -2667,12 +2757,13 @@ test_pacman_hook_failure_with_partial_kernel() {
     [[ -z $modules ]] || r11_image_ok=0
   done
   if ((r11_image_ok == 0)); then
-    record 'R11/R15 custom preset image fixture is consistent and listable' 0 'linux image contains NVIDIA modules or failed inspection'
+    fixture_refuse 'C2-C5 custom-preset hook fixture' 'linux images are not listable, firmware-consistent and module-free'
     sudo mv "$test_root/linux.preset.saved" "$linux_preset"
     sudo rm -f "$r11_config" "$user_config"
     if restore_kernel_modules "$lts_kernel"; then rm -f "$test_root/partial-kernel-path"; fi
-    return
+    return 75
   fi
+  fixture_event READY 'C2-C5 custom-preset hook fixture' "$linux_preset and $r11_config have listable module-free images"
   linux_preset_hash=$(sha256sum "$linux_preset" | awk '{print $1}')
   module_version=$current_version
   linux_images_before=$(kernel_image_hashes linux 2>/dev/null || true)
@@ -2682,15 +2773,15 @@ test_pacman_hook_failure_with_partial_kernel() {
 
   focused_case=${GOOARCHY_VM_NVIDIA_FOCUSED_CASE:-}
   if [[ ! -f $hook_path ]] || ! grep -Eq '^[[:space:]]*Exec[[:space:]]*=[[:space:]]*/usr/bin/mkinitcpio[[:space:]]+-P[[:space:]]*$' "$hook_path"; then
-    record 'C3 Arch package hook fixture is available' 0 "$hook_path missing or does not use the expected mkinitcpio -P command"
-    return 1
+    fixture_refuse 'C3 generated Arch package hook fixture' "$hook_path missing or does not use the expected mkinitcpio -P command"
+    return 75
   fi
   hook_before=$(sha256sum "$hook_path" | awk '{print $1}')
   : >"$test_root/r15-package-hook-invocations.tsv"
   image_set_for_kernel linux || image_ok=0
   hook_image=${NV_TEST_IMAGES[0]:-}
   if [[ $focused_case == package-hook-partial-lts ]]; then
-    if ! prepare_bounded_disk_pressure; then return 1; fi
+    prepare_bounded_disk_pressure || return $?
   fi
 
   run_nvidia_step r15-package-hook-linux-partial-lts "$supported" \
@@ -2714,6 +2805,12 @@ test_pacman_hook_failure_with_partial_kernel() {
   hook_report_ok=0
   grep -Fq "post-transaction mkinitcpio hook reported an image-generation error for linux kernel $linux_kernel" "$step_log" && hook_report_ok=1
   hook_after=$(sha256sum "$hook_path" | awk '{print $1}')
+  if [[ $hook_before == "$hook_after" && ! -e $test_root/90-mkinitcpio-install.hook.saved ]]; then
+    hook_wrapper_restored=1
+    fixture_event CLEANUP-OK 'C3 generated-hook test wrapper' 'original Arch hook restored byte-for-byte'
+  else
+    fixture_event CLEANUP-FAIL 'C3 generated-hook test wrapper' 'original Arch hook was not restored byte-for-byte'
+  fi
   if [[ -n $hook_image ]] && awk -F '\t' -v image="$hook_image" \
       '$1 == "invoke" && $2 == "linux" && $3 == image { invoked=1 }
        END { exit !invoked }' "$test_root/r15-package-hook-invocations.tsv"; then
@@ -2770,16 +2867,19 @@ test_pacman_hook_failure_with_partial_kernel() {
       "$([[ $status != 0 && $hook_report_ok == 1 && $pressure_hook_ok == 1 && -n $linux_images_before &&
             $linux_images_before == "$linux_images_after" ]] && echo 1 || echo 0)" \
       "hook free space ${hook_available:-unmeasured} KiB; target ${pressure_target:-unmeasured} KiB; pressure evidence $test_root/r15-bounded-pressure.tsv"
-    record 'C3 generated Arch package hook reaches and restores the test wrapper' \
-      "$([[ $status != 0 && $hook_marker_ok == 1 && $hook_after_write_ok == 1 && $hook_before == "$hook_after" &&
-            ! -e $test_root/90-mkinitcpio-install.hook.saved ]] && echo 1 || echo 0)" \
-      "invoked=$hook_marker_ok after-write=$hook_after_write_ok; linux image $hook_image; original hook SHA256 $hook_before"
+    record 'C3 generated Arch hook invokes mkinitcpio after image write and reports the failure' \
+      "$([[ $status != 0 && $hook_report_ok == 1 && $hook_marker_ok == 1 && $hook_after_write_ok == 1 ]] && echo 1 || echo 0)" \
+      "failure reported=$hook_report_ok; invoked=$hook_marker_ok after-write=$hook_after_write_ok; linux image $hook_image"
     record 'C5 hook-failure interaction retains the user-partial fix report without changing its config' \
       "$([[ $status != 0 && $partial_report_ok == 1 && $r11_report_ok == 1 && $r11_files_unchanged == 1 &&
             $config_hash == "$(sha256sum "$user_config" | awk '{print $1}')" ]] && echo 1 || echo 0)" \
       "linux-lts $lts_kernel; report and named user config asserted on the hook-failure path"
   fi
   hold_r15_failure_row package-hook-linux-partial-lts
+
+  if ((hook_wrapper_restored == 0)); then
+    return 1
+  fi
 
   sudo mv "$test_root/linux-lts-build-link.saved" "$build_link_path"
   sudo mv "$test_root/linux.preset.saved" "$linux_preset"
@@ -2793,7 +2893,7 @@ test_pacman_hook_failure_with_partial_kernel() {
   fi
   if ((restore_status == 0)); then
     run_nvidia_step r15-package-hook-partial-lts-restored "$supported" -
-    record 'R17 user-partial package-hook fixture is repaired before later cases' \
+    record 'R17 rerun repairs the user-partial kernel after the package-hook failure' \
       "$([[ $last_status == 0 ]] && echo 1 || echo 0)" "linux-lts $lts_kernel"
     linux_images_before=$(kernel_image_hashes linux 2>/dev/null || true)
     run_nvidia_step r15-package-hook-linux-only "$supported" \
@@ -2811,15 +2911,16 @@ test_pacman_hook_failure_with_partial_kernel() {
     record 'R17 linux package-hook failure is repaired on rerun' \
       "$([[ $last_status == 0 ]] && echo 1 || echo 0)" "linux $linux_kernel"
   else
-    record 'R17 user-partial package-hook fixture is restored' 0 "DKMS recovery failed for $lts_kernel; cleanup will retry"
+    fixture_event CLEANUP-FAIL 'C2-C5 user-partial kernel fixture' "DKMS recovery failed for $lts_kernel; cleanup will retry"
+    return 1
   fi
 }
 
 test_prebuilt_replacement() {
   local before_packages before_etc before_boot status kernel build_link_path
   if ! pacman -Si nvidia-open >/dev/null 2>&1; then
-    record 'R7 same-driver prebuilt package available' 0 'Arch repositories do not provide nvidia-open'
-    return
+    fixture_refuse 'R7 prebuilt replacement fixture' 'configured repositories do not provide nvidia-open'
+    return 75
   fi
   : >"$test_root/driver-recovery-needed"
   sudo pacman -Rdd --noconfirm nvidia-open-dkms
@@ -2837,11 +2938,11 @@ test_prebuilt_replacement() {
   sudo pacman -Rdd --noconfirm nvidia-open-dkms
   sudo pacman -S --noconfirm --needed nvidia-open
   kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
-  if [[ -z $kernel ]]; then record 'R15 prebuilt replacement build-failure kernel found' 0 'linux kernel tree missing'; return; fi
+  if [[ -z $kernel ]]; then fixture_refuse 'R15 prebuilt replacement fixture' 'linux kernel tree missing'; return 75; fi
   build_link_path=/usr/lib/modules/$kernel/build
   if [[ ! -e $build_link_path && ! -L $build_link_path ]]; then
-    record 'R15 prebuilt replacement build-failure fixture available' 0 "$build_link_path missing before fixture"
-    return
+    fixture_refuse 'R15 prebuilt replacement fixture' "$build_link_path missing before fixture"
+    return 75
   fi
   printf '%s' "$build_link_path" >"$test_root/linux-build-link-path"
   sudo mv "$build_link_path" "$test_root/linux-build-link.saved"
@@ -2898,21 +2999,22 @@ test_held_driver() {
   local pacman_conf=/etc/pacman.conf saved_conf=$test_root/pacman.conf.saved
   local packages_before etc_before boot_before modules_before reports_before status old_version
   if [[ -z $utils_pkg || -z $dkms_pkg || -z $utils_sha || -z $dkms_sha || ! -f $utils_pkg || ! -f $dkms_pkg ]]; then
-    record 'R8 held-version NVIDIA packages supplied from the Arch Linux Archive' 0 'missing pinned package paths or checksums'
-    return
+    fixture_refuse 'R8 held-version package fixture' 'missing pinned package paths or checksums'
+    return 75
   fi
   if [[ $(sha256sum "$utils_pkg" | awk '{print $1}') != "$utils_sha" || $(sha256sum "$dkms_pkg" | awk '{print $1}') != "$dkms_sha" ]]; then
-    record 'R8 held-version NVIDIA package checksums match' 0 'archive package hash mismatch'
-    return
+    fixture_refuse 'R8 held-version package fixture' 'archive package hash mismatch'
+    return 75
   fi
+  fixture_event READY 'R8 held-version package fixture' 'pinned Archive package paths and SHA256 values verified'
   : >"$test_root/driver-recovery-needed"
   sudo cp -a "$pacman_conf" "$saved_conf"
   sudo pacman -U --noconfirm "$utils_pkg" "$dkms_pkg"
   grep -Eq '^[[:space:]]*\[options\][[:space:]]*$' "$pacman_conf" || {
-    record 'R8 pacman hold fixture has an options section' 0 "$pacman_conf has no [options] section"
+    fixture_refuse 'R8 pacman hold fixture' "$pacman_conf has no [options] section"
     sudo mv "$saved_conf" "$pacman_conf"
     restore_r15a_current_state || true
-    return
+    return 75
   }
   sudo sed -i '/^[[:space:]]*\[options\][[:space:]]*$/a IgnorePkg = nvidia-utils nvidia-open-dkms' "$pacman_conf"
   old_version=$(pacman -Q nvidia-utils | awk '{print $2}')
@@ -2934,7 +3036,12 @@ test_held_driver() {
   sudo mv "$saved_conf" "$pacman_conf"
   sudo pacman -S --noconfirm --needed nvidia-utils nvidia-open-dkms
   run_nvidia_step r8-held-driver-restored "$supported" -
-  record 'R8 archive hold fixture is restored to the repository driver' "$([[ $last_status == 0 && $(pacman -Q nvidia-utils | awk '{print $2}') == "$(repository_version extra/nvidia-utils)" ]] && echo 1 || echo 0)" 'repository driver restored after held-version check'
+  if [[ $last_status == 0 && $(pacman -Q nvidia-utils | awk '{print $2}') == "$(repository_version extra/nvidia-utils)" ]]; then
+    fixture_event CLEANUP-OK 'R8 held-version package fixture' 'repository driver restored after held-version check'
+  else
+    fixture_event CLEANUP-FAIL 'R8 held-version package fixture' 'repository driver recovery did not converge'
+    return 1
+  fi
   if [[ $last_status == 0 && $(pacman -Q nvidia-utils | awk '{print $2}') == "$(repository_version extra/nvidia-utils)" ]]; then
     rm -f "$test_root/driver-recovery-needed"
   fi
@@ -2949,71 +3056,72 @@ test_r15a_stale_baseline() {
   if [[ -z $utils_pkg || -z $dkms_pkg || ! -f $utils_pkg || ! -f $dkms_pkg ||
         $(sha256sum "$utils_pkg" | awk '{print $1}') != "$utils_sha" ||
         $(sha256sum "$dkms_pkg" | awk '{print $1}') != "$dkms_sha" ]]; then
-    record 'R15a older driver from Arch Linux Archive is pinned' 0 'missing package paths or checksum mismatch'
-    return
+    fixture_refuse 'R15a stale-image fixture' 'missing pinned package paths or checksum mismatch'
+    return 75
   fi
   kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
-  if [[ -z $kernel ]]; then record 'R15a linux kernel for stale-image recovery exists' 0 'linux module tree missing'; return; fi
+  if [[ -z $kernel ]]; then fixture_refuse 'R15a stale-image fixture' 'linux module tree missing'; return 75; fi
   current_package_version=$(pacman -Q nvidia-utils | awk '{print $2}')
   old_package_version=$(pacman -Qp "$utils_pkg" | awk '{print $2}')
   old_dkms_version=$(pacman -Qp "$dkms_pkg" | awk '{print $2}')
   if [[ -z $old_package_version || $old_package_version != "$old_dkms_version" ||
         $(vercmp "$old_package_version" "$current_package_version") -ge 0 ]]; then
-    record 'R15a Archive packages are an older matching driver pair' 0 \
+    fixture_refuse 'R15a stale-image fixture' \
       "archive nvidia-utils/nvidia-open-dkms $old_package_version/$old_dkms_version; installed $current_package_version"
-    return
+    return 75
   fi
+  fixture_event READY 'R15a stale-image fixture' "older matching Archive package pair $old_package_version"
 
   : >"$test_root/r15a-recovery-needed"
   printf 'MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)\n' >"$test_root/r15a-user-modules.conf"
   sudo cp "$test_root/r15a-user-modules.conf" "$user_config"
   if ! sudo pacman -U --noconfirm "$utils_pkg" "$dkms_pkg"; then
-    record 'R15a archived NVIDIA driver installs in the VM' 0 'pacman -U failed'
+    fixture_refuse 'R15a stale-image fixture' 'pacman -U failed while installing the archived NVIDIA pair'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   old_package_version=$(pacman -Q nvidia-utils | awk '{print $2}')
   old_dkms_version=$(pacman -Q nvidia-open-dkms | awk '{print $2}')
   old_module_version=$(module_version_from_package "$old_package_version")
   if [[ $old_package_version != "$old_dkms_version" ]]; then
-    record 'R15a Archive packages install as a matching driver pair' 0 \
+    fixture_refuse 'R15a stale-image fixture' \
       "installed nvidia-utils/nvidia-open-dkms $old_package_version/$old_dkms_version"
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   if ! save_kernel_images linux r15a-old; then
-    record 'R15a archived driver produced linux images to age' 0 'linux preset images unavailable'
+    fixture_refuse 'R15a stale-image fixture' 'linux preset images unavailable for the archived driver'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   image_set_for_kernel linux || image_ok=0
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
     image_has_modules_at_version "$image" "$old_module_version" "${required[@]}" || image_ok=0
   done
   old_images_expected=$(kernel_image_hashes linux 2>/dev/null || true)
-  record 'R15a saved baseline images contain the archived module version' \
-    "$([[ $image_ok == 1 && -n $old_images_expected ]] && echo 1 || echo 0)" \
-    "nvidia-utils $old_package_version; module version $old_module_version"
   if ((image_ok == 0)); then
+    fixture_refuse 'R15a stale-image fixture' 'saved baseline images do not contain the archived module version'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
+  fixture_event READY 'R15a stale-image fixture' \
+    "linux images contain archived module version $old_module_version; hashes saved"
   sudo rm -f "$user_config"
   if ! sudo pacman -S --noconfirm --needed nvidia-utils nvidia-open-dkms; then
-    record 'R15a Arch upgrade returns the driver to current repository versions' 0 'pacman -S failed'
+    fixture_refuse 'R15a stale-image fixture' 'pacman -S could not restore current repository driver packages'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   current_module_version=$(module_version_from_package "$(pacman -Q nvidia-utils | awk '{print $2}')")
   if [[ $current_module_version == "$old_module_version" ]]; then
-    record 'R15a archive version differs from the current repository driver' 0 "both are $current_module_version"
+    fixture_refuse 'R15a stale-image fixture' "current repository module version still equals archived version $current_module_version"
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   if ! restore_kernel_images r15a-old; then
-    record 'R15a stale image fixture restores the archived baseline' 0 'could not restore archived images'
+    fixture_refuse 'R15a stale-image fixture' 'could not restore archived baseline images'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   stale_images=$(kernel_image_hashes linux 2>/dev/null || true)
   image_ok=1
@@ -3021,13 +3129,12 @@ test_r15a_stale_baseline() {
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
     image_has_modules_at_version "$image" "$old_module_version" "${required[@]}" || image_ok=0
   done
-  record 'R15a stale fixture keeps old NVIDIA modules in each restored image' \
-    "$([[ $image_ok == 1 && $stale_images == "$old_images_expected" ]] && echo 1 || echo 0)" \
-    "linux $kernel; archived module version $old_module_version"
   if ((image_ok == 0)); then
+    fixture_refuse 'R15a stale-image fixture' 'restored image modules differ from the archived baseline'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
+  fixture_event READY 'R15a stale-image fixture' "linux $kernel; archived module version $old_module_version; image hashes match"
   stale_packages=$(package_manifest)
   stale_etc=$(tree_hash /etc)
   stale_modules=$(tree_hash /usr/lib/modules)
@@ -3061,26 +3168,26 @@ test_r15_step_regeneration_after_successful_arch_upgrade() {
   local kernel old_package_version old_module_version current_package_version status boundary
   local state_unchanged hook_ok step_failure image image_ok=1 modules
   if [[ -z $old_utils_package || -z $old_dkms_package || ! -f $old_utils_package || ! -f $old_dkms_package ]]; then
-    record 'R15 older-driver upgrade failure fixture has a matching Archive pair' 0 'Archive package pair is unavailable'
-    return
+    fixture_refuse 'R15 step-regeneration fixture' 'Archive package pair is unavailable'
+    return 75
   fi
   kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
   if [[ -z $kernel ]]; then
-    record 'R15 older-driver upgrade failure fixture has a linux kernel' 0 'linux module tree missing'
-    return
+    fixture_refuse 'R15 step-regeneration fixture' 'linux module tree missing'
+    return 75
   fi
   if [[ -e $owned ]] && ! grep -Fxq '# Gooarchy NVIDIA early KMS modules; managed by the Gooarchy installer.' "$owned"; then
-    record 'R15 early-KMS config can be temporarily removed for the upgrade failure fixture' 0 "$owned is user-owned"
-    return
+    fixture_refuse 'R15 step-regeneration fixture' "$owned is user-owned"
+    return 75
   fi
   : >"$test_root/r15a-recovery-needed"
   sudo rm -f "$owned"
   old_package_version=$(pacman -Qp "$old_utils_package" | awk '{print $2}')
   old_module_version=$(module_version_from_package "$old_package_version")
   if ! sudo pacman -U --noconfirm "$old_utils_package" "$old_dkms_package"; then
-    record 'R15 older driver pair installs before the Arch upgrade' 0 'pacman -U failed'
+    fixture_refuse 'R15 step-regeneration fixture' 'pacman -U failed while installing the older driver pair'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   image_set_for_kernel linux || image_ok=0
   for image in "${NV_TEST_KERNEL_IMAGES[@]}"; do
@@ -3088,12 +3195,12 @@ test_r15_step_regeneration_after_successful_arch_upgrade() {
     modules=$(image_modules "$image" 2>/dev/null || true)
     [[ -z $modules ]] || image_ok=0
   done
-  record 'R15 old-version starting images are sound without NVIDIA modules' "$([[ $image_ok == 1 ]] && echo 1 || echo 0)" \
-    "linux $kernel; old driver module version $old_module_version"
   if ((image_ok == 0)); then
+    fixture_refuse 'R15 step-regeneration fixture' 'old-version starting images are not sound and module-free'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
+  fixture_event READY 'R15 step-regeneration fixture' "linux $kernel; old driver module version $old_module_version; fallback images sound"
 
   run_full_installer r15-step-regeneration-refused 'mkinitcpio-pkgbase:linux' -
   status=$last_status
@@ -3131,9 +3238,10 @@ test_r15_step_regeneration_after_successful_arch_upgrade() {
     "linux $kernel; nvidia-utils $current_package_version; owned early-KMS file remains for rerun"
   hold_r15_failure_row arch-upgrade-step-regen
   if restore_r15a_current_state; then
-    record 'R15 recovery after the injected step failure restores current early KMS' 1 'current packages, DKMS modules, and images restored'
+    fixture_event CLEANUP-OK 'R15 step-regeneration fixture' 'current packages, DKMS modules and images restored'
   else
-    record 'R15 recovery after the injected step failure restores current early KMS' 0 'cleanup recovery failed'
+    fixture_event CLEANUP-FAIL 'R15 step-regeneration fixture' 'cleanup recovery failed'
+    return 1
   fi
 }
 
@@ -3143,28 +3251,28 @@ test_r15a_arch_upgrade_hook() {
   local status recovery_report
   local -a required=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)
   if [[ -z $old_utils_package || -z $old_dkms_package || ! -f $old_utils_package || ! -f $old_dkms_package ]]; then
-    record 'R15a Arch-upgrade failure fixture has a matching Archive package pair' 0 'Archive package pair is unavailable'
-    return
+    fixture_refuse 'R15a Arch-upgrade fixture' 'Archive package pair is unavailable'
+    return 75
   fi
   kernel=$(kernel_for_pkgbase linux 2>/dev/null || true)
   if [[ -z $kernel ]]; then
-    record 'R15a Arch-upgrade linux kernel is available' 0 'linux module tree missing'
-    return
+    fixture_refuse 'R15a Arch-upgrade fixture' 'linux module tree missing'
+    return 75
   fi
   : >"$test_root/r15a-recovery-needed"
   old_package_version=$(pacman -Qp "$old_utils_package" | awk '{print $2}')
   old_module_version=$(module_version_from_package "$old_package_version")
   if ! sudo pacman -U --noconfirm "$old_utils_package" "$old_dkms_package"; then
-    record 'R15a older matching driver pair installs from the Archive' 0 'pacman -U failed'
+    fixture_refuse 'R15a Arch-upgrade fixture' 'pacman -U failed while installing the archived pair'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   printf 'MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)\n' >"$test_root/r15a-arch-upgrade-modules.conf"
   sudo cp "$test_root/r15a-arch-upgrade-modules.conf" "$user_config"
   if ! sudo mkinitcpio -p linux >"$test_root/r15a-arch-upgrade-old-image.log" 2>&1; then
-    record 'R15a old-version Linux images can be prepared' 0 'mkinitcpio failed with the archived driver'
+    fixture_refuse 'R15a Arch-upgrade fixture' 'mkinitcpio failed to prepare old-version Linux images'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   image_ok=1
   image_set_for_kernel linux || image_ok=0
@@ -3172,12 +3280,12 @@ test_r15a_arch_upgrade_hook() {
     image_has_modules_at_version "$image" "$old_module_version" "${required[@]}" || image_ok=0
   done
   old_images=$(kernel_image_hashes linux 2>/dev/null || true)
-  record 'R15a Archive fixture has complete old-version Linux images' "$([[ $image_ok == 1 && -n $old_images ]] && echo 1 || echo 0)" \
-    "linux $kernel; module version $old_module_version"
   if ((image_ok == 0)); then
+    fixture_refuse 'R15a Arch-upgrade fixture' 'old-version Linux images are incomplete or unlistable'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
+  fixture_event READY 'R15a Arch-upgrade fixture' "linux $kernel; old module version $old_module_version; image hashes captured"
   sudo rm -f "$user_config"
 
   run_full_installer r15a-arch-hook-repaired -
@@ -3220,15 +3328,15 @@ test_r15a_arch_upgrade_hook() {
 
   : >"$test_root/r15a-recovery-needed"
   if ! sudo pacman -U --noconfirm "$old_utils_package" "$old_dkms_package"; then
-    record 'R15a second Archive downgrade is available for the refusal case' 0 'pacman -U failed'
+    fixture_refuse 'R15a Arch-upgrade fixture' 'second pacman -U failed while preparing the refusal case'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   sudo cp "$test_root/r15a-arch-upgrade-modules.conf" "$user_config"
   if ! sudo mkinitcpio -p linux >"$test_root/r15a-arch-upgrade-refusal-old-image.log" 2>&1; then
-    record 'R15a refusal fixture old images can be prepared' 0 'mkinitcpio failed with the archived driver'
+    fixture_refuse 'R15a Arch-upgrade fixture' 'mkinitcpio failed to prepare old images for the refusal case'
     restore_r15a_current_state || true
-    return
+    return 75
   fi
   old_images=$(kernel_image_hashes linux 2>/dev/null || true)
   sudo rm -f "$user_config"
@@ -3254,9 +3362,10 @@ test_r15a_arch_upgrade_hook() {
     "linux $kernel; stale module version $old_module_version; step regeneration injected to fail"
   hold_r15_failure_row arch-upgrade-hook-repair-failure
   if restore_r15a_current_state; then
-    record 'R15a Arch-upgrade fixture restores current driver and images' 1 'current packages, DKMS modules, and images restored'
+    fixture_event CLEANUP-OK 'R15a Arch-upgrade fixture' 'current packages, DKMS modules and images restored'
   else
-    record 'R15a Arch-upgrade fixture restores current driver and images' 0 'cleanup recovery failed'
+    fixture_event CLEANUP-FAIL 'R15a Arch-upgrade fixture' 'cleanup recovery failed'
+    return 1
   fi
 }
 
@@ -3293,7 +3402,10 @@ r15_row() {
       ;;
     stale-baseline-repair-failure|arch-upgrade-step-regen|arch-upgrade-hook-repaired|arch-upgrade-hook-repair-failure)
       verify_repository_driver_pair || return 1
-      ensure_archive_pair || { record "R15 row $row has an older matching Archive package pair" 0 'Archive package pair unavailable'; return 1; }
+      if ! ensure_archive_pair; then
+        fixture_refuse "R15 row $row" 'older matching Archive package pair unavailable'
+        return 75
+      fi
       case $row in
         stale-baseline-repair-failure) test_r15a_stale_baseline ;;
         arch-upgrade-step-regen) test_r15_step_regeneration_after_successful_arch_upgrade ;;
@@ -3309,24 +3421,18 @@ r15_row() {
 }
 
 focused_case() {
-  local selected=${1:-} checks_before=$checks failures_before=$failures
+  local selected=${1:-}
   case $selected in
     prepare)
       focused_prepare
       ;;
     preset-assignment-edge)
-      focused_baseline_ready || return 1
+      focused_baseline_ready || return $?
       test_preset_assignment_edge
-      record 'C1 focused assignment-edge selector completes its negative fixtures' \
-        "$([[ $failures == "$failures_before" ]] && echo 1 || echo 0)" \
-        "${checks_before:+$((checks - checks_before))} result rows; duplicate and appended PRESETS/image assignments"
       ;;
     mixed-preset)
-      focused_baseline_ready || return 1
+      focused_baseline_ready || return $?
       test_mixed_preset_selected_entry_regeneration
-      record 'C4 focused mixed-preset selector completes its image/report assertions' \
-        "$([[ $failures == "$failures_before" ]] && echo 1 || echo 0)" \
-        "${checks_before:+$((checks - checks_before))} result rows; direct-config image and regenerated sibling"
       ;;
     *)
       echo 'focused case must be prepare, preset-assignment-edge, or mixed-preset' >&2

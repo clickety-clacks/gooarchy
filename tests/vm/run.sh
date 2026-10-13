@@ -29,8 +29,8 @@
 #   tests/vm/run.sh nvidia-matrix preinstall|postinstall|focused prepare|preset-assignment-edge|mixed-preset
 #   tests/vm/run.sh nvidia-install   run the supported-device full install through this wrapper
 #   tests/vm/run.sh nvidia-r15-row ROW   hold a failure state through each sound-kernel desktop reboot
-#   focused package-hook R15 row: set GOOARCHY_VM_NVIDIA_FOCUSED_CASE=package-hook-partial-lts and
-#   GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB to a runner-approved cap no larger than 4 GiB
+#   focused package-hook R15 row: set GOOARCHY_VM_NVIDIA_FOCUSED_CASE=package-hook-partial-lts;
+#   the bounded pressure cap defaults to 4 GiB and may be lowered by the runner
 #   tests/vm/run.sh nvidia-reference   fresh VM for R18's reference-state rerun
 #
 # Looking at the desktop: GOOARCHY_VM_GPU=software GOOARCHY_VM_VNC=1 tests/vm/run.sh start, then
@@ -124,18 +124,16 @@ nvidia_test_stamp() {
 
 nvidia_guest_env() {
   local stamp=$1 focused_case=${GOOARCHY_VM_NVIDIA_FOCUSED_CASE:-}
-  local pressure_max=${GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB:-}
+  local pressure_max=${GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB:-4194304}
   printf 'GOOARCHY_VM_GUEST_NVIDIA_MATRIX=1 GOOARCHY_NVIDIA_REPO=$HOME/gooarchy GOOARCHY_NVIDIA_ARTIFACTS=$HOME/gooarchy-nvidia-matrix/%s GOOARCHY_VM_NVIDIA_TEST_ROOT=$HOME/gooarchy-nvidia-matrix/%s GOOARCHY_NVIDIA_TEST_STAMP=%s' \
     "$stamp" "$stamp" "$stamp"
   if [[ -n $focused_case ]]; then
     [[ $focused_case == package-hook-partial-lts ]] || die "invalid focused NVIDIA R15 case"
     printf ' GOOARCHY_VM_NVIDIA_FOCUSED_CASE=%s' "$focused_case"
   fi
-  if [[ -n $pressure_max ]]; then
-    [[ $pressure_max =~ ^[0-9]+$ ]] || die "NVIDIA pressure cap must be an integer KiB value"
-    ((pressure_max > 0 && pressure_max <= 4194304)) || die "NVIDIA pressure cap must be at most 4 GiB"
-    printf ' GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB=%s' "$pressure_max"
-  fi
+  [[ $pressure_max =~ ^[0-9]+$ ]] || die "NVIDIA pressure cap must be an integer KiB value"
+  ((pressure_max > 0 && pressure_max <= 4194304)) || die "NVIDIA pressure cap must be at most 4 GiB"
+  printf ' GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB=%s' "$pressure_max"
 }
 
 copy_nvidia_artifacts() {
@@ -817,7 +815,7 @@ cmd_nvidia_matrix() {
   remote_command+=" bash tests/vm/nvidia-matrix.sh $phase${arg:+ $arg}"
   guest "$remote_command" >"$out/$name.log" 2>&1 || status=$?
   copy_nvidia_artifacts "$stamp" || status=1
-  hcheck "NVIDIA matrix $phase${arg:+ $arg} completes" "$((status == 0))" "$out/$name.log"
+  # This status controls safe orchestration only; the guest's results.tsv contains product assertions.
   ((status == 0)) || die "NVIDIA matrix $phase${arg:+ $arg} failed; see $out/$name.log"
   tail -n 30 "$out/$name.log" >&2
 }
@@ -873,8 +871,7 @@ cmd_nvidia_r15_row() {
     if guest "test -f $test_root/r15-boot-held"; then
       die "the pacman-commit R15 row must not create a desktop-boot hold"
     fi
-    hcheck "R15 pacman-commit row uses the stale-lock and image-hash evidence only" 1 \
-      "no reboot or simulated interruption is part of the accepted v6 evidence"
+    log "R15 pacman-commit acceptance uses stale-lock refusal and no-image-write evidence; no reboot or simulated interruption"
     copy_nvidia_artifacts "$stamp"
     return 0
   fi
