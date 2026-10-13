@@ -23,20 +23,10 @@ cleanup() {
 trap cleanup EXIT
 export TMPDIR="$test_root"
 
-for command_name in bsdtar curl gpg git jq pacman python3 repo-add sha256sum vercmp zstd; do
-  command -v "$command_name" >/dev/null 2>&1 || {
-    echo "repository-publish-test: required command is missing: $command_name" >&2
-    exit 1
-  }
-done
 real_pacman=$(command -v pacman)
 original_path=$PATH
 test_wayfire_package_version=0.11.0-1
 if ((stage1_consumer)); then
-  command -v sudo >/dev/null 2>&1 || {
-    echo "repository-publish-test: sudo is required for stage 1 package integration" >&2
-    exit 1
-  }
   if ! sudo "$real_pacman" -Syy --noconfirm >"$test_root/arch-refresh.log" 2>&1; then
     cat "$test_root/arch-refresh.log" >&2
     echo "repository-publish-test: could not refresh Arch package databases for installer integration" >&2
