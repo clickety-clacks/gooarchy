@@ -87,6 +87,9 @@ nvidia_collect_devices() {
       [[ $boot == 1 ]] && NV_BUILTIN_BOOT=1
     fi
   done < <(nvidia_detect_devices)
+  # A false boot_vga check on the final device leaves the loop body with status 1. Keep
+  # set -e callers from treating a normal non-boot NVIDIA device as a failed discovery.
+  return 0
 }
 
 nvidia_list() {
