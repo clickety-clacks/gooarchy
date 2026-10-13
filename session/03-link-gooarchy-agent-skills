@@ -18,6 +18,11 @@ link_skill() {
 for harness in "$HOME/.agents" "$HOME/.claude" "$HOME/.codex" "$HOME/.pi/agent" "$HOME/.hermes" "$HOME"/.hermes/profiles/*; do
   [ -d "$harness" ] || continue
   mkdir -p "$harness/skills"
+  saved=$harness/skills/.gooarchy-preserved-scottland-link
+  if [ -L "$saved" ]; then
+    ln -sfn "$(readlink "$saved")" "$harness/skills/scottland"
+    rm -- "$saved"
+  fi
   link_skill "$scottland_src" "$harness/skills/scottland"
   link_skill "$gooarchy_src" "$harness/skills/gooarchy"
 done

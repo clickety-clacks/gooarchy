@@ -1,0 +1,15 @@
+#!/bin/sh
+# Scottland's 02-link-agent-skills replaces symlinks. Remember a user's custom Scottland skill
+# link so Gooarchy's 03 hook can restore it after the core hook runs.
+stock=${GOOARCHY_SCOTTLAND_SKILL_DIR:-/usr/share/scottland/agents/skills/scottland}
+for harness in "$HOME/.agents" "$HOME/.claude" "$HOME/.codex" "$HOME/.pi/agent" "$HOME/.hermes" "$HOME"/.hermes/profiles/*; do
+  [ -d "$harness" ] || continue
+  link=$harness/skills/scottland
+  saved=$harness/skills/.gooarchy-preserved-scottland-link
+  [ -L "$link" ] || continue
+  target=$(readlink "$link")
+  [ "$target" = "$stock" ] && continue
+  if [ ! -e "$saved" ] || [ -L "$saved" ]; then
+    ln -sfn "$target" "$saved"
+  fi
+done
