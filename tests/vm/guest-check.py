@@ -331,6 +331,14 @@ def save_session_log(name):
 # ---- the checks -----------------------------------------------------------------------------
 
 def main():
+    portal_info = run("pacman", "-Qi", "xdg-desktop-portal-wlr-gooarchy")
+    check("the Gooarchy portal provider is installed from the signed repository",
+          "Packager        : Gooarchy" in portal_info and "Validated By    : Signature" in portal_info,
+          portal_info[:240])
+    arch_portal_rc, arch_portal = run_rc("pacman", "-Q", "xdg-desktop-portal-wlr")
+    check("Arch's portal package is absent after Gooarchy installs its provider",
+          arch_portal_rc != 0, arch_portal)
+
     log("waiting for the Scottland session on tty1")
     env = wait_for(session_env, timeout=180, interval=2)
     if not check("a Scottland session is running (autologin on tty1 -> start-scottland)", env):

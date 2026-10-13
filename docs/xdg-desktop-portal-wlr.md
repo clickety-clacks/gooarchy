@@ -5,7 +5,7 @@ Scottland sends screen sharing and screenshot requests to xdg-desktop-portal-wlr
 Wayfire: in Scottland's portal test the stream froze after one frame or the portal was
 disconnected in most runs (4 of 6 on 2026-10-06; Omarchy's package mirror then served 0.8.2,
 which failed 3 of 6). Two small fixes remove both failures (20 of 20 runs with this package). We
-maintain them in our own public fork, and Gooarchy builds its package `xdg-desktop-portal-wlr-gooarchy`
+maintain them in our own public fork, and publish the `xdg-desktop-portal-wlr-gooarchy` package
 (`packaging/arch/xdg-desktop-portal-wlr/`) from the fork's tagged releases.
 
 ## The fork
@@ -50,13 +50,13 @@ Upstream context, for reading upstream changes against the fork:
 
 ## Delivery
 
-- **Gooarchy:** the base repository upgrade runs first and may install Scottland, pulling Arch's
-  `xdg-desktop-portal-wlr` as a dependency. `install/packaging/xdg-desktop-portal-wlr.sh` then
-  builds Gooarchy's package from this checkout and replaces Arch's before the later Scottland
-  source build and user/session setup; the installer says which package it replaced. Later
-  `pacman -Syu` runs keep Gooarchy's build because Arch's package doesn't declare that it replaces
-  it.
-  Running `./install.sh` again rebuilds it. Screen sharing also needs Scottland's
+- **Gooarchy:** signed repository setup requires `xdg-desktop-portal-wlr-gooarchy` to be present.
+  `install/packaging/xdg-desktop-portal-wlr.sh` installs that exact repository version before the
+  later Scottland source build and user/session setup, replacing Arch's conflicting package when
+  present. It reports the old and new versions, why the signed Gooarchy package is selected, and how
+  to restore the prior package. Later `pacman -Syu` runs update the package from the same signed
+  repository; rerunning `install.sh` does not build it locally.
+  Screen sharing also needs Scottland's
   `scottland-portals.conf`. Gooarchy main selects the final Scottland tag `v0.3.0`, whose annotated
   tag object `d8e7880b2040753a865357b64671962d922582a3` resolves to commit
   `2d6a42f2bd6ef9971c9e314bda9e9a6f2ec77064`. That source installs the config as
@@ -74,10 +74,8 @@ Upstream context, for reading upstream changes against the fork:
   prints what it replaced, with what, and why. Re-running setup with the pinned version installed
   does nothing.
 
-## Moving to a package repository
+## Repository updates
 
-Gooarchy has no package repository yet (DEFICIT.md, "Package repository"), so both paths compile
-this package on the user's machine. **Once a Gooarchy package repository exists, both must
-migrate to installing `xdg-desktop-portal-wlr-gooarchy` from it** (ruling 2026-10-06): the
-installer step and the Scottland Omarchy adapter's setup stop building it, and Omarchy-adapter
-users get updates of it through pacman instead of re-running setup.
+Gooarchy installs and updates `xdg-desktop-portal-wlr-gooarchy` from its signed package repository.
+The Scottland Omarchy adapter keeps its separately pinned recipe/build path until that adapter's
+owner migrates it; this Gooarchy change does not switch the adapter.
