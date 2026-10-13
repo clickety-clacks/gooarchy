@@ -523,9 +523,9 @@ for pin_case in commit branch; do
     exit 1
   fi
   if [[ $pin_case == commit ]]; then
-    expected_pin_error='commit pins are reserved for the unchanged current Scottland default'
+    expected_pin_error='the fixed Scottland pin kind must be tag or branch'
   else
-    expected_pin_error='Gooarchy main publication requires a final Scottland version tag or the unchanged current fixed pin'
+    expected_pin_error='Gooarchy main publication requires a final Scottland version tag; commit pins and branches are not supported'
   fi
   grep -Fq "$expected_pin_error" "$test_root/nonfinal-scottland-$pin_case.err" || {
     echo "repository-publish-test: non-final Scottland $pin_case pin had no clear refusal" >&2
