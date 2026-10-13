@@ -43,7 +43,6 @@ package() {
   install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
   install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
   install -Dm644 "$_repo/agents/skills/gooarchy/SKILL.md" "$pkgdir/usr/share/gooarchy/agents/skills/gooarchy/SKILL.md"
-  install -Dm755 "$_repo/session/01-preserve-agent-skill-links" "$pkgdir/usr/lib/scottland/autostart.d/01-preserve-agent-skill-links"
   install -Dm755 "$_repo/session/03-link-gooarchy-agent-skills" "$pkgdir/usr/lib/scottland/autostart.d/03-link-gooarchy-agent-skills"
   install -Dm755 "$srcdir/target/release/gooarchy" "$pkgdir/usr/bin/gooarchy"
   install -Dm644 "$_repo/system-tools/LICENSE-omarchy" "$pkgdir/usr/share/licenses/gooarchy/LICENSE-omarchy"
