@@ -134,7 +134,7 @@ fi
 rm -f -- "$refresh_conf"
 trap - EXIT
 
-for package in gooarchy gooarchy-flavorings scottland; do
+for package in gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-gooarchy; do
   sync_package_field "$package" Version >/dev/null ||
     fail_repository "the Gooarchy repository at $repository_url did not provide $package after refresh; no package was installed or built."
 done
@@ -210,8 +210,8 @@ fi
 scottland_target=
 if ((local_scottland == 0)); then scottland_target=gooarchy/scottland; fi
 
-# Save the pre-upgrade Gooarchy package state. pacman -Syu runs before the final source selection
-# and can itself replace a local package with a newer repository copy.
+# Save the pre-upgrade package state. The later base step runs pacman -Syu and can replace local
+# packages or upgrade signed repository copies before the individual consumer steps report them.
 previous_gooarchy_installed=0
 previous_gooarchy_repository_copy=0
 previous_gooarchy_version=
@@ -233,6 +233,20 @@ if package_is_installed gooarchy-flavorings; then
   previous_flavorings_installed=1
   previous_flavorings_version=$(installed_package_version gooarchy-flavorings)
   package_is_repository_copy gooarchy-flavorings && previous_flavorings_repository_copy=1
+fi
+previous_portal_installed=0
+previous_portal_repository_copy=0
+previous_portal_version=
+previous_arch_portal_installed=0
+previous_arch_portal_version=
+if package_is_installed xdg-desktop-portal-wlr-gooarchy; then
+  previous_portal_installed=1
+  previous_portal_version=$(installed_package_version xdg-desktop-portal-wlr-gooarchy)
+  package_is_repository_copy xdg-desktop-portal-wlr-gooarchy && previous_portal_repository_copy=1
+fi
+if package_is_installed xdg-desktop-portal-wlr; then
+  previous_arch_portal_installed=1
+  previous_arch_portal_version=$(installed_package_version xdg-desktop-portal-wlr)
 fi
 
 plan_tmp=$GOOARCHY_STATE/repository-plan.sh.$$
@@ -257,6 +271,11 @@ plan_tmp=$GOOARCHY_STATE/repository-plan.sh.$$
   printf 'GOOARCHY_PREVIOUS_FLAVORINGS_INSTALLED=%q\n' "$previous_flavorings_installed"
   printf 'GOOARCHY_PREVIOUS_FLAVORINGS_REPOSITORY_COPY=%q\n' "$previous_flavorings_repository_copy"
   printf 'GOOARCHY_PREVIOUS_FLAVORINGS_VERSION=%q\n' "$previous_flavorings_version"
+  printf 'GOOARCHY_PREVIOUS_PORTAL_INSTALLED=%q\n' "$previous_portal_installed"
+  printf 'GOOARCHY_PREVIOUS_PORTAL_REPOSITORY_COPY=%q\n' "$previous_portal_repository_copy"
+  printf 'GOOARCHY_PREVIOUS_PORTAL_VERSION=%q\n' "$previous_portal_version"
+  printf 'GOOARCHY_PREVIOUS_ARCH_PORTAL_INSTALLED=%q\n' "$previous_arch_portal_installed"
+  printf 'GOOARCHY_PREVIOUS_ARCH_PORTAL_VERSION=%q\n' "$previous_arch_portal_version"
   printf 'GOOARCHY_PREVIOUS_GOOARCHY_SOURCE_COMMIT=%q\n' "$previous_gooarchy_source_commit"
 } >"$plan_tmp"
 mv -f -- "$plan_tmp" "$GOOARCHY_STATE/repository-plan.sh"

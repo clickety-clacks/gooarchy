@@ -12,7 +12,10 @@ installed_package_version() {
 }
 
 package_is_installed() {
-  pacman -Qq "$1" >/dev/null 2>&1
+  # pacman -Q NAME accepts a package name or one of its Provides entries. Installer state here
+  # tracks exact installed packages, so inspect the package-name list instead of resolving a
+  # virtual name through Provides.
+  pacman -Qq 2>/dev/null | awk -v wanted="$1" '$0 == wanted { found=1 } END { exit !found }'
 }
 
 package_is_repository_copy() {
