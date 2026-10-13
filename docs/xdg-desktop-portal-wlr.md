@@ -50,11 +50,12 @@ Upstream context, for reading upstream changes against the fork:
 
 ## Delivery
 
-- **Gooarchy:** `install/packaging/xdg-desktop-portal-wlr.sh` builds the package from this checkout
-  and installs it before Scottland, whose package depends on `xdg-desktop-portal-wlr`; this
-  package provides that name, so Scottland's dependency never pulls Arch's broken one. If Arch's
-  is already installed, it is replaced in the same pacman transaction and the installer says so.
-  `pacman -Syu` keeps Gooarchy's build: Arch's package doesn't declare that it replaces it.
+- **Gooarchy:** the base repository upgrade runs first and may install Scottland, pulling Arch's
+  `xdg-desktop-portal-wlr` as a dependency. `install/packaging/xdg-desktop-portal-wlr.sh` then
+  builds Gooarchy's package from this checkout and replaces Arch's before the later Scottland
+  source build and user/session setup; the installer says which package it replaced. Later
+  `pacman -Syu` runs keep Gooarchy's build because Arch's package doesn't declare that it replaces
+  it.
   Running `./install.sh` again rebuilds it. Screen sharing also needs Scottland's
   `scottland-portals.conf`. Gooarchy main selects the final Scottland tag `v0.3.0`, whose annotated
   tag object `d8e7880b2040753a865357b64671962d922582a3` resolves to commit

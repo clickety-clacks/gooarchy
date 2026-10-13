@@ -3,11 +3,11 @@
 # (packaging/arch/xdg-desktop-portal-wlr, docs/xdg-desktop-portal-wlr.md). Arch's own 0.8.4 loses
 # most shared streams under Wayfire.
 #
-# Built from this checkout and installed before Scottland, whose package depends on
-# xdg-desktop-portal-wlr: this build provides it, so the dependency never pulls Arch's.
-# If Arch's xdg-desktop-portal-wlr is already installed (an earlier install, or by hand), it is
-# replaced in the same pacman transaction, and the replacement is printed here and in the install
-# log. Arch's package doesn't declare that it replaces this one, so pacman -Syu leaves it in place.
+# The base repository upgrade runs first and may install Scottland, pulling Arch's
+# xdg-desktop-portal-wlr as a dependency. Replace that package with this Gooarchy build before the
+# later Scottland source build and user/session setup. The replacement is printed here and in the
+# install log. Arch's package doesn't declare that it replaces this one, so later pacman -Syu runs
+# leave Gooarchy's build in place.
 # Once Gooarchy has a package repository, install the package from it instead of building it here.
 source "$GOOARCHY_INSTALL/helpers/packages.sh"
 name=xdg-desktop-portal-wlr-gooarchy
