@@ -336,9 +336,11 @@ def main():
     check("the Gooarchy portal provider is installed from the signed repository",
           "Packager        : Gooarchy" in portal_info and "Validated By    : Signature" in portal_info,
           portal_info[:240])
-    arch_portal_rc, arch_portal = run_rc("pacman", "-Q", "xdg-desktop-portal-wlr")
+    installed_packages_rc, installed_packages = run_rc("pacman", "-Qq")
+    arch_portal_installed = "xdg-desktop-portal-wlr" in installed_packages.splitlines()
     check("Arch's portal package is absent after Gooarchy installs its provider",
-          arch_portal_rc != 0, arch_portal)
+          installed_packages_rc == 0 and not arch_portal_installed,
+          f"pacman -Qq rc={installed_packages_rc}, exact package present={arch_portal_installed}")
 
     log("waiting for the Scottland session on tty1")
     env = wait_for(session_env, timeout=180, interval=2)

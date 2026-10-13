@@ -10,7 +10,8 @@ source "$repo_root/install/sources.conf"
 [[ $GOOARCHY_SCOTTLAND_REF == "$GOOARCHY_SCOTTLAND_PIN_REF" ]]
 
 # Exercise the portal consumer against a pacman model that reports package origin/signature,
-# resolves and downloads the exact signed-repository version, and applies pacman -U conflicts.
+# resolves package names through Provides, downloads the exact signed-repository version, and
+# applies pacman -U conflicts.
 # No makepkg implementation is available to the consumer; a call to it is a product failure.
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -29,7 +30,22 @@ cat >"$tmp/bin/pacman" <<'EOF'
 set -euo pipefail
 printf '%s\n' "$*" >>"$PORTAL_TEST_CALLS"
 state=$PORTAL_TEST_INSTALLED
-find_package() { awk -F '\t' -v name="$1" '$1 == name { print; exit }' "$state"; }
+find_package() {
+  local row
+  row=$(awk -F '\t' -v name="$1" '$1 == name { print; exit }' "$state")
+  if [[ -n $row ]]; then
+    printf '%s\n' "$row"
+    return 0
+  fi
+  # pacman -Q NAME resolves a package's Provides entry and reports the real package.
+  awk -F '\t' -v name="$1" '{
+    count = split($4, provided, ",")
+    for (i = 1; i <= count; i++) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", provided[i])
+      if (provided[i] == name) { print; exit }
+    }
+  }' "$state"
+}
 repo_version=$PORTAL_TEST_REPO_VERSION
 case $1 in
   -Qq)
@@ -50,7 +66,7 @@ case $1 in
   -Qi)
     row=$(find_package "$2")
     [[ -n $row ]] || exit 1
-    IFS=$'\t' read -r name version origin <<<"$row"
+    IFS=$'\t' read -r name version origin provides <<<"$row"
     case $origin in
       gooarchy) packager=Gooarchy; validated='Signature' ;;
       arch) packager='Arch Linux'; validated='Signature' ;;
@@ -95,7 +111,7 @@ case $1 in
     tmp_state=$state.new
     awk -F '\t' '$1 != "xdg-desktop-portal-wlr" && $1 != "xdg-desktop-portal-wlr-gooarchy"' \
       "$state" >"$tmp_state"
-    printf '%s\t%s\tgooarchy\n' "$name" "$repo_version" >>"$tmp_state"
+    printf '%s\t%s\tgooarchy\txdg-desktop-portal-wlr\n' "$name" "$repo_version" >>"$tmp_state"
     mv "$tmp_state" "$state"
     ;;
   *)
@@ -163,7 +179,7 @@ portal_version=0.8.4.gooarchy.1-1
 local_install_version() {
   local label=$1 old_version=$2
   export EXPECT_INSTALL=1
-  run_consumer "$label" "xdg-desktop-portal-wlr-gooarchy\t$old_version\tlocal"
+  run_consumer "$label" "xdg-desktop-portal-wlr-gooarchy\t$old_version\tlocal\txdg-desktop-portal-wlr"
   grep -Fq "local package xdg-desktop-portal-wlr-gooarchy $old_version" "$tmp/$label.out"
   grep -Fq "signed Gooarchy xdg-desktop-portal-wlr-gooarchy $portal_version" "$tmp/$label.out"
   grep -Fq 'because Gooarchy' "$tmp/$label.out"
@@ -197,10 +213,24 @@ grep -Fq "signed Gooarchy xdg-desktop-portal-wlr-gooarchy $portal_version" "$tmp
 grep -Fq 'run sudo pacman -S xdg-desktop-portal-wlr' "$tmp/arch-existing.out"
 unset EXPECT_INSTALL
 
+# A Gooarchy package Provides the Arch package name, so named pacman queries resolve to the
+# Gooarchy package even though the Arch package itself is absent. The installer must distinguish
+# exact package names from this virtual-name match on ordinary reruns.
+export EXPECT_INSTALL=0
+run_consumer provider-alias "xdg-desktop-portal-wlr-gooarchy\t$portal_version\tgooarchy\txdg-desktop-portal-wlr"
+[[ $(pacman -Qq xdg-desktop-portal-wlr) == xdg-desktop-portal-wlr-gooarchy ]]
+[[ $(pacman -Q xdg-desktop-portal-wlr) == "xdg-desktop-portal-wlr-gooarchy $portal_version" ]]
+source "$GOOARCHY_INSTALL/helpers/repository.sh"
+! package_is_installed xdg-desktop-portal-wlr
+package_is_installed xdg-desktop-portal-wlr-gooarchy
+! grep -q -- '-U ' "$PORTAL_TEST_CALLS"
+! grep -q -- '-Sw ' "$PORTAL_TEST_CALLS"
+unset EXPECT_INSTALL
+
 # R22: after the ordinary repository upgrade advances an already signed copy, the consumer stays
 # on that exact version without downloading or rebuilding a second copy.
 export PORTAL_TEST_REPO_VERSION=0.8.4.gooarchy.2-1
-printf '%s\t%s\tgooarchy\n' xdg-desktop-portal-wlr-gooarchy 0.8.4.gooarchy.2-1 >"$PORTAL_TEST_INSTALLED"
+printf '%s\t%s\tgooarchy\txdg-desktop-portal-wlr\n' xdg-desktop-portal-wlr-gooarchy 0.8.4.gooarchy.2-1 >"$PORTAL_TEST_INSTALLED"
 # repository.sh captured the prior installed version before pacman -Syu; the state above is the
 # package after that normal upgrade.
 export GOOARCHY_BUILD="$tmp/build/repository-upgrade"
