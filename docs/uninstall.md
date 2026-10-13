@@ -59,6 +59,9 @@ Removing the packages also removes what they own: `/etc/profile.d/gooarchy-sessi
 tty1 session start), `/etc/profile.d/gooarchy-flavorings.sh`, `/etc/tmux.conf`,
 `/etc/xdg/scottland-mimeapps.list`, `/usr/lib/gooarchy/`, `/usr/share/gooarchy/` and the Gooarchy
 hooks and config fragments under `/usr/lib/scottland/`.
+The per-user `gooarchy` and `scottland` skill links under existing agent directories may remain;
+remove only links that still point to `/usr/share/gooarchy/agents/skills/gooarchy` or
+`/usr/share/scottland/agents/skills/scottland` if you no longer want them.
 If you edited `/etc/tmux.conf`, pacman keeps your edited copy as `/etc/tmux.conf.pacsave`.
 
 ## 2. The package repository and key

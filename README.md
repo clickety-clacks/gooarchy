@@ -9,6 +9,10 @@ screen's edges, and a window dropped on a side rail becomes a widget. Gooarchy i
 clean on plain Arch Linux. Nothing is borrowed to fill a gap: Gooarchy has no bar yet, so it has no
 bar. Everything missing is listed in [DEFICIT.md](DEFICIT.md), found by using the built system.
 
+The Gooarchy package installs the [Gooarchy agent skill](agents/skills/gooarchy/SKILL.md). The
+Scottland package supplies its separate `scottland` skill. Gooarchy links both for the installing
+user and at later logins; it does not install the Scottland Omarchy-adapter skill.
+
 ![Gooarchy in the VM test: a terminal in the center, Chromium scaled down in the periphery, Strata as a widget on the right rail](docs/screenshots/vm-desktop.webp)
 
 ## Current state: pre-alpha
