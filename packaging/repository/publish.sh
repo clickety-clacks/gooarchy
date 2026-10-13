@@ -186,13 +186,8 @@ scottland_ref=$GOOARCHY_SCOTTLAND_REF
 if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag &&
   $scottland_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   scottland_source_label="Scottland tag:$scottland_ref"
-elif [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == commit &&
-  $GOOARCHY_SCOTTLAND_PIN_KIND == commit &&
-  $scottland_ref == "$GOOARCHY_SCOTTLAND_LEGACY_PIN_REF" &&
-  -z ${GOOARCHY_SCOTTLAND_REF_KIND:-} ]]; then
-  scottland_source_label='Scottland unchanged current pin'
 else
-  die "Gooarchy main publication requires a final Scottland version tag or the unchanged current fixed pin; commit overrides and branches are not supported."
+  die "Gooarchy main publication requires a final Scottland version tag; commit pins and branches are not supported."
 fi
 
 if [[ ${recipe_for[gooarchy-flavorings]+present} &&
