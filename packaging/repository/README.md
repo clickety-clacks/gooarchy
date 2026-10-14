@@ -6,6 +6,13 @@ immutable transfer and creates detached signatures for every package and the dat
 qualified uploader verifies the signed transfer and uploads the complete GitHub Release. Never run
 the retired `publish.sh` command on a package builder.
 
+The installer defaults to `https://gooarchy.com/gooarchy.db`; an explicit
+`GOOARCHY_REPOSITORY_URL` may select another mirror. The matching public key and
+fingerprint are committed at `packaging/keys/gooarchy.asc` and
+`packaging/keys/gooarchy.fingerprint`. Package production verifies that pair before
+using the key to validate any existing release. Private signing material is not
+part of the source tree.
+
 ## Produce the transfer
 
 From a clean Gooarchy `main` checkout on x86_64 Arch, the package builder runs:
@@ -91,6 +98,9 @@ role-specific commands. Do not restore the single-machine build/sign/upload flow
 
 ## Checks and remaining acceptance
 
+`tests/repository-config-source-test.sh` checks the default URL, explicit mirror override,
+committed public-key fingerprint, and fail-closed empty Flavorings `_tag` without host or credential
+access.
 `tests/repository-publish-test.sh` exercises the transfer, primary and backup signing, role separation,
 and upload behavior with synthetic package/database records, a throwaway OpenPGP key, and a local
 Releases-shaped service. It covers complete initial contents, manifest and payload hashes,
