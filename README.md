@@ -15,8 +15,9 @@ bar. Everything missing is listed in [DEFICIT.md](DEFICIT.md), found by using th
 
 The install script is prepared to consume Gooarchy's signed package repository. Package files will
 live in GitHub Releases on `clickety-clacks/gooarchy`, with `gooarchy.com` redirecting each file
-request to the matching asset. Plumbus builds the packages and repository database; Racter signs
-and uploads them using the private signing key held in 1Password. The installer still has a placeholder repository URL and public key, and no signed package
+request to the matching asset. Plumbus builds the packages and repository database; Racter normally
+signs and uploads them, with Plumbus available as a backup signer. The private key is held in
+1Password. The installer still has a placeholder repository URL and public key, and no signed package
 release has been published, so it stops before installing or upgrading packages. There is no
 installer ISO or update channel, and no hardware support beyond what Arch and Mesa give. It is for
 trying the desktop and for building the distro, not for daily use.
