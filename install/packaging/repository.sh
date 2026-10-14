@@ -1,6 +1,7 @@
 # Prepare the signed Gooarchy repository before any package is installed or upgraded.
 source "$GOOARCHY_INSTALL/helpers/logging.sh"
 source "$GOOARCHY_INSTALL/helpers/repository.sh"
+source "$GOOARCHY_INSTALL/helpers/repository-url.sh"
 
 fail_repository() {
   echo "Gooarchy can't install here: $*" >&2
@@ -17,6 +18,8 @@ repository_url=${GOOARCHY_REPOSITORY_URL%/}
 case $repository_url in
   *\\*) fail_repository "the Gooarchy repository address must not contain backslashes." ;;
 esac
+repository_server=$(gooarchy_pacman_server "$repository_url") ||
+  fail_repository "the Gooarchy repository address must be a full URL ending in /gooarchy.db."
 
 fingerprint_file=$GOOARCHY_PATH/packaging/keys/gooarchy.fingerprint
 key_file=$GOOARCHY_PATH/packaging/keys/gooarchy.asc
@@ -64,7 +67,7 @@ report "Trusted Gooarchy repository key $fingerprint. To undo: sudo pacman-key -
 config_tmp=$(mktemp)
 root_config_tmp=/etc/.pacman.conf.gooarchy.$$
 trap 'rm -f -- "$config_tmp"; sudo rm -f -- "$root_config_tmp"' EXIT
-awk -v url="$repository_url" '
+awk -v url="$repository_server" '
   $0 == "# Gooarchy installer repository" { marker_pending = 1; next }
   /^\[gooarchy\][[:space:]]*(#.*)?$/ { marker_pending = 0; in_repo = 1; next }
   /^\[[^]]+\][[:space:]]*(#.*)?$/ {
@@ -98,12 +101,12 @@ old_server=$(awk '
 if ! cmp -s "$config_tmp" "$pacman_conf"; then
   sudo install -o root -g root -m 0644 "$config_tmp" "$root_config_tmp"
   sudo mv -f -- "$root_config_tmp" "$pacman_conf"
-  report "Added [gooarchy] at $repository_url with package signatures required. To undo: remove the [gooarchy] section from /etc/pacman.conf."
-  if [[ -n $old_server && $old_server != "$repository_url" ]]; then
-    report "Updated the installer-managed [gooarchy] Server from $old_server to $repository_url."
+  report "Added [gooarchy] at $repository_server for database $repository_url with package signatures required. To undo: remove the [gooarchy] section from /etc/pacman.conf."
+  if [[ -n $old_server && $old_server != "$repository_server" ]]; then
+    report "Updated the installer-managed [gooarchy] Server from $old_server to $repository_server."
   fi
 else
-  report "[gooarchy] already points at $repository_url with package signatures required."
+  report "[gooarchy] already points at $repository_server for database $repository_url with package signatures required."
 fi
 rm -f -- "$config_tmp"
 config_tmp=
@@ -117,7 +120,7 @@ SigLevel = Required TrustedOnly
 
 [gooarchy]
 SigLevel = PackageRequired DatabaseOptional
-Server = $repository_url
+Server = $repository_server
 EOF
 trap 'rm -f -- "$refresh_conf"' EXIT
 if ! sudo pacman --config "$refresh_conf" -Syy --noconfirm; then
