@@ -13,11 +13,13 @@ bar. Everything missing is listed in [DEFICIT.md](DEFICIT.md), found by using th
 
 ## Current state: pre-alpha
 
-The install script is prepared to consume Gooarchy's signed package repository. Its address and key
-are still placeholders while hosting and key custody are undecided, so it stops before installing or
-upgrading packages until they are configured. There is no public package repository, installer ISO
-or update channel, and no hardware support beyond what Arch and Mesa give. It is for trying the
-desktop and for building the distro, not for daily use.
+The installer defaults to Gooarchy's signed package repository at `https://gooarchy.com/gooarchy.db`
+and trusts the committed public key with fingerprint
+`F56B5368815D6C607C41265A69FCC98C28CD08EC`. The endpoint and trust identity are configured, but no
+signed package release has been published yet, so package installation and upgrades are not ready
+until a complete signed release is available. There is no installer ISO or update channel, and no
+hardware support beyond what Arch and Mesa give. It is for trying the desktop and for building the
+distro, not for daily use.
 
 What you get:
 
