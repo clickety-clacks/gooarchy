@@ -51,10 +51,22 @@ override_server=$(bash --noprofile --norc -c 'source "$1"; gooarchy_pacman_serve
   printf 'mirror Pacman Server directory was not derived from the database URL: %s\n' "$override_server" >&2
   exit 1
 }
-if bash --noprofile --norc -c 'source "$1"; gooarchy_pacman_server "$2"' _ "$url_helper" https://mirror.example.invalid/repository; then
-  echo 'a directory-only mirror URL must not be accepted as a database URL' >&2
+directory_override=https://mirror.example.invalid/repository
+directory_server=$(bash --noprofile --norc -c 'source "$1"; gooarchy_pacman_server "$2"' _ "$url_helper" "$directory_override")
+[[ $directory_server == "$directory_override" ]] || {
+  printf 'directory-style mirror override changed from %s to %s\n' "$directory_override" "$directory_server" >&2
   exit 1
-fi
+}
+directory_database_url=$(bash --noprofile --norc -c 'source "$1"; gooarchy_repository_database_url "$2"' _ "$url_helper" "$directory_override")
+[[ $directory_database_url == https://mirror.example.invalid/repository/gooarchy.db ]] || {
+  printf 'directory-style mirror did not resolve to its repository database: %s\n' "$directory_database_url" >&2
+  exit 1
+}
+database_url=$(bash --noprofile --norc -c 'source "$1"; gooarchy_repository_database_url "$2"' _ "$url_helper" "$resolved_url")
+[[ $database_url == "$expected_url" ]] || {
+  printf 'full database URL changed during resolution: %s\n' "$database_url" >&2
+  exit 1
+}
 
 [[ -s $public_key ]] || { echo 'committed public key is missing' >&2; exit 1; }
 if grep -q '^Placeholder:' "$public_key" "$fingerprint_file"; then

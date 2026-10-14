@@ -19,7 +19,9 @@ case $repository_url in
   *\\*) fail_repository "the Gooarchy repository address must not contain backslashes." ;;
 esac
 repository_server=$(gooarchy_pacman_server "$repository_url") ||
-  fail_repository "the Gooarchy repository address must be a full URL ending in /gooarchy.db."
+  fail_repository "the Gooarchy repository address must be a database URL or Pacman Server directory using https://, http:// or file://."
+repository_database_url=$(gooarchy_repository_database_url "$repository_url") ||
+  fail_repository "the Gooarchy repository address could not be resolved to a database URL."
 
 fingerprint_file=$GOOARCHY_PATH/packaging/keys/gooarchy.fingerprint
 key_file=$GOOARCHY_PATH/packaging/keys/gooarchy.asc
@@ -101,12 +103,12 @@ old_server=$(awk '
 if ! cmp -s "$config_tmp" "$pacman_conf"; then
   sudo install -o root -g root -m 0644 "$config_tmp" "$root_config_tmp"
   sudo mv -f -- "$root_config_tmp" "$pacman_conf"
-  report "Added [gooarchy] at $repository_server for database $repository_url with package signatures required. To undo: remove the [gooarchy] section from /etc/pacman.conf."
+  report "Added [gooarchy] at $repository_server for database $repository_database_url with package signatures required. To undo: remove the [gooarchy] section from /etc/pacman.conf."
   if [[ -n $old_server && $old_server != "$repository_server" ]]; then
     report "Updated the installer-managed [gooarchy] Server from $old_server to $repository_server."
   fi
 else
-  report "[gooarchy] already points at $repository_server for database $repository_url with package signatures required."
+  report "[gooarchy] already points at $repository_server for database $repository_database_url with package signatures required."
 fi
 rm -f -- "$config_tmp"
 config_tmp=
@@ -124,11 +126,11 @@ Server = $repository_server
 EOF
 trap 'rm -f -- "$refresh_conf"' EXIT
 if ! sudo pacman --config "$refresh_conf" -Syy --noconfirm; then
-  fail_repository "the Gooarchy repository at $repository_url could not be reached during pacman database refresh; no package was installed or built."
+  fail_repository "the Gooarchy repository database at $repository_database_url could not be reached during pacman refresh; no package was installed or built."
 fi
 if ! sudo pacman -Syy --noconfirm; then
   if ! sudo pacman --config "$refresh_conf" -Syy --noconfirm; then
-    fail_repository "the Gooarchy repository at $repository_url could not be reached during pacman database refresh; no package was installed or built."
+    fail_repository "the Gooarchy repository database at $repository_database_url could not be reached during pacman refresh; no package was installed or built."
   fi
   rm -f -- "$refresh_conf"
   trap - EXIT

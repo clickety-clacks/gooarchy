@@ -39,19 +39,24 @@ def package_filename(name: str, version: str) -> str:
 
 
 def create_package(path: Path, name: str, version: str) -> None:
-    pkgver, pkgrel = version.rsplit("-", 1)
     pkginfo = (
         f"pkgname = {name}\n"
-        f"pkgver = {pkgver}\n"
-        f"pkgrel = {pkgrel}\n"
+        f"pkgbase = {name}\n"
+        "xdata = pkgtype=pkg\n"
+        f"pkgver = {version}\n"
+        f"pkgdesc = Synthetic {name} package\n"
+        "builddate = 0\n"
+        "size = 1\n"
         "arch = any\n"
         "packager = Gooarchy\n"
     ).encode()
-    with tarfile.open(path, "w") as archive:
-        import io
+    tar_bytes = io.BytesIO()
+    with tarfile.open(fileobj=tar_bytes, mode="w") as archive:
         member = tarfile.TarInfo(".PKGINFO")
         member.size = len(pkginfo)
         archive.addfile(member, io.BytesIO(pkginfo))
+    compressed = subprocess.run(["zstd", "-q", "-c"], input=tar_bytes.getvalue(), check=True, capture_output=True)
+    path.write_bytes(compressed.stdout)
 
 
 def create_database(path: Path, packages: dict[str, tuple[str, str]]) -> None:
@@ -140,29 +145,9 @@ class RepositoryTransferTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="gooarchy-transfer-test-")
         self.root = Path(self.temp.name)
-        self.old_package_info = protocol.package_info
-        protocol.package_info = lambda path: self.read_package_info(path)
 
     def tearDown(self) -> None:
-        protocol.package_info = self.old_package_info
         self.temp.cleanup()
-
-    @staticmethod
-    def read_package_info(path: Path) -> dict[str, str]:
-        with tarfile.open(path, "r:*") as archive:
-            content = archive.extractfile(".PKGINFO")
-            if content is None:
-                raise ValueError("fixture has no .PKGINFO")
-            fields = {}
-            for line in content.read().decode().splitlines():
-                key, value = line.split(" = ", 1)
-                fields[key] = value
-        return {
-            "name": fields["pkgname"],
-            "version": f"{fields['pkgver']}-{fields['pkgrel']}",
-            "arch": fields["arch"],
-            "packager": fields["packager"],
-        }
 
     def verify(self, bundle: Path, manifest_hash: str) -> dict[str, Any]:
         return protocol.load_and_verify_bundle(bundle, manifest_hash, FINGERPRINT)
@@ -175,6 +160,11 @@ class RepositoryTransferTests(unittest.TestCase):
         self.assertEqual(observed["source_tree"], TREE)
         self.assertEqual(len(observed["packages"]), 6)
         self.assertEqual({item["name"] for item in observed["packages"]}, protocol.REQUIRED_INITIAL)
+
+    def test_pkginfo_version_uses_full_arch_pkgver_field(self) -> None:
+        path = self.root / package_filename("gooarchy", "2:1.2.3-4")
+        create_package(path, "gooarchy", "2:1.2.3-4")
+        self.assertEqual(protocol.package_info(path)["version"], "2:1.2.3-4")
 
     def test_manifest_writer_binds_source_tree_and_package_records(self) -> None:
         versions = {name: "1.0.0-1" for name in NAMES}

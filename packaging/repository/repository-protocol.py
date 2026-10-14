@@ -83,16 +83,12 @@ def package_info(path: Path) -> dict[str, str]:
             continue
         key, value = line.split(" = ", 1)
         fields.setdefault(key, []).append(value)
-    for field in ("pkgname", "pkgver", "pkgrel", "arch", "packager"):
+    for field in ("pkgname", "pkgver", "arch", "packager"):
         if len(fields.get(field, [])) != 1 or not fields[field][0]:
             fail(f"{path.name} must contain exactly one non-empty {field} field")
-    epoch = fields.get("epoch", ["0"])[0]
-    version = f"{fields['pkgver'][0]}-{fields['pkgrel'][0]}"
-    if epoch not in {"", "0"}:
-        version = f"{epoch}:{version}"
     return {
         "name": fields["pkgname"][0],
-        "version": version,
+        "version": fields["pkgver"][0],
         "arch": fields["arch"][0],
         "packager": fields["packager"][0],
     }
