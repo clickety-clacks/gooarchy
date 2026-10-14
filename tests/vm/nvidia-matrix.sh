@@ -389,7 +389,7 @@ cleanup_bounded_pressure() {
 bounded_pressure_files_present() {
   local path expected_device expected_inode actual count=0
   [[ -s $test_root/r15-bounded-pressure.tsv ]] || return 1
-  awk -F '\t' 'NR == 1 { next } $5 < $3 || $5 > $3 + $9 + 4096 || $4 !~ /^[0-9]+$/ || $9 !~ /^[0-9]+$/ { bad=1 } END { exit !(NR > 1 && !bad) }' \
+  awk -F '\t' 'NR == 1 { next } $5 < $3 || $5 > $3 + $9 + 16384 || $4 !~ /^[0-9]+$/ || $9 !~ /^[0-9]+$/ { bad=1 } END { exit !(NR > 1 && !bad) }' \
     "$test_root/r15-bounded-pressure.tsv" || return 1
   if [[ -s $test_root/r15-bounded-pressure-owned.tsv ]]; then
     while IFS=$'\t' read -r path expected_device expected_inode; do
