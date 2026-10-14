@@ -750,7 +750,7 @@ nvidia_report_package_hook_failure_details() {
     else
       nvidia_report_direct_config_hook_failure "$kernel"
     fi
-    nvidia_report "pacman's post-transaction mkinitcpio step failed or left invalid image output for ${NV_PKGBASE[$kernel]} kernel $kernel: $failure. $restore_note Resolve the reported issue and rerun before relying on this kernel."
+    nvidia_report "pacman's post-transaction mkinitcpio hook reported an image-generation error for ${NV_PKGBASE[$kernel]} kernel $kernel (the step failed or left invalid image output): $failure. $restore_note Resolve the reported issue and rerun before relying on this kernel."
   done
   if [[ -n ${NV_PACKAGE_HOOK_FAILURES[unknown]:-} ]]; then
     nvidia_report "pacman's post-transaction mkinitcpio hook failed or left invalid output for an image that could not be matched to an installed kernel: ${NV_PACKAGE_HOOK_FAILURES[unknown]}. $restore_note Resolve the issue and rerun."
