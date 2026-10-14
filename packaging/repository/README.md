@@ -121,6 +121,10 @@ role-specific commands. Do not restore the single-machine build/sign/upload flow
 `tests/repository-config-source-test.sh` checks the default URL, explicit mirror override,
 committed public-key fingerprint, and fail-closed empty Flavorings `_tag` without host or credential
 access.
+`tests/repository-transfer-test.py` also checks that primary and backup signature receipts bind the
+same manifest hash, public fingerprint, and complete package-plus-database payload set, and that a
+backup uploader role is rejected before vault or release-client access. Its synthetic signature
+files exercise structural binding only; they are not cryptographic signatures.
 `tests/repository-publish-test.sh` exercises the transfer, primary and backup signing, role separation,
 and upload behavior with synthetic package/database records, a throwaway OpenPGP key, and a local
 Releases-shaped fixture. `tests/repository-release-api-test.py` exercises the production release
