@@ -74,6 +74,24 @@ def database_records(database: Path) -> list[tuple[str, str, str]]:
     return load_database_reader().records(database)
 
 
+def parse_package_info(text: str, source: str) -> dict[str, str]:
+    fields: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if " = " not in line:
+            continue
+        key, value = line.split(" = ", 1)
+        fields.setdefault(key, []).append(value)
+    for field in ("pkgname", "pkgver", "arch", "packager"):
+        if len(fields.get(field, [])) != 1 or not fields[field][0]:
+            fail(f"{source} must contain exactly one non-empty {field} field")
+    return {
+        "name": fields["pkgname"][0],
+        "version": fields["pkgver"][0],
+        "arch": fields["arch"][0],
+        "packager": fields["packager"][0],
+    }
+
+
 def package_info(path: Path) -> dict[str, str]:
     completed = subprocess.run(
         ["bsdtar", "-xOf", str(path), ".PKGINFO"],
@@ -83,21 +101,7 @@ def package_info(path: Path) -> dict[str, str]:
     )
     if completed.returncode != 0:
         fail(f"cannot read package metadata from {path.name}")
-    fields: dict[str, list[str]] = {}
-    for line in completed.stdout.splitlines():
-        if " = " not in line:
-            continue
-        key, value = line.split(" = ", 1)
-        fields.setdefault(key, []).append(value)
-    for field in ("pkgname", "pkgver", "arch", "packager"):
-        if len(fields.get(field, [])) != 1 or not fields[field][0]:
-            fail(f"{path.name} must contain exactly one non-empty {field} field")
-    return {
-        "name": fields["pkgname"][0],
-        "version": fields["pkgver"][0],
-        "arch": fields["arch"][0],
-        "packager": fields["packager"][0],
-    }
+    return parse_package_info(completed.stdout, path.name)
 
 
 def build_info(path: Path) -> dict[str, str]:
@@ -753,6 +757,10 @@ def main() -> int:
     flavorings_stage.add_argument("--manifest", type=Path, required=True)
     flavorings_stage.add_argument("--expected-tag", required=True)
     flavorings_stage.add_argument("--expected-version", required=True)
+    package_metadata = commands.add_parser("package-info")
+    package_metadata_source = package_metadata.add_mutually_exclusive_group(required=True)
+    package_metadata_source.add_argument("--archive", type=Path)
+    package_metadata_source.add_argument("--stdin", action="store_true")
     writer = commands.add_parser("write")
     writer.add_argument("--bundle", type=Path, required=True)
     writer.add_argument("--source-root", type=Path, required=True)
@@ -780,7 +788,12 @@ def main() -> int:
     signed_verifier.add_argument("--expected-fingerprint")
     args = parser.parse_args()
     try:
-        if args.command == "verify-flavorings-input":
+        if args.command == "package-info":
+            info = package_info(args.archive) if args.archive else parse_package_info(
+                sys.stdin.read(), "package metadata"
+            )
+            print(json.dumps(info, sort_keys=True, separators=(",", ":")))
+        elif args.command == "verify-flavorings-input":
             manifest = verify_flavorings_input(
                 args.archive, args.manifest, args.expected_tag, args.expected_version
             )
