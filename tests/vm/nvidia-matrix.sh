@@ -113,7 +113,13 @@ gooarchy_test_install_mkinitcpio_hook() {
   local wrapper=${GOOARCHY_VM_NVIDIA_TEST_ROOT:-$HOME}/bin/mkinitcpio
   [[ -f $hook && -x $wrapper && ! -e $saved ]] || return 1
   [[ $wrapper =~ ^/[[:alnum:]_./-]+$ ]] || return 1
-  grep -Eq '^[[:space:]]*Exec[[:space:]]*=[[:space:]]*/usr/bin/mkinitcpio[[:space:]]+-P[[:space:]]*$' "$hook" || return 1
+  grep -Eq '^[[:space:]]*Exec[[:space:]]*=[[:space:]]*(/usr/bin/mkinitcpio[[:space:]]+-P|/usr/share/libalpm/scripts/mkinitcpio[[:space:]]+install)[[:space:]]*$' "$hook" || return 1
+  # Current Arch delegates from the package hook to the script, which resolves mkinitcpio through
+  # PATH. The pacman test invocation supplies the wrapper there, so preserve and exercise that
+  # generated hook unchanged. Older direct hooks need their Exec redirected to the wrapper.
+  if ! grep -Eq '^[[:space:]]*Exec[[:space:]]*=[[:space:]]*/usr/bin/mkinitcpio[[:space:]]+-P[[:space:]]*$' "$hook"; then
+    return 0
+  fi
   command sudo cp -a "$hook" "$saved" || return 1
   if ! command sudo sed -i -E "s|^[[:space:]]*Exec[[:space:]]*=.*$|Exec = $wrapper -P|" "$hook"; then
     gooarchy_test_restore_mkinitcpio_hook
@@ -2772,8 +2778,9 @@ test_pacman_hook_failure_with_partial_kernel() {
   sudo mv "$build_link_path" "$test_root/linux-lts-build-link.saved"
 
   focused_case=${GOOARCHY_VM_NVIDIA_FOCUSED_CASE:-}
-  if [[ ! -f $hook_path ]] || ! grep -Eq '^[[:space:]]*Exec[[:space:]]*=[[:space:]]*/usr/bin/mkinitcpio[[:space:]]+-P[[:space:]]*$' "$hook_path"; then
-    fixture_refuse 'C3 generated Arch package hook fixture' "$hook_path missing or does not use the expected mkinitcpio -P command"
+  if [[ ! -f $hook_path ]] ||
+     ! grep -Eq '^[[:space:]]*Exec[[:space:]]*=[[:space:]]*(/usr/bin/mkinitcpio[[:space:]]+-P|/usr/share/libalpm/scripts/mkinitcpio[[:space:]]+install)[[:space:]]*$' "$hook_path"; then
+    fixture_refuse 'C3 generated Arch package hook fixture' "$hook_path missing or uses an unsupported mkinitcpio command"
     return 75
   fi
   hook_before=$(sha256sum "$hook_path" | awk '{print $1}')
@@ -2807,7 +2814,7 @@ test_pacman_hook_failure_with_partial_kernel() {
   hook_after=$(sha256sum "$hook_path" | awk '{print $1}')
   if [[ $hook_before == "$hook_after" && ! -e $test_root/90-mkinitcpio-install.hook.saved ]]; then
     hook_wrapper_restored=1
-    fixture_event CLEANUP-OK 'C3 generated-hook test wrapper' 'original Arch hook restored byte-for-byte'
+    fixture_event CLEANUP-OK 'C3 generated-hook test wrapper' 'original Arch hook preserved byte-for-byte'
   else
     fixture_event CLEANUP-FAIL 'C3 generated-hook test wrapper' 'original Arch hook was not restored byte-for-byte'
   fi
