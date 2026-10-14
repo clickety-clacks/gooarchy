@@ -35,11 +35,9 @@ def digest(path: Path) -> str:
 
 
 def create_package(path: Path, name: str) -> None:
-    pkgver, pkgrel = VERSION.rsplit("-", 1)
     body = (
         f"pkgname = {name}\n"
-        f"pkgver = {pkgver}\n"
-        f"pkgrel = {pkgrel}\n"
+        f"pkgver = {VERSION}\n"
         "arch = any\n"
         "packager = Gooarchy\n"
     ).encode()
