@@ -11,6 +11,10 @@ desktop on Wayfire. In planning; nothing to install yet.
 - **No silent overrides:** anything that replaces a user's existing setting is reported with its reason.
 - **Testing** happens only on the designated test machines (see the private environment docs), never on
   anyone's daily machine.
+- **End-to-end behavior:** use [the independent runbooks](docs/e2e/README.md) for installed Gooarchy,
+  Flavorings and Scottland behavior; collect them with [the final release pass](docs/e2e/final-release.md).
+  The attended display-zones and Adapter B checks are release-time prompts for Mike, not gates on
+  unrelated source work.
 
 ## Branches and releases (Mike, 2026-10-08)
 
