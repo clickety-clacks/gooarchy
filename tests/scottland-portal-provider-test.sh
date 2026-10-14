@@ -4,6 +4,10 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 unset GOOARCHY_SCOTTLAND_REF GOOARCHY_SCOTTLAND_REF_KIND
 source "$repo_root/install/sources.conf"
+[[ $GOOARCHY_SCOTTLAND_PIN_REF == 0.4 ]]
+[[ $GOOARCHY_SCOTTLAND_PIN_KIND == branch ]]
+[[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == branch ]]
+[[ $GOOARCHY_SCOTTLAND_REF == "$GOOARCHY_SCOTTLAND_PIN_REF" ]]
 
 # Exercise the portal consumer against a pacman model that reports package origin/signature,
 # resolves package names through Provides, downloads the exact signed-repository version, and

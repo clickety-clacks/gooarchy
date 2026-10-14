@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -15,6 +16,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL_PATH = ROOT / "packaging/repository/repository-protocol.py"
@@ -160,6 +162,147 @@ class RepositoryTransferTests(unittest.TestCase):
         self.assertEqual(observed["source_tree"], TREE)
         self.assertEqual(len(observed["packages"]), 6)
         self.assertEqual({item["name"] for item in observed["packages"]}, protocol.REQUIRED_INITIAL)
+
+    def test_builder_transfer_stops_before_signature_artifacts(self) -> None:
+        versions = {name: "1.0.0-1" for name in NAMES}
+        bundle, manifest_hash, manifest = make_bundle(self.root, versions)
+        expected_payload = {"gooarchy.db", *(record["filename"] for record in manifest["packages"])}
+        self.assertEqual(
+            {path.name for path in bundle.iterdir()},
+            {"manifest.json", "SHA256SUMS", "payload"},
+        )
+        self.assertEqual({path.name for path in (bundle / "payload").iterdir()}, expected_payload)
+        self.assertFalse(any(path.name.endswith(".sig") for path in (bundle / "payload").iterdir()))
+
+        # This check targets transfer-envelope custody; package metadata parsing has its own test.
+        metadata = {
+            record["filename"]: {
+                "name": record["name"],
+                "version": record["version"],
+                "arch": "any",
+                "packager": "Gooarchy",
+            }
+            for record in manifest["packages"]
+        }
+        with patch.object(protocol, "package_info", side_effect=lambda path: metadata[path.name]):
+            self.verify(bundle, manifest_hash)
+
+            signature = bundle / "payload" / "gooarchy.db.sig"
+            signature.write_bytes(b"synthetic signature artifact")
+            with self.assertRaisesRegex(ValueError, "payload files do not exactly match"):
+                self.verify(bundle, manifest_hash)
+
+            signature.unlink()
+            (bundle / "signatures").mkdir()
+            (bundle / "SIGNATURES.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "root has unexpected entries"):
+                self.verify(bundle, manifest_hash)
+
+    def test_primary_and_backup_receipts_bind_the_same_complete_transfer(self) -> None:
+        versions = {name: "1.0.0-1" for name in NAMES}
+        bundle, manifest_hash, manifest = make_bundle(self.root, versions)
+        expected_payloads = {
+            record["filename"]: record["sha256"] for record in manifest["packages"]
+        }
+        expected_payloads["gooarchy.db"] = manifest["database"]["sha256"]
+        package_metadata = {
+            record["filename"]: {
+                "name": record["name"],
+                "version": record["version"],
+                "arch": "any",
+                "packager": "Gooarchy",
+            }
+            for record in manifest["packages"]
+        }
+        observed_payloads: dict[str, dict[str, str]] = {}
+
+        # These synthetic .sig files exercise receipt and bundle binding only; no key or GPG is used.
+        with patch.object(protocol, "package_info", side_effect=lambda path: package_metadata[path.name]):
+            for role in ("primary", "backup"):
+                signed = self.root / f"signed-{role}"
+                signed.mkdir()
+                shutil.copy2(bundle / "manifest.json", signed / "manifest.json")
+                shutil.copy2(bundle / "SHA256SUMS", signed / "SHA256SUMS")
+                shutil.copytree(bundle / "payload", signed / "payload")
+                signatures = signed / "signatures"
+                signatures.mkdir()
+                for filename in expected_payloads:
+                    (signatures / f"{filename}.sig").write_bytes(
+                        f"synthetic-only:{role}:{filename}".encode("ascii")
+                    )
+
+                protocol.write_signature_receipt(SimpleNamespace(
+                    bundle=bundle,
+                    signatures=signatures,
+                    expected_manifest_sha256=manifest_hash,
+                    fingerprint=FINGERPRINT,
+                    signer_role=role,
+                    output=signed / "SIGNATURES.json",
+                ))
+                verified_manifest = protocol.load_and_verify_bundle(
+                    signed, manifest_hash, FINGERPRINT, signed=True
+                )
+                receipt = json.loads((signed / "SIGNATURES.json").read_text(encoding="utf-8"))
+                self.assertEqual(verified_manifest["source_commit"], COMMIT)
+                self.assertEqual(verified_manifest["source_tree"], TREE)
+                self.assertEqual(receipt["signer_role"], role)
+                self.assertEqual(receipt["manifest_sha256"], manifest_hash)
+                self.assertEqual(receipt["signing_fingerprint"], FINGERPRINT)
+                self.assertEqual(
+                    {entry["filename"]: entry["payload_sha256"] for entry in receipt["signatures"]},
+                    expected_payloads,
+                )
+                self.assertEqual(
+                    {path.name for path in signatures.iterdir()},
+                    {f"{filename}.sig" for filename in expected_payloads},
+                )
+                observed_payloads[role] = {
+                    entry["filename"]: entry["payload_sha256"]
+                    for entry in receipt["signatures"]
+                }
+
+        self.assertEqual(observed_payloads["primary"], observed_payloads["backup"])
+
+    def test_backup_uploader_role_fails_before_token_or_release_clients(self) -> None:
+        private_bin = self.root / "bin"
+        private_bin.mkdir()
+        for command in ("bash", "cat", "dirname", "git"):
+            target = shutil.which(command)
+            self.assertIsNotNone(target, f"test requires local {command}")
+            (private_bin / command).symlink_to(target)
+
+        markers = self.root / "markers"
+        markers.mkdir()
+        for command in ("curl", "op"):
+            client = private_bin / command
+            client.write_text(
+                f'#!/bin/sh\nprintf called > "$GOOARCHY_TEST_MARKER_DIR/{command}"\nexit 97\n',
+                encoding="utf-8",
+            )
+            client.chmod(0o700)
+
+        signed_bundle = self.root / "signed-bundle"
+        signed_bundle.mkdir()
+        result = subprocess.run(
+            [
+                str(ROOT / "packaging/repository/upload.sh"),
+                "--uploader-role", "backup",
+                "--signed-bundle", str(signed_bundle),
+                "--manifest-sha256", "a" * 64,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={
+                "PATH": str(private_bin),
+                "LC_ALL": "C",
+                "GOOARCHY_TEST_MARKER_DIR": str(markers),
+            },
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("Usage:", result.stderr)
+        self.assertIn("--uploader-role primary", result.stderr)
+        self.assertEqual(list(markers.iterdir()), [])
 
     def test_pkginfo_version_uses_full_arch_pkgver_field(self) -> None:
         path = self.root / package_filename("gooarchy", "2:1.2.3-4")

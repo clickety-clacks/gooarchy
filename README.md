@@ -9,17 +9,24 @@ screen's edges, and a window dropped on a side rail becomes a widget. Gooarchy i
 clean on plain Arch Linux. Nothing is borrowed to fill a gap: Gooarchy has no bar yet, so it has no
 bar. Everything missing is listed in [DEFICIT.md](DEFICIT.md), found by using the built system.
 
+The Gooarchy package installs the [Gooarchy agent skill](agents/skills/gooarchy/SKILL.md). The
+Scottland package supplies its separate `scottland` skill. Gooarchy links both for the installing
+user and at later logins; it does not install the Scottland Omarchy-adapter skill.
+
 ![Gooarchy in the VM test: a terminal in the center, Chromium scaled down in the periphery, Strata as a widget on the right rail](docs/screenshots/vm-desktop.webp)
 
 ## Current state: pre-alpha
 
 The installer defaults to Gooarchy's signed package repository at `https://gooarchy.com/gooarchy.db`
 and trusts the committed public key with fingerprint
-`F56B5368815D6C607C41265A69FCC98C28CD08EC`. The endpoint and trust identity are configured, but no
-signed package release has been published yet, so package installation and upgrades are not ready
-until a complete signed release is available. There is no installer ISO or update channel, and no
-hardware support beyond what Arch and Mesa give. It is for trying the desktop and for building the
-distro, not for daily use.
+`F56B5368815D6C607C41265A69FCC98C28CD08EC`. The endpoint and trust identity are configured.
+Package archives and the repository database are intended to ship together as assets in Gooarchy's
+GitHub Release. The repository workflow produces an unsigned transfer first; a separately
+credentialed signer adds detached signatures for every package and the database, and an independently
+qualified uploader publishes the complete signed set. No signed package Release asset has been
+published, so installation and upgrades cannot complete until one is available. There is no installer
+ISO or update channel, and no hardware support beyond what Arch and Mesa give. It is for trying the
+desktop and for building the distro, not for daily use.
 
 What you get:
 
@@ -115,9 +122,10 @@ cd gooarchy
 ./install.sh
 ```
 
-Then reboot, or log in on tty1. Super+Enter opens a terminal; Super+Shift+Escape logs out. Read
-[DEFICIT.md](DEFICIT.md) first: there is no lock screen, no network or Bluetooth UI, no
-notifications and no bar. [docs/uninstall.md](docs/uninstall.md) explains how to remove it, and
+Then reboot, or log in on tty1. Super+Enter opens a terminal; Super+L requests the
+[session lock](docs/lock.md); Super+Shift+Escape logs out. Read [DEFICIT.md](DEFICIT.md) first:
+there is no automatic idle, suspend or lid lock, no network or Bluetooth UI, no notifications
+and no bar. [docs/uninstall.md](docs/uninstall.md) explains how to remove it, and
 how to back out of an install that failed partway (running `./install.sh` again retries it).
 
 How logging in works: any ordinary account that logs in on tty1 from a bash or zsh login shell gets
@@ -162,9 +170,9 @@ without Gooarchy:
 | `packaging/arch/xdg-desktop-portal-wlr/` | Gooarchy's screen-sharing backend, built from our own fork ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)) |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
-| `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, and the config fragment that carries the system's keyboard layout into Scottland |
+| `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, keyboard-layout config fragment, and Gooarchy's Super+L lock binding |
 | `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
-| `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem as they are written. The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
+| `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem, including [the session lock](docs/lock.md). The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
 | `tests/clamshell-test.py` | Clamshell mode on the lid in a headless Scottland session with output-control support; real laptop acceptance remains separate |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
@@ -187,7 +195,7 @@ In order:
    Scottland and the portal and kernel packages. Arch and AUR repositories keep supplying
    everything else, including Strata.
 4. **Defaults**: gooarchy-flavorings as its own package, and Gooarchy's own bar, notifications,
-   launcher, lock screen and the rest of the deficit.
+   launcher, automatic idle/suspend locking and the rest of the deficit.
 5. **Hardware**: a supported hardware matrix with GPU, firmware, power and laptop quirks.
 6. **ISO**: an installer image (partitioning, encryption, accounts) instead of "install Arch first".
 7. **Updates**: an update command with migrations for user and system configuration.

@@ -37,6 +37,25 @@ GENERIC = [
 ]
 # Generic matches that are known and fine (documentation placeholders).
 ALLOWED = [r"/home/<user>", r"/home/user\b", r"example-host"]
+# Cargo checks these public-crate fixtures against the recorded vendor checksums. They are
+# address-shaped examples or Rust field names, not Gooarchy network configuration.
+VENDOR_FIXTURES = {
+    "system-tools/vendor/log/src/kv/value.rs": {
+        "private IPv4 (192.168.x)": r"192[.]168[.]10[.]100",
+    },
+    "system-tools/vendor/serde_derive/src/de/struct_.rs": {
+        ".local/.lan host name": r"params[.]local",
+    },
+    "system-tools/vendor/serde_derive/src/de/tuple.rs": {
+        ".local/.lan host name": r"params[.]local",
+    },
+    "system-tools/vendor/wayland-client/wayland.xml": {
+        "MAC address": r"(?:C0[:]C1[:]C2[:]C3[:]C4[:]C5|D0[:]D1[:]D2[:]D3[:]D4[:]D5)",
+    },
+    "system-tools/vendor/windows-sys/src/Windows/Win32/Security/Cryptography/mod.rs": {
+        "private IPv4 (10.x, not QEMU's 10.0.2.x)": r"10[.]3[.][345][.]1",
+    },
+}
 IMAGE_EXT = (".png", ".webp", ".jpg", ".jpeg", ".gif")
 TRAILER = re.compile(r"^(Co-Authored-By|Signed-off-by):", re.I | re.M)
 
@@ -62,6 +81,10 @@ def denylist():
 def scan_text(text, where, deny, findings):
     for label, pattern in GENERIC:
         for m in re.finditer(pattern, text, re.I):
+            if any(path in where and label in exceptions
+                   and re.fullmatch(exceptions[label], m.group(0))
+                   for path, exceptions in VENDOR_FIXTURES.items()):
+                continue
             if any(re.search(a, text[max(0, m.start() - 5):m.end() + 5]) for a in ALLOWED):
                 continue
             line = text.count("\n", 0, m.start()) + 1

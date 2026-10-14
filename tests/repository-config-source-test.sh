@@ -80,6 +80,49 @@ committed_fingerprint=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$fingerprint_fil
 
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/gooarchy-repository-config.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT
+no_git_path=$test_root/no-git-path
+mkdir -m 700 "$no_git_path"
+bash_path=$(command -v bash)
+
+# Fresh installs source helpers/all.sh before the base package step installs Git. Exercise the
+# actual default and explicit branch selection with an empty PATH, where no Git command can run.
+fresh_install_pin=$(env -i PATH="$no_git_path" GOOARCHY_INSTALL="$repo_root/install" \
+  "$bash_path" --noprofile --norc -c '
+    set -e
+    source "$GOOARCHY_INSTALL/helpers/all.sh"
+    printf "%s|%s\n" "$GOOARCHY_SCOTTLAND_REF" "$GOOARCHY_SCOTTLAND_SOURCE_KIND"
+  ')
+[[ $fresh_install_pin == '0.4|branch' ]] || {
+  printf 'fresh-install source selection returned %s instead of the 2026.11 test branch\n' "$fresh_install_pin" >&2
+  exit 1
+}
+
+fresh_install_branch=$(env -i PATH="$no_git_path" GOOARCHY_INSTALL="$repo_root/install" \
+  GOOARCHY_SCOTTLAND_REF=release/0.4 GOOARCHY_SCOTTLAND_REF_KIND=branch \
+  "$bash_path" --noprofile --norc -c '
+    set -e
+    source "$GOOARCHY_INSTALL/helpers/all.sh"
+    printf "%s|%s\n" "$GOOARCHY_SCOTTLAND_REF" "$GOOARCHY_SCOTTLAND_SOURCE_KIND"
+  ')
+[[ $fresh_install_branch == 'release/0.4|branch' ]] || {
+  printf 'fresh-install branch selection returned %s instead of the explicit branch\n' "$fresh_install_branch" >&2
+  exit 1
+}
+
+if env -i PATH="$no_git_path" GOOARCHY_INSTALL="$repo_root/install" \
+  GOOARCHY_SCOTTLAND_REF=release//0.4 GOOARCHY_SCOTTLAND_REF_KIND=branch \
+  "$bash_path" --noprofile --norc -c '
+    set -e
+    source "$GOOARCHY_INSTALL/helpers/all.sh"
+  ' >"$test_root/invalid-branch.out" 2>"$test_root/invalid-branch.err"; then
+  echo 'fresh-install source selection accepted a branch with an empty path component' >&2
+  exit 1
+fi
+grep -Fq 'GOOARCHY_SCOTTLAND_REF is not a valid Git branch.' "$test_root/invalid-branch.err" || {
+  echo 'invalid branch failure did not explain the rejected ref' >&2
+  exit 1
+}
+
 mkdir -m 700 "$test_root/gnupg"
 actual_fingerprint=$(gpg --homedir "$test_root/gnupg" --batch --no-options \
   --show-keys --with-colons --with-fingerprint "$public_key" 2>/dev/null |
