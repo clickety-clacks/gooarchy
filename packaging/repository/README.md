@@ -32,6 +32,20 @@ retains packages that were not rebuilt, and creates the next unsigned `gooarchy.
 the configured public key and fingerprint. It does not read signing credentials, make signatures,
 or upload files.
 
+For the already-built Flavorings `v0.1.1` input, pass its package archive explicitly:
+
+```sh
+packaging/repository/produce.sh --output /path/to/new-transfer \
+  --flavorings-package /path/to/gooarchy-flavorings-0.1.1-1-any.pkg.tar.zst --all
+```
+
+That input is accepted only when it matches
+`packaging/gooarchy-flavorings/v0.1.1-input.json` and the current Flavorings recipe. The producer
+checks the package SHA-256, exact source tag/version, `.PKGINFO`, and `.BUILDINFO` packager and
+PKGBUILD hash before copying it into the build workspace. The transfer source record retains the
+tag, source commit/tree, source-archive hash, build-recipe hash, and imported package hash. If no
+archive is supplied, the producer builds Flavorings from the pinned recipe as usual.
+
 The output directory is a complete immutable transfer with this layout:
 
 ```text

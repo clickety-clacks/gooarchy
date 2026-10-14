@@ -1,0 +1,17 @@
+{
+  "schema": "gooarchy-prebuilt-package-v1",
+  "package": "gooarchy-flavorings",
+  "version": "0.1.1-1",
+  "architecture": "any",
+  "filename": "gooarchy-flavorings-0.1.1-1-any.pkg.tar.zst",
+  "sha256": "c71c0195add828f223b73637d06a74df83d7fa9361913031ed5d405e9dda90d6",
+  "packager": "Gooarchy",
+  "pkgbuild_sha256": "c793c9de28cd6bedb78387d0e8819c45e65e6b7689f4c2e5c70dfb26db1ce602",
+  "source": {
+    "repository": "clickety-clacks/gooarchy-flavorings",
+    "tag": "v0.1.1",
+    "commit": "14c4d5015936c427be0e60c7114ba528eae14e47",
+    "tree": "82ff4bdf00b96d9eb6189d10d3dc66ee70ca2dad",
+    "archive_sha256": "eaf14461a49b13a4f2a8cc574110c2812a6448ddaa204a56839778696224d2b2"
+  }
+}

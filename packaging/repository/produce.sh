@@ -13,15 +13,18 @@ die() { echo "produce: $*" >&2; exit 1; }
 usage() {
   cat >&2 <<'USAGE'
 Usage: packaging/repository/produce.sh --output <new-transfer-directory> --all
+       packaging/repository/produce.sh --output <new-transfer-directory> --flavorings-package <archive> --all
        packaging/repository/produce.sh --output <new-transfer-directory> <package> [<package> ...]
 
 Builds package archives and an unsigned repository database only. It does not
-read signing credentials, create signatures, or contact GitHub Releases.
+read signing credentials, create signatures, or contact GitHub Releases. The optional
+Flavorings archive is accepted only when it matches the reviewed source-input manifest.
 USAGE
   exit 2
 }
 
 output_dir=
+flavorings_package=
 all_packages=0
 requested_packages=()
 while (($#)); do
@@ -34,6 +37,12 @@ while (($#)); do
     --all)
       all_packages=1
       shift
+      ;;
+    --flavorings-package)
+      (($# >= 2)) || usage
+      [[ -z $flavorings_package ]] || usage
+      flavorings_package=$2
+      shift 2
       ;;
     --help|-h)
       usage
@@ -172,6 +181,14 @@ for package_name in "${requested_packages[@]}"; do
   [[ ! ${selected[$package_name]+present} ]] || die "package requested more than once: $package_name."
   selected[$package_name]=1
 done
+if [[ -n $flavorings_package ]]; then
+  [[ ${selected[gooarchy-flavorings]+present} ]] ||
+    die "--flavorings-package requires gooarchy-flavorings in the selected package set."
+  [[ -f $flavorings_package && ! -L $flavorings_package ]] ||
+    die "the prebuilt Flavorings input must be a regular package archive."
+  [[ ${recipe_for[gooarchy-flavorings]:-} == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]] ||
+    die "the prebuilt Flavorings input requires Gooarchy's self-contained Flavorings recipe."
+fi
 
 required_initial=(gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-gooarchy \
   linux-gooarchy linux-gooarchy-headers)
@@ -197,6 +214,24 @@ if [[ ${recipe_for[gooarchy-flavorings]+present} &&
   flavorings_source_ref=$(sed -n 's/^_tag=//p' "${recipe_for[gooarchy-flavorings]}")
   [[ $flavorings_source_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
     die "gooarchy-flavorings must be pinned to one final version tag."
+  flavorings_pkgver=$(sed -n 's/^pkgver=//p' "${recipe_for[gooarchy-flavorings]}" | sed -n '1p')
+  flavorings_pkgrel=$(sed -n 's/^pkgrel=//p' "${recipe_for[gooarchy-flavorings]}" | sed -n '1p')
+  [[ $flavorings_pkgver =~ ^[0-9][A-Za-z0-9._+~:-]*$ && $flavorings_pkgrel =~ ^[0-9]+$ ]] ||
+    die "gooarchy-flavorings recipe package version is invalid."
+  flavorings_package_version="$flavorings_pkgver-$flavorings_pkgrel"
+fi
+flavorings_input_filename=
+flavorings_source_revision=
+if [[ -n $flavorings_package ]]; then
+  flavorings_input_manifest="$repo_root/packaging/gooarchy-flavorings/v0.1.1-input.json"
+  [[ -s $flavorings_input_manifest ]] || die "the reviewed Flavorings package-input manifest is missing."
+  flavorings_input_record=$(python3 "$script_dir/repository-protocol.py" verify-flavorings-input \
+    --archive "$flavorings_package" --manifest "$flavorings_input_manifest" \
+    --expected-tag "$flavorings_source_ref" --expected-version "$flavorings_package_version") ||
+    die "the prebuilt Flavorings package does not match the reviewed source input."
+  flavorings_input_filename=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["filename"])' <<<"$flavorings_input_record")
+  flavorings_source_revision=$(python3 -c 'import json,sys; x=json.load(sys.stdin); s=x["source"]; print("Flavorings tag:{} commit:{} tree:{}; source archive SHA256:{}; PKGBUILD SHA256:{}; imported package SHA256:{}".format(s["tag"],s["commit"],s["tree"],s["archive_sha256"],x["pkgbuild_sha256"],x["sha256"]))' \
+    <<<"$flavorings_input_record") || die "could not record imported Flavorings provenance."
 fi
 
 built_dir="$work_dir/built"
@@ -266,37 +301,44 @@ for package_name in "${requested_packages[@]}"; do
     recipe_built[scottland]=1
     source_revision[$package_name]="$scottland_source_label (resolved $scottland_source_revision)"
   else
-    if [[ ! ${recipe_built[$recipe_file]+present} ]]; then
-      recipe_dir=$(dirname -- "$recipe_file")
-      if [[ $recipe_dir == "$repo_root/packaging/linux-gooarchy" && -x $recipe_dir/build.sh ]]; then
-        free_kb=$(df -Pk "$work_dir" | awk 'END { print $4 }')
-        ((free_kb >= 35 * 1024 * 1024)) || die "linux-gooarchy needs at least 35 GiB free in the build workspace."
-        GOOARCHY_KERNEL_BUILD="$kernel_dir" PACKAGER=Gooarchy "$recipe_dir/build.sh" ||
-          die "the pinned Gooarchy kernel build failed."
-      else
-        build_static_recipe "$recipe_file"
-      fi
+    if [[ $package_name == gooarchy-flavorings && -n $flavorings_package ]]; then
+      cp -- "$flavorings_package" "$built_dir/$flavorings_input_filename" ||
+        die "could not stage the verified prebuilt Flavorings archive."
       recipe_built[$recipe_file]=1
-    fi
-    case $package_name in
-      gooarchy-flavorings)
-        if [[ $recipe_file == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]]; then
-          source_revision[$package_name]="Gooarchy $checkout_commit; gooarchy-flavorings tag:$flavorings_source_ref"
+      source_revision[$package_name]=$flavorings_source_revision
+    else
+      if [[ ! ${recipe_built[$recipe_file]+present} ]]; then
+        recipe_dir=$(dirname -- "$recipe_file")
+        if [[ $recipe_dir == "$repo_root/packaging/linux-gooarchy" && -x $recipe_dir/build.sh ]]; then
+          free_kb=$(df -Pk "$work_dir" | awk 'END { print $4 }')
+          ((free_kb >= 35 * 1024 * 1024)) || die "linux-gooarchy needs at least 35 GiB free in the build workspace."
+          GOOARCHY_KERNEL_BUILD="$kernel_dir" PACKAGER=Gooarchy "$recipe_dir/build.sh" ||
+            die "the pinned Gooarchy kernel build failed."
         else
-          source_revision[$package_name]="Gooarchy $checkout_commit; $scottland_source_label"
+          build_static_recipe "$recipe_file"
         fi
-        ;;
-      linux-gooarchy|linux-gooarchy-headers)
-        kernel_version=$(sed -n 's/^pkgver=//p' "$repo_root/packaging/linux-gooarchy/PKGBUILD" | sed -n '1p')
-        omarchy_commit=$(sed -n 's/^_omarchy_commit=//p' "$repo_root/packaging/linux-gooarchy/PKGBUILD" | sed -n '1p')
-        source_revision[$package_name]="Gooarchy $checkout_commit; Linux $kernel_version; Omarchy $omarchy_commit"
-        ;;
-      xdg-desktop-portal-wlr-gooarchy)
-        portal_tag=$(sed -n 's/^_tag=//p' "$repo_root/packaging/arch/xdg-desktop-portal-wlr/PKGBUILD" | sed -n '1p')
-        source_revision[$package_name]="Gooarchy $checkout_commit; portal $portal_tag"
-        ;;
-      *) source_revision[$package_name]="Gooarchy $checkout_commit" ;;
-    esac
+        recipe_built[$recipe_file]=1
+      fi
+      case $package_name in
+        gooarchy-flavorings)
+          if [[ $recipe_file == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]]; then
+            source_revision[$package_name]="Gooarchy $checkout_commit; gooarchy-flavorings tag:$flavorings_source_ref"
+          else
+            source_revision[$package_name]="Gooarchy $checkout_commit; $scottland_source_label"
+          fi
+          ;;
+        linux-gooarchy|linux-gooarchy-headers)
+          kernel_version=$(sed -n 's/^pkgver=//p' "$repo_root/packaging/linux-gooarchy/PKGBUILD" | sed -n '1p')
+          omarchy_commit=$(sed -n 's/^_omarchy_commit=//p' "$repo_root/packaging/linux-gooarchy/PKGBUILD" | sed -n '1p')
+          source_revision[$package_name]="Gooarchy $checkout_commit; Linux $kernel_version; Omarchy $omarchy_commit"
+          ;;
+        xdg-desktop-portal-wlr-gooarchy)
+          portal_tag=$(sed -n 's/^_tag=//p' "$repo_root/packaging/arch/xdg-desktop-portal-wlr/PKGBUILD" | sed -n '1p')
+          source_revision[$package_name]="Gooarchy $checkout_commit; portal $portal_tag"
+          ;;
+        *) source_revision[$package_name]="Gooarchy $checkout_commit" ;;
+      esac
+    fi
   fi
 done
 

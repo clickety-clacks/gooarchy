@@ -3,12 +3,11 @@
 # adapter install this same package. It needs nothing from a gooarchy or Scottland checkout, so
 # this file can be built on its own: makepkg in a directory holding only it.
 #
-# Leave _tag empty while the release gate is open. The recipe fails closed until the exact
-# authorized final Flavorings tag is supplied; do not substitute an RC, branch, or commit.
-# pkgver starts at 0.0.2 so it sorts above the 0.0.1.r* versions of the earlier combined recipe.
+# Keep this final upstream tag and package version aligned. RCs, branches, and raw commits are
+# unsupported source selectors.
 pkgname=gooarchy-flavorings
-_tag=
-pkgver=0.0.2.r17.g4dc4e7a
+_tag=v0.1.1
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
 arch=('any')

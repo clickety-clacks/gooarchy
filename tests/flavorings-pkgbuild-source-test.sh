@@ -20,12 +20,16 @@ expect_rejected() {
 
 ! grep -q '^_commit=' "$recipe"
 ! grep -q '^_branch=' "$recipe"
-expect_rejected "$recipe"
+[[ $(selected_source "$recipe") == 'gooarchy-flavorings::git+https://github.com/clickety-clacks/gooarchy-flavorings.git#tag=v0.1.1' ]]
+
+empty_tag_recipe=$tmp/empty-tag.PKGBUILD
+sed 's/^_tag=.*/_tag=/' "$recipe" >"$empty_tag_recipe"
+expect_rejected "$empty_tag_recipe"
 
 tag_recipe=$tmp/tag.PKGBUILD
-sed 's/^_tag=.*/_tag=v0.1.0/' "$recipe" >"$tag_recipe"
+sed 's/^_tag=.*/_tag=v0.1.1/' "$recipe" >"$tag_recipe"
 tag_source=$(selected_source "$tag_recipe")
-[[ $tag_source == 'gooarchy-flavorings::git+https://github.com/clickety-clacks/gooarchy-flavorings.git#tag=v0.1.0' ]]
+[[ $tag_source == 'gooarchy-flavorings::git+https://github.com/clickety-clacks/gooarchy-flavorings.git#tag=v0.1.1' ]]
 
 duplicate_tag_recipe=$tmp/duplicate-tag.PKGBUILD
 cat "$tag_recipe" >"$duplicate_tag_recipe"

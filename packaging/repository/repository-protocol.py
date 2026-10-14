@@ -19,10 +19,13 @@ sys.dont_write_bytecode = True
 
 SCHEMA = "gooarchy-repository-transfer-v1"
 SIGNATURE_SCHEMA = "gooarchy-repository-signatures-v1"
+PACKAGE_INPUT_SCHEMA = "gooarchy-prebuilt-package-v1"
 REPOSITORY = "clickety-clacks/gooarchy"
+FLAVORINGS_REPOSITORY = "clickety-clacks/gooarchy-flavorings"
 FINGERPRINT_RE = re.compile(r"^(?:[0-9A-F]{40}|[0-9A-F]{64})$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+VERSION_TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 ASSET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:-]*$")
 REQUIRED_INITIAL = {
     "gooarchy",
@@ -92,6 +95,96 @@ def package_info(path: Path) -> dict[str, str]:
         "arch": fields["arch"][0],
         "packager": fields["packager"][0],
     }
+
+
+def build_info(path: Path) -> dict[str, str]:
+    completed = subprocess.run(
+        ["bsdtar", "-xOf", str(path), ".BUILDINFO"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        fail(f"cannot read build metadata from {path.name}")
+    fields: dict[str, list[str]] = {}
+    for line in completed.stdout.splitlines():
+        if " = " not in line:
+            continue
+        key, value = line.split(" = ", 1)
+        fields.setdefault(key, []).append(value)
+    for field in ("pkgname", "pkgver", "pkgarch", "packager", "pkgbuild_sha256sum"):
+        if len(fields.get(field, [])) != 1 or not fields[field][0]:
+            fail(f"{path.name} build metadata must contain exactly one non-empty {field} field")
+    return {
+        "name": fields["pkgname"][0],
+        "version": fields["pkgver"][0],
+        "arch": fields["pkgarch"][0],
+        "packager": fields["packager"][0],
+        "pkgbuild_sha256": fields["pkgbuild_sha256sum"][0],
+    }
+
+
+def verify_flavorings_input(
+    archive: Path, manifest_path: Path, expected_tag: str, expected_version: str
+) -> dict[str, Any]:
+    if archive.is_symlink() or not archive.is_file():
+        fail("prebuilt Flavorings input must be a regular package archive")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    required = {"schema", "package", "version", "architecture", "filename", "sha256", "packager", "pkgbuild_sha256", "source"}
+    if not isinstance(manifest, dict) or set(manifest) != required:
+        fail("prebuilt Flavorings manifest has invalid fields")
+    if manifest["schema"] != PACKAGE_INPUT_SCHEMA or manifest["package"] != "gooarchy-flavorings":
+        fail("prebuilt input is not the supported gooarchy-flavorings package")
+    source = manifest["source"]
+    source_fields = {"repository", "tag", "commit", "tree", "archive_sha256"}
+    if not isinstance(source, dict) or set(source) != source_fields:
+        fail("prebuilt Flavorings source identity has invalid fields")
+    if source["repository"] != FLAVORINGS_REPOSITORY:
+        fail("prebuilt Flavorings source repository is not the reviewed upstream")
+    if not isinstance(source["tag"], str) or not VERSION_TAG_RE.fullmatch(source["tag"]):
+        fail("prebuilt Flavorings source must identify one final version tag")
+    if source["tag"] != expected_tag:
+        fail("prebuilt Flavorings tag does not match the current recipe")
+    if not isinstance(source["commit"], str) or not COMMIT_RE.fullmatch(source["commit"]):
+        fail("prebuilt Flavorings source commit is invalid")
+    if not isinstance(source["tree"], str) or not COMMIT_RE.fullmatch(source["tree"]):
+        fail("prebuilt Flavorings source tree is invalid")
+    if not isinstance(source["archive_sha256"], str) or not SHA256_RE.fullmatch(source["archive_sha256"]):
+        fail("prebuilt Flavorings source archive hash is invalid")
+    if manifest["version"] != expected_version:
+        fail("prebuilt Flavorings package version does not match the current recipe")
+    if manifest["architecture"] != "any" or manifest["packager"] != "Gooarchy":
+        fail("prebuilt Flavorings architecture or packager is not eligible")
+    if not isinstance(manifest["filename"], str) or manifest["filename"] != (
+        f"gooarchy-flavorings-{expected_version}-any.pkg.tar.zst"
+    ):
+        fail("prebuilt Flavorings filename does not match its package identity")
+    safe_asset_name(manifest["filename"])
+    if archive.name != manifest["filename"]:
+        fail("prebuilt Flavorings archive filename does not match its manifest")
+    if not isinstance(manifest["sha256"], str) or not SHA256_RE.fullmatch(manifest["sha256"]):
+        fail("prebuilt Flavorings package hash is invalid")
+    if not isinstance(manifest["pkgbuild_sha256"], str) or not SHA256_RE.fullmatch(manifest["pkgbuild_sha256"]):
+        fail("prebuilt Flavorings PKGBUILD hash is invalid")
+    if sha256_file(archive) != manifest["sha256"]:
+        fail("prebuilt Flavorings package hash does not match its manifest")
+
+    package = package_info(archive)
+    build = build_info(archive)
+    expected = {
+        "name": "gooarchy-flavorings",
+        "version": expected_version,
+        "arch": "any",
+        "packager": "Gooarchy",
+    }
+    if package != expected:
+        fail("prebuilt Flavorings .PKGINFO does not match the reviewed package identity")
+    if build != {
+        **expected,
+        "pkgbuild_sha256": manifest["pkgbuild_sha256"],
+    }:
+        fail("prebuilt Flavorings .BUILDINFO does not match its reviewed build identity")
+    return manifest
 
 
 def load_sources(path: Path) -> dict[str, dict[str, Any]]:
@@ -611,6 +704,11 @@ def verify_signature_manifest(
 def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
+    flavorings_input = commands.add_parser("verify-flavorings-input")
+    flavorings_input.add_argument("--archive", type=Path, required=True)
+    flavorings_input.add_argument("--manifest", type=Path, required=True)
+    flavorings_input.add_argument("--expected-tag", required=True)
+    flavorings_input.add_argument("--expected-version", required=True)
     writer = commands.add_parser("write")
     writer.add_argument("--bundle", type=Path, required=True)
     writer.add_argument("--source-root", type=Path, required=True)
@@ -638,7 +736,19 @@ def main() -> int:
     signed_verifier.add_argument("--expected-fingerprint")
     args = parser.parse_args()
     try:
-        if args.command == "write":
+        if args.command == "verify-flavorings-input":
+            manifest = verify_flavorings_input(
+                args.archive, args.manifest, args.expected_tag, args.expected_version
+            )
+            print(json.dumps({
+                "package": manifest["package"],
+                "version": manifest["version"],
+                "filename": manifest["filename"],
+                "sha256": manifest["sha256"],
+                "source": manifest["source"],
+                "pkgbuild_sha256": manifest["pkgbuild_sha256"],
+            }, sort_keys=True, separators=(",", ":")))
+        elif args.command == "write":
             write_manifest(args)
         elif args.command == "base":
             write_base(args)
