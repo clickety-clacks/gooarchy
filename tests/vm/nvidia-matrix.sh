@@ -315,8 +315,8 @@ if [[ -n ${GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET:-} && ${1:-} == -P ]]; then
     pkgbase=${pkgbase%.preset}
     if [[ $pkgbase == "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_PRESET" ]]; then
       if [[ -n ${GOOARCHY_VM_NVIDIA_TEST_ROOT:-} ]]; then
-        filesystem=$(df -Pk --output=source -- "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" | awk 'NR == 2 { print $1 }')
-        available=$(df -Pk --output=avail -- "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" | awk 'NR == 2 { print $1 }')
+        filesystem=$(df -k --output=source -- "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" | awk 'NR == 2 { print $1 }')
+        available=$(df -k --output=avail -- "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" | awk 'NR == 2 { print $1 }')
         printf 'invoke\t%s\t%s\t%s\t%s\n' "$pkgbase" "$GOOARCHY_TEST_PACMAN_HOOK_FAIL_IMAGE" \
           "$filesystem" "$available" >>"$marker"
       fi
@@ -2322,7 +2322,7 @@ prepare_bounded_disk_pressure() {
         fixture_refuse 'C2 bounded disk-pressure setup' "active image is missing or not safely representable: $image"
         return 75
       }
-      read -r filesystem available < <(df -Pk --output=source,avail -- "$image" | awk 'NR == 2 { print $1, $2 }')
+      read -r filesystem available < <(df -k --output=source,avail -- "$image" | awk 'NR == 2 { print $1, $2 }')
       [[ -n $filesystem && $available =~ ^[0-9]+$ ]] || {
         fixture_refuse 'C2 bounded disk-pressure setup' "could not measure filesystem capacity for $image"
         return 75
@@ -2408,7 +2408,7 @@ prepare_bounded_disk_pressure() {
       path=-
       identity=-:-
     fi
-    read -r after < <(df -Pk --output=avail -- "${directory_by_fs[$filesystem]}" | awk 'NR == 2 { print $1 }')
+    read -r after < <(df -k --output=avail -- "${directory_by_fs[$filesystem]}" | awk 'NR == 2 { print $1 }')
     [[ $after =~ ^[0-9]+$ ]] || {
       cleanup_bounded_pressure || true
       fixture_refuse 'C2 bounded disk-pressure setup' "could not measure free space after preparing $filesystem"
