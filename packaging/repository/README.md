@@ -10,11 +10,10 @@ The installer defaults to the full database URL `https://gooarchy.com/gooarchy.d
 `GOOARCHY_REPOSITORY_URL` may select another full database URL ending in `/gooarchy.db` or an
 existing Pacman Server directory override. The installer resolves either form to the Pacman Server
 directory, so the default requests the database at `https://gooarchy.com/gooarchy.db` and package
-files beside it. The matching public key and
-fingerprint are committed at `packaging/keys/gooarchy.asc` and
-`packaging/keys/gooarchy.fingerprint`. Package production verifies that pair before
-using the key to validate any existing release. Private signing material is not
-part of the source tree.
+files beside it. The matching public key and fingerprint are committed at
+`packaging/keys/gooarchy.asc` and `packaging/keys/gooarchy.fingerprint`. Package production
+verifies that pair before using the key to validate any existing release. Private signing material
+is not part of the source tree.
 
 ## Produce the transfer
 

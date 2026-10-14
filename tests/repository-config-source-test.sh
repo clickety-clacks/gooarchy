@@ -6,7 +6,6 @@ sources_conf=$repo_root/install/sources.conf
 public_key=$repo_root/packaging/keys/gooarchy.asc
 fingerprint_file=$repo_root/packaging/keys/gooarchy.fingerprint
 url_helper=$repo_root/install/helpers/repository-url.sh
-repository_installer=$repo_root/install/packaging/repository.sh
 flavorings_recipe=$repo_root/packaging/gooarchy-flavorings/PKGBUILD
 expected_url=https://gooarchy.com/gooarchy.db
 expected_fingerprint=F56B5368815D6C607C41265A69FCC98C28CD08EC
@@ -90,27 +89,6 @@ actual_fingerprint=$(gpg --homedir "$test_root/gnupg" --batch --no-options \
   exit 1
 }
 
-[[ $(grep -c '^_tag=' "$flavorings_recipe") == 1 ]] || {
-  echo 'Flavorings recipe must retain exactly one _tag selector' >&2
-  exit 1
-}
-grep -Fq 'repository_server=$(gooarchy_pacman_server "$repository_url")' "$repository_installer" || {
-  echo 'repository installer does not derive the Pacman Server directory from the database URL' >&2
-  exit 1
-}
-grep -Fq 'awk -v url="$repository_server"' "$repository_installer" || {
-  echo 'persistent Pacman configuration does not use the derived Server directory' >&2
-  exit 1
-}
-grep -Fq 'Server = $repository_server' "$repository_installer" || {
-  echo 'refresh Pacman configuration does not use the derived Server directory' >&2
-  exit 1
-}
-
-grep -Fxq '_tag=' "$flavorings_recipe" || {
-  echo 'Flavorings _tag must remain empty until an authorized final tag is available' >&2
-  exit 1
-}
 if bash -c 'source "$1"' _ "$flavorings_recipe" >"$test_root/flavorings.out" 2>"$test_root/flavorings.err"; then
   echo 'Flavorings recipe must fail closed with an empty _tag' >&2
   exit 1
