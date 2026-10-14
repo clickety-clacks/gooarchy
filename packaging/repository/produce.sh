@@ -63,9 +63,6 @@ checkout_branch=$(git -C "$repo_root" branch --show-current)
 [[ -z $(git -C "$repo_root" status --porcelain) ]] || die "the Gooarchy main checkout has uncommitted changes."
 checkout_commit=$(git -C "$repo_root" rev-parse HEAD)
 [[ $(uname -m) == x86_64 ]] || die "package production requires an x86_64 build machine."
-[[ -r /etc/os-release ]] || die "cannot identify the build operating system."
-source /etc/os-release
-[[ ${ID:-} == arch ]] || die "package production requires Arch Linux (ID=arch)."
 
 fingerprint_file="$repo_root/packaging/keys/gooarchy.fingerprint"
 public_key_file="$repo_root/packaging/keys/gooarchy.asc"
