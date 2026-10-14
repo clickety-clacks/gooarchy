@@ -1,0 +1,63 @@
+[package]
+name = "linearize"
+version = "0.1.8"
+edition = "2021"
+repository = "https://github.com/mahkoh/linearize"
+license = "MIT OR Apache-2.0"
+description = "Types that are enumerable and an array-backed map"
+keywords = ["data-structure", "no_std", "enum"]
+categories = ["data-structures", "no-std"]
+readme = "../README.md"
+rust-version = "1.85.0"
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = ["rand-0_8?/alloc", "rand-0_9?/alloc", "rand-0_10?/alloc"]
+derive = ["dep:linearize-derive"]
+all = [
+    "std",
+    "alloc",
+    "derive",
+    "serde-1",
+    "arbitrary-1",
+    "bytemuck-1",
+    "rand-0_8",
+    "rand-0_9",
+    "rand-0_10",
+    "postcard-experimental-1",
+    "defmt-1",
+]
+
+serde-1 = ["dep:serde-1"]
+arbitrary-1 = ["dep:arbitrary-1"]
+bytemuck-1 = ["dep:bytemuck-1"]
+rand-0_8 = ["dep:rand-0_8"]
+rand-0_9 = ["dep:rand-0_9"]
+rand-0_10 = ["dep:rand-0_10"]
+postcard-experimental-1 = ["dep:postcard-1"]
+defmt-1 = ["dep:defmt-1"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+cfg-if = "1"
+linearize-derive = { path = "../linearize-derive", version = "0.2.2", optional = true }
+serde-1 = { package = "serde", version = "1", default-features = false, optional = true }
+arbitrary-1 = { package = "arbitrary", version = "1.4", default-features = false, optional = true }
+bytemuck-1 = { package = "bytemuck", version = "1.9", default-features = false, optional = true }
+rand-0_8 = { package = "rand", version = "0.8.3", default-features = false, optional = true }
+rand-0_9 = { package = "rand", version = "0.9", default-features = false, optional = true }
+rand-0_10 = { package = "rand", version = "0.10", default-features = false, optional = true }
+postcard-1 = { package = "postcard", version = "1", default-features = false, features = ["experimental-derive"], optional = true }
+defmt-1 = { package = "defmt", version = "1", default-features = false, optional = true }
+
+[build-dependencies]
+version_check = "0.9.5"
+
+[dev-dependencies]
+static_assertions = "1.1.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(more_const_functions)'] }

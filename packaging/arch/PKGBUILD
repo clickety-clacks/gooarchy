@@ -19,22 +19,20 @@ pkgdesc="Gooarchy, a desktop Linux distribution built around Scottland"
 arch=('x86_64')
 url="https://github.com/clickety-clacks/gooarchy"
 license=('LicenseRef-unlicensed')
-makedepends=('git' 'cargo')
+makedepends=('git' 'cargo' 'pam')
 options=('!debug')
 
 build() {
-  # Build into $srcdir so the checkout remains clean. The workspace has no external dependencies.
-  CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release \
-    --manifest-path "$_repo/system-tools/Cargo.toml"
+  # Build into $srcdir so the checkout remains clean. Rust sources are vendored.
+  (cd "$_repo/system-tools" && CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release)
 }
 
 check() {
-  CARGO_TARGET_DIR="$srcdir/target" cargo test --frozen --release \
-    --manifest-path "$_repo/system-tools/Cargo.toml"
+  (cd "$_repo/system-tools" && CARGO_TARGET_DIR="$srcdir/target" cargo test --frozen --release)
 }
 
 package() {
-  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'jq' 'glibc' 'gcc-libs'
+  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'jq' 'glibc' 'gcc-libs' 'pam'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
   # Optional, not required: editing the system tools is the exception, and package upgrades work
   # without a toolchain (docs/rulings.md).
@@ -42,13 +40,21 @@ package() {
   install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
   install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
   install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
+  install -Dm755 "$_repo/session/35-gooarchy-lock" "$pkgdir/usr/lib/scottland/config.d/35-gooarchy-lock"
+  install -Dm644 "$_repo/session/gooarchy-lock.pam" "$pkgdir/etc/pam.d/gooarchy-lock"
   install -Dm755 "$_repo/session/35-gooarchy-lid" "$pkgdir/usr/lib/scottland/config.d/35-gooarchy-lid"
   install -Dm755 "$_repo/session/autostart.d/45-gooarchy-clamshell" "$pkgdir/usr/lib/scottland/autostart.d/45-gooarchy-clamshell"
   install -Dm755 "$_repo/session/libexec/gooarchy-clamshell" "$pkgdir/usr/bin/gooarchy-clamshell"
   install -Dm644 "$_repo/agents/skills/gooarchy/SKILL.md" "$pkgdir/usr/share/gooarchy/agents/skills/gooarchy/SKILL.md"
   install -Dm755 "$_repo/session/03-link-gooarchy-agent-skills" "$pkgdir/usr/lib/scottland/autostart.d/03-link-gooarchy-agent-skills"
   install -Dm755 "$srcdir/target/release/gooarchy" "$pkgdir/usr/bin/gooarchy"
+  install -Dm755 "$srcdir/target/release/gooarchy-lock" "$pkgdir/usr/bin/gooarchy-lock"
   install -Dm644 "$_repo/system-tools/LICENSE-omarchy" "$pkgdir/usr/share/licenses/gooarchy/LICENSE-omarchy"
+  local license relative
+  while IFS= read -r -d '' license; do
+    relative=${license#"$_repo"/system-tools/vendor/}
+    install -Dm644 "$license" "$pkgdir/usr/share/licenses/gooarchy/vendor/$relative"
+  done < <(find "$_repo/system-tools/vendor" -type f \( -name 'LICENSE*' -o -name 'COPYING*' \) -print0 | sort -z)
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
 gooarchy $pkgver
 checkout $(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo unknown)${_dirty:+ with uncommitted changes}
