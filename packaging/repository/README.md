@@ -47,10 +47,12 @@ payload byte and database record before signing.
 
 ## Sign
 
-The primary signer uses its configured 1Password key item. A separately authorized backup signer
-can be selected explicitly if the primary signer is unavailable. No automatic fallback occurs.
-Both roles require a clean `main` checkout whose commit and tree exactly match the transfer
-manifest and whose configured public fingerprint matches the transfer:
+The primary signer uses its configured 1Password key item. Select the separately credentialed
+backup signer only after confirming that the primary signer is unavailable and that backup signing
+is authorized for this exact transfer. Keep upload custody qualified independently; backup signing
+does not grant upload permission. No automatic fallback occurs. Both roles require a clean `main`
+checkout whose commit and tree exactly match the transfer manifest and whose configured public
+fingerprint matches the transfer:
 
 ```sh
 GOOARCHY_SIGNING_KEY_REF='op://<approved-vault>/<approved-item>/<field>' \
@@ -74,13 +76,15 @@ The selected signer imports the key directly from 1Password into a private tempo
 the command never prints the key or token. It verifies the configured public fingerprint, immutable
 manifest and payload hashes, and exact source identity. It creates and verifies one detached `.sig`
 for each package and `gooarchy.db`, then writes a separate signature receipt binding those bytes to
-the manifest SHA-256 and signer role. It never calls GitHub. The backup signer configuration does
-not grant upload permission.
+the manifest SHA-256 and signer role. It never calls GitHub. A backup signature transfer still
+requires the independently qualified primary uploader below to publish it.
 
 ## Upload
 
-Only a separately qualified primary uploader runs this operation. It consumes the signed transfer;
-it does not read a private key or change the builder's immutable manifest:
+Only a separately qualified primary uploader runs this operation, regardless of which authorized
+signer produced the signatures. Upload qualification and custody are separate from signing. The
+uploader consumes the signed transfer; it does not read a private key or change the builder's
+immutable manifest:
 
 ```sh
 packaging/repository/upload.sh --uploader-role primary \
