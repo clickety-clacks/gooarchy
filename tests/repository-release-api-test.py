@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packaging/repository/release-api.py"
 SPEC = importlib.util.spec_from_file_location("gooarchy_release_api", MODULE_PATH)
@@ -251,6 +252,62 @@ class ReleaseAPITests(unittest.TestCase):
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer synthetic-token")
         self.assertNotIn("synthetic-token", opener.request.full_url)
         self.assertEqual(opener.request.get_header("X-github-api-version"), release_api.API_VERSION)
+
+    def test_asset_upload_includes_user_agent_header(self) -> None:
+        asset_path = self.assets / "gooarchy.db"
+        asset = release_api.Asset(
+            name=asset_path.name,
+            path=asset_path,
+            size=asset_path.stat().st_size,
+            sha256=digest(asset_path.read_bytes()),
+        )
+
+        class Response:
+            status = 201
+
+            def read(self, _limit: int) -> bytes:
+                return json.dumps({"name": asset.name, "state": "uploaded", "size": asset.size}).encode()
+
+        class Connection:
+            def __init__(self) -> None:
+                self.request: tuple[str, str] | None = None
+                self.headers: list[tuple[str, str]] = []
+                self.sent: list[bytes] = []
+                self.closed = False
+
+            def putrequest(self, method: str, target: str) -> None:
+                self.request = (method, target)
+
+            def putheader(self, name: str, value: str) -> None:
+                self.headers.append((name, value))
+
+            def endheaders(self) -> None:
+                pass
+
+            def send(self, body: bytes) -> None:
+                self.sent.append(body)
+
+            def getresponse(self) -> Response:
+                return Response()
+
+            def close(self) -> None:
+                self.closed = True
+
+        connection = Connection()
+        upload_url = "https://uploads.github.com/repos/clickety-clacks/gooarchy/releases/17/assets{?name,label}"
+        with patch.object(release_api.http.client, "HTTPSConnection", return_value=connection) as factory:
+            result = release_api.GitHubReleaseAPI("synthetic-token").upload_asset(upload_url, 17, asset)
+
+        factory.assert_called_once()
+        self.assertEqual(
+            connection.request,
+            ("POST", "/repos/clickety-clacks/gooarchy/releases/17/assets?name=gooarchy.db"),
+        )
+        self.assertIn(("User-Agent", "Gooarchy-release-client"), connection.headers)
+        self.assertIn(("Authorization", "Bearer synthetic-token"), connection.headers)
+        self.assertEqual(b"".join(connection.sent), asset_path.read_bytes())
+        self.assertEqual(result, {"name": asset.name, "state": "uploaded", "size": asset.size})
+        self.assertTrue(connection.closed)
 
     def test_upload_endpoint_is_pinned_to_github_and_encodes_asset_names(self) -> None:
         valid = "https://uploads.github.com/repos/clickety-clacks/gooarchy/releases/17/assets{?name,label}"

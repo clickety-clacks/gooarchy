@@ -318,6 +318,7 @@ class GitHubReleaseAPI:
         try:
             connection.putrequest("POST", target)
             connection.putheader("Accept", "application/vnd.github+json")
+            connection.putheader("User-Agent", "Gooarchy-release-client")
             connection.putheader("Authorization", f"Bearer {self._token}")
             connection.putheader("X-GitHub-Api-Version", API_VERSION)
             connection.putheader("Content-Type", "application/octet-stream")
