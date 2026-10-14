@@ -1,9 +1,10 @@
 # Building and publishing the Gooarchy package repository
 
-The package repository uses two separate roles. The package builder creates x86_64 Arch package
-archives and an **unsigned** repository database. The authorized signer validates that transfer,
-creates detached signatures for every package and the database, and uploads the complete GitHub
-Release. Never run the retired `publish.sh` command on a package builder.
+The package repository uses separate builder, signer, and uploader operations. The package builder
+creates x86_64 Arch package archives and an **unsigned** repository database. A signer validates that
+immutable transfer and creates detached signatures for every package and the database. A separately
+qualified uploader verifies the signed transfer and uploads the complete GitHub Release. Never run
+the retired `publish.sh` command on a package builder.
 
 ## Produce the transfer
 
@@ -35,35 +36,66 @@ tree, signing fingerprint, exact base release and asset hashes, package names/ve
 revisions, and the unsigned database. `SHA256SUMS` and the signer independently verify every
 payload byte and database record before signing.
 
-## Sign and publish
+## Sign
 
-Only the authorized signing machine runs this step, from a clean `main` checkout whose commit and
-tree exactly match the transfer manifest:
+The primary signer uses its configured 1Password key item. A separately authorized backup signer
+can be selected explicitly if the primary signer is unavailable. No automatic fallback occurs.
+Both roles require a clean `main` checkout whose commit and tree exactly match the transfer
+manifest and whose configured public fingerprint matches the transfer:
 
 ```sh
 GOOARCHY_SIGNING_KEY_REF='op://<approved-vault>/<approved-item>/<field>' \
-  packaging/repository/sign-publish.sh \
+  packaging/repository/sign.sh --signer-role primary \
   --bundle /path/to/new-transfer \
+  --output /path/to/new-signed-transfer \
   --manifest-sha256 <64-hex-manifest-sha256>
 ```
 
-The signer imports the key directly from 1Password into a private temporary GnuPG home; it never
-prints the key or token. It verifies the configured public fingerprint, transfer hashes, exact
-source identity, and unchanged current latest release. It creates detached `.sig` files for each
-package and `gooarchy.db`, creates a GitHub Release draft with the complete package set, downloads
-the draft to compare every asset name and byte, rechecks the prior latest release, then makes one
-final operation to publish the verified release as latest. A failed check leaves the prior latest
-release in place; an incomplete draft is not made latest.
+The explicit backup command reads a separate 1Password item and writes signatures only:
+
+```sh
+GOOARCHY_BACKUP_SIGNING_KEY_REF='op://<approved-vault>/<approved-backup-item>/<field>' \
+  packaging/repository/sign.sh --signer-role backup \
+  --bundle /path/to/new-transfer \
+  --output /path/to/new-signed-transfer \
+  --manifest-sha256 <64-hex-manifest-sha256>
+```
+
+The selected signer imports the key directly from 1Password into a private temporary GnuPG home;
+the command never prints the key or token. It verifies the configured public fingerprint, immutable
+manifest and payload hashes, and exact source identity. It creates and verifies one detached `.sig`
+for each package and `gooarchy.db`, then writes a separate signature receipt binding those bytes to
+the manifest SHA-256 and signer role. It never calls GitHub. The backup signer configuration does
+not grant upload permission.
+
+## Upload
+
+Only a separately qualified primary uploader runs this operation. It consumes the signed transfer;
+it does not read a private key or change the builder's immutable manifest:
+
+```sh
+packaging/repository/upload.sh --uploader-role primary \
+  --signed-bundle /path/to/new-signed-transfer \
+  --manifest-sha256 <64-hex-manifest-sha256>
+```
+
+The uploader verifies the configured public fingerprint, signature receipt, each detached package
+and database signature, the exact source identity, and unchanged current latest release. It creates a
+GitHub Release draft with the complete package set, downloads the draft to compare every asset name
+and byte, rechecks the prior latest release, then makes one final operation to publish the verified
+release as latest. A failed check leaves the prior latest release in place; an incomplete draft is
+not made latest. Backup signing alone does not qualify an uploader.
 
 The old `publish.sh` entry point now exits with a clear message directing operators to the two
 role-specific commands. Do not restore the single-machine build/sign/upload flow.
 
 ## Checks and remaining acceptance
 
-`tests/repository-publish-test.sh` exercises the transfer contract and signer publication boundary
-with synthetic package/database records, a throwaway OpenPGP key, and a local Releases-shaped
-service. It covers complete initial contents, manifest and payload hashes, source/database identity,
-retained package bytes, version advancement, detached signatures, and refusal to advance latest after
-an incomplete upload or failed readback. It does not exercise a real Arch build, 1Password, GitHub,
-the production signing key, installer, or redirect. Those checks require their separately admitted
-release route and must be reported against the exact source tree and transfer.
+`tests/repository-publish-test.sh` exercises the transfer, primary and backup signing, role separation,
+and upload behavior with synthetic package/database records, a throwaway OpenPGP key, and a local
+Releases-shaped service. It covers complete initial contents, manifest and payload hashes,
+source/database identity, retained package bytes, version advancement, detached signatures for every
+package and the database, and refusal to advance latest after an incomplete upload or failed
+readback. It does not exercise a real Arch build, 1Password, GitHub, the production signing key,
+installer, or redirect. Those checks require their separately admitted release route and must be
+reported against the exact source tree and transfer.

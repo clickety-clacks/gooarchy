@@ -14,7 +14,11 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+# The protocol runs from a required-clean checkout; importing the database reader must not dirty it.
+sys.dont_write_bytecode = True
+
 SCHEMA = "gooarchy-repository-transfer-v1"
+SIGNATURE_SCHEMA = "gooarchy-repository-signatures-v1"
 REPOSITORY = "clickety-clacks/gooarchy"
 FINGERPRINT_RE = re.compile(r"^(?:[0-9A-F]{40}|[0-9A-F]{64})$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -273,6 +277,60 @@ def write_manifest(args: argparse.Namespace) -> None:
     print(sha256_file(manifest_path))
 
 
+def write_signature_receipt(args: argparse.Namespace) -> None:
+    if args.signer_role not in {"primary", "backup"}:
+        fail("signer role must be selected as primary or backup")
+    if not FINGERPRINT_RE.fullmatch(args.fingerprint):
+        fail("signing fingerprint must be a normalized 40- or 64-digit uppercase fingerprint")
+    if args.bundle.is_symlink() or not args.bundle.is_dir():
+        fail("signature receipt source must be a regular transfer directory")
+    if args.signatures.is_symlink() or not args.signatures.is_dir():
+        fail("signature source must be a regular directory")
+    bundle = args.bundle.resolve(strict=True)
+    signatures_dir = args.signatures.resolve(strict=True)
+    manifest = load_and_verify_bundle(
+        bundle, args.expected_manifest_sha256, args.fingerprint
+    )
+    expected: dict[str, str] = {
+        item["filename"]: item["sha256"] for item in manifest["packages"]
+    }
+    expected["gooarchy.db"] = manifest["database"]["sha256"]
+    entries: list[dict[str, str]] = []
+    for filename, payload_sha256 in sorted(expected.items()):
+        signature_filename = safe_asset_name(f"{filename}.sig")
+        signature_path = signatures_dir / signature_filename
+        if not signature_path.is_file() or signature_path.is_symlink():
+            fail(f"missing regular detached signature for {filename}")
+        entries.append({
+            "filename": filename,
+            "payload_sha256": payload_sha256,
+            "signature_filename": signature_filename,
+            "signature_sha256": sha256_file(signature_path),
+        })
+    actual = set()
+    for path in signatures_dir.iterdir():
+        if path.is_symlink() or not path.is_file():
+            fail("signature directory may contain only regular, non-symlink files")
+        actual.add(path.name)
+    if actual != {entry["signature_filename"] for entry in entries}:
+        fail("signature directory does not exactly match packages and repository database")
+    receipt = {
+        "schema": SIGNATURE_SCHEMA,
+        "manifest_sha256": args.expected_manifest_sha256,
+        "signer_role": args.signer_role,
+        "signing_fingerprint": args.fingerprint,
+        "signatures": entries,
+    }
+    output = args.output
+    if output.exists() or output.is_symlink():
+        fail("signature receipt output already exists")
+    output.write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    print(sha256_file(output))
+
+
 def validate_base(base: Any) -> None:
     if not isinstance(base, dict) or set(base) != {"release_tag", "database_sha256", "packages"}:
         fail("base release manifest has invalid fields")
@@ -311,7 +369,13 @@ def validate_base(base: Any) -> None:
         filenames.add(filename)
 
 
-def load_and_verify_bundle(bundle: Path, expected_manifest: str, expected_fingerprint: str | None) -> dict[str, Any]:
+def load_and_verify_bundle(
+    bundle: Path,
+    expected_manifest: str,
+    expected_fingerprint: str | None,
+    *,
+    signed: bool = False,
+) -> dict[str, Any]:
     if bundle.is_symlink() or not bundle.is_dir():
         fail("transfer bundle must be a real directory")
     bundle = bundle.resolve(strict=True)
@@ -319,14 +383,24 @@ def load_and_verify_bundle(bundle: Path, expected_manifest: str, expected_finger
     sums_path = bundle / "SHA256SUMS"
     payload = bundle / "payload"
     root_entries = {path.name for path in bundle.iterdir()}
-    if root_entries != {"manifest.json", "SHA256SUMS", "payload"}:
-        fail("transfer bundle root must contain exactly manifest.json, SHA256SUMS, and payload")
+    expected_root = {"manifest.json", "SHA256SUMS", "payload"}
+    if signed:
+        expected_root |= {"SIGNATURES.json", "signatures"}
+    if root_entries != expected_root:
+        fail("transfer bundle root has unexpected entries")
     if not manifest_path.is_file() or manifest_path.is_symlink():
         fail("transfer bundle is missing a regular manifest.json")
     if not sums_path.is_file() or sums_path.is_symlink():
         fail("transfer bundle is missing a regular SHA256SUMS")
     if not payload.is_dir() or payload.is_symlink():
         fail("transfer bundle is missing a regular payload directory")
+    if signed:
+        signature_manifest = bundle / "SIGNATURES.json"
+        signatures = bundle / "signatures"
+        if not signature_manifest.is_file() or signature_manifest.is_symlink():
+            fail("signed transfer is missing a regular SIGNATURES.json")
+        if not signatures.is_dir() or signatures.is_symlink():
+            fail("signed transfer is missing a regular signatures directory")
     if not isinstance(expected_manifest, str) or not SHA256_RE.fullmatch(expected_manifest) or sha256_file(manifest_path) != expected_manifest:
         fail("transfer manifest hash does not match the independently supplied SHA-256")
     try:
@@ -462,7 +536,80 @@ def load_and_verify_bundle(bundle: Path, expected_manifest: str, expected_finger
     )
     if actual_records != expected_records:
         fail("repository database package records do not match the transfer manifest")
+    if signed:
+        verify_signature_manifest(bundle, manifest, expected_manifest, expected_fingerprint)
     return manifest
+
+
+def verify_signature_manifest(
+    bundle: Path,
+    manifest: dict[str, Any],
+    expected_manifest: str,
+    expected_fingerprint: str | None,
+) -> dict[str, Any]:
+    receipt_path = bundle / "SIGNATURES.json"
+    signatures_dir = bundle / "signatures"
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"cannot read signature receipt: {error}")
+    if not isinstance(receipt, dict) or set(receipt) != {
+        "schema", "manifest_sha256", "signer_role", "signing_fingerprint", "signatures"
+    }:
+        fail("signature receipt has invalid fields")
+    if receipt["schema"] != SIGNATURE_SCHEMA:
+        fail("signature receipt has the wrong schema")
+    if receipt["manifest_sha256"] != expected_manifest:
+        fail("signature receipt does not bind the expected immutable build manifest")
+    if not isinstance(receipt["signer_role"], str) or receipt["signer_role"] not in {"primary", "backup"}:
+        fail("signature receipt has an unsupported signer role")
+    fingerprint = receipt["signing_fingerprint"]
+    if not isinstance(fingerprint, str) or not FINGERPRINT_RE.fullmatch(fingerprint):
+        fail("signature receipt contains an invalid fingerprint")
+    if fingerprint != manifest["signing_fingerprint"] or (
+        expected_fingerprint is not None and fingerprint != expected_fingerprint
+    ):
+        fail("signature receipt key does not match the build manifest and source configuration")
+
+    expected_assets = {
+        item["filename"]: item["sha256"] for item in manifest["packages"]
+    }
+    expected_assets["gooarchy.db"] = manifest["database"]["sha256"]
+    entries = receipt["signatures"]
+    if not isinstance(entries, list):
+        fail("signature receipt entries must be a list")
+    actual_assets: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {
+            "filename", "payload_sha256", "signature_filename", "signature_sha256"
+        }:
+            fail("signature receipt entry has invalid fields")
+        filename = safe_asset_name(entry["filename"])
+        signature_filename = safe_asset_name(entry["signature_filename"])
+        if signature_filename != f"{filename}.sig":
+            fail(f"signature filename does not match its payload: {filename}")
+        if filename in actual_assets:
+            fail(f"signature receipt repeats payload {filename}")
+        actual_assets[filename] = entry["payload_sha256"]
+        if entry["payload_sha256"] != expected_assets.get(filename):
+            fail(f"signature receipt payload differs from the build manifest: {filename}")
+        if not isinstance(entry["signature_sha256"], str) or not SHA256_RE.fullmatch(entry["signature_sha256"]):
+            fail(f"signature hash is invalid for {filename}")
+        signature_path = signatures_dir / signature_filename
+        if not signature_path.is_file() or signature_path.is_symlink():
+            fail(f"signed transfer is missing a regular signature for {filename}")
+        if sha256_file(signature_path) != entry["signature_sha256"]:
+            fail(f"signature hash mismatch for {filename}")
+    if actual_assets != expected_assets:
+        fail("signature receipt must cover every package and the repository database exactly once")
+    actual_signatures: set[str] = set()
+    for path in signatures_dir.iterdir():
+        if path.is_symlink() or not path.is_file():
+            fail("signature directory may contain only regular, non-symlink files")
+        actual_signatures.add(path.name)
+    if actual_signatures != {f"{name}.sig" for name in expected_assets}:
+        fail("signature directory contains an incomplete or unexpected asset set")
+    return receipt
 
 
 def main() -> int:
@@ -474,6 +621,13 @@ def main() -> int:
     writer.add_argument("--source-map", type=Path, required=True)
     writer.add_argument("--fingerprint", required=True)
     writer.add_argument("--base-json", type=Path)
+    receipt_writer = commands.add_parser("sign-receipt")
+    receipt_writer.add_argument("--bundle", type=Path, required=True)
+    receipt_writer.add_argument("--signatures", type=Path, required=True)
+    receipt_writer.add_argument("--expected-manifest-sha256", required=True)
+    receipt_writer.add_argument("--fingerprint", required=True)
+    receipt_writer.add_argument("--signer-role", required=True)
+    receipt_writer.add_argument("--output", type=Path, required=True)
     base_writer = commands.add_parser("base")
     base_writer.add_argument("--release-tag", required=True)
     base_writer.add_argument("--database", type=Path, required=True)
@@ -482,12 +636,39 @@ def main() -> int:
     verifier.add_argument("--bundle", type=Path, required=True)
     verifier.add_argument("--expected-manifest-sha256", required=True)
     verifier.add_argument("--expected-fingerprint")
+    signed_verifier = commands.add_parser("verify-signed")
+    signed_verifier.add_argument("--bundle", type=Path, required=True)
+    signed_verifier.add_argument("--expected-manifest-sha256", required=True)
+    signed_verifier.add_argument("--expected-fingerprint")
     args = parser.parse_args()
     try:
         if args.command == "write":
             write_manifest(args)
         elif args.command == "base":
             write_base(args)
+        elif args.command == "sign-receipt":
+            write_signature_receipt(args)
+        elif args.command == "verify-signed":
+            manifest = load_and_verify_bundle(
+                args.bundle,
+                args.expected_manifest_sha256,
+                args.expected_fingerprint,
+                signed=True,
+            )
+            receipt = verify_signature_manifest(
+                args.bundle.resolve(strict=True),
+                manifest,
+                args.expected_manifest_sha256,
+                args.expected_fingerprint,
+            )
+            print(json.dumps({
+                "source_commit": manifest["source_commit"],
+                "source_tree": manifest["source_tree"],
+                "signer_role": receipt["signer_role"],
+                "signing_fingerprint": receipt["signing_fingerprint"],
+                "packages": len(manifest["packages"]),
+                "base_release": manifest["base"]["release_tag"] if manifest["base"] else None,
+            }, sort_keys=True))
         else:
             manifest = load_and_verify_bundle(
                 args.bundle, args.expected_manifest_sha256, args.expected_fingerprint

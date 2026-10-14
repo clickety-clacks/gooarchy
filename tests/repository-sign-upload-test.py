@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise signer draft/readback/latest behavior with local fake release services."""
+"""Exercise explicit signer roles and the separately invoked upload boundary."""
 from __future__ import annotations
 
 import hashlib
@@ -22,6 +22,8 @@ REQUIRED = sorted({
     "linux-gooarchy-headers",
 })
 VERSION = "1.0.0-1"
+PRIMARY_REF = "op://test/vault/primary/private-key"
+BACKUP_REF = "op://test/vault/backup/private-key"
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -58,7 +60,7 @@ def create_database(path: Path, records: list[tuple[str, str, str]]) -> None:
             archive.addfile(item, io.BytesIO(body))
 
 
-class SignerPublishTests(unittest.TestCase):
+class SignAndUploadTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="gooarchy-signer-test-")
         self.root = Path(self.temp.name)
@@ -81,12 +83,14 @@ class SignerPublishTests(unittest.TestCase):
             "GOOARCHY_TEST_RELEASES": str(self.releases),
             "GOOARCHY_TEST_DRAFTS": str(self.drafts),
             "GOOARCHY_TEST_SECRET_KEY": str(self.secret_key),
-            "GOOARCHY_SIGNING_KEY_REF": "op://test/vault/key/private-key",
             "PATH": f"{self.bin}:{os.environ['PATH']}",
         })
         self.install_test_commands()
         self.create_key()
         self.create_checkout_and_transfer()
+        self.signed_primary = self.root / "signed-primary"
+        signed = self.sign("primary", self.signed_primary)
+        self.assertEqual(signed.returncode, 0, signed.stdout + signed.stderr)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -105,7 +109,7 @@ with tarfile.open(sys.argv[2], 'r:*') as archive:
         op = self.bin / "op"
         op.write_text("""#!/usr/bin/env bash
 set -euo pipefail
-[[ ${1:-} == read && ${2:-} == op://test/vault/key/private-key && $# == 2 ]] || exit 2
+[[ ${1:-} == read && $# == 2 && ${2:-} == ${GOOARCHY_TEST_EXPECT_KEY_REF:-} ]] || exit 2
 cat "$GOOARCHY_TEST_SECRET_KEY"
 """)
         op.chmod(0o755)
@@ -124,9 +128,8 @@ if args[:2] == ['release', 'list']:
     print(json.dumps([{'tagName': state['latest'], 'isLatest': True}] if state['latest'] else []))
 elif args[:2] == ['release', 'create']:
     tag = args[2]
-    rest = args[3:]
     assets = []
-    for value in rest:
+    for value in args[3:]:
         if value.startswith('--'): break
         assets.append(value)
     target = os.path.join(drafts, tag)
@@ -172,21 +175,18 @@ else:
         secret_key = run([
             "gpg", "--homedir", str(self.key_home), "--batch", "--armor", "--export-secret-keys", self.fingerprint,
         ]).stdout
-        (self.checkout / "packaging/keys").mkdir(parents=True)
-        (self.checkout / "packaging/keys/gooarchy.asc").write_text(public_key)
-        (self.checkout / "packaging/keys/gooarchy.fingerprint").write_text(self.fingerprint + "\n")
+        keys = self.checkout / "packaging/keys"
+        keys.mkdir(parents=True)
+        (keys / "gooarchy.asc").write_text(public_key)
+        (keys / "gooarchy.fingerprint").write_text(self.fingerprint + "\n")
         self.secret_key.write_text(secret_key)
         self.secret_key.chmod(0o600)
 
     def create_checkout_and_transfer(self) -> None:
-        (self.checkout / "packaging/repository").mkdir(parents=True)
-        source_files = [
-            ROOT / "packaging/repository/sign-publish.sh",
-            ROOT / "packaging/repository/repository-protocol.py",
-            ROOT / "packaging/repository/read-db.py",
-        ]
-        for source in source_files:
-            shutil.copy2(source, self.checkout / "packaging/repository" / source.name)
+        repository = self.checkout / "packaging/repository"
+        repository.mkdir(parents=True)
+        for name in ("sign.sh", "upload.sh", "repository-protocol.py", "read-db.py"):
+            shutil.copy2(ROOT / "packaging/repository" / name, repository / name)
         run(["git", "init", "-q", "-b", "main", str(self.checkout)])
         run(["git", "-C", str(self.checkout), "config", "user.name", "Transfer Test"])
         run(["git", "-C", str(self.checkout), "config", "user.email", "transfer-test@example.invalid"])
@@ -227,19 +227,37 @@ else:
         }
         manifest_path = self.bundle / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
-        lines = [f"{digest(payload / name)}  payload/{name}" for name in sorted(["gooarchy.db", *(entry["filename"] for entry in packages)])]
-        (self.bundle / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="ascii")
+        checksum_files = ["gooarchy.db", *(entry["filename"] for entry in packages)]
+        (self.bundle / "SHA256SUMS").write_text(
+            "\n".join(f"{digest(payload / name)}  payload/{name}" for name in sorted(checksum_files)) + "\n",
+            encoding="ascii",
+        )
         self.manifest_hash = digest(manifest_path)
 
-    def publish(self, *, fail_upload: bool = False, omit_asset: bool = False) -> subprocess.CompletedProcess[str]:
+    def sign(self, role: str, output: Path, *, reference: str | None = None) -> subprocess.CompletedProcess[str]:
+        env = self.base_env.copy()
+        selected_reference = reference or (PRIMARY_REF if role == "primary" else BACKUP_REF)
+        env["GOOARCHY_TEST_EXPECT_KEY_REF"] = selected_reference
+        env["GOOARCHY_SIGNING_KEY_REF"] = PRIMARY_REF
+        env["GOOARCHY_BACKUP_SIGNING_KEY_REF"] = BACKUP_REF
+        return run([
+            str(self.checkout / "packaging/repository/sign.sh"),
+            "--signer-role", role,
+            "--bundle", str(self.bundle),
+            "--output", str(output),
+            "--manifest-sha256", self.manifest_hash,
+        ], env=env, check=False)
+
+    def upload(self, signed: Path, *, fail_upload: bool = False, omit_asset: bool = False) -> subprocess.CompletedProcess[str]:
         env = self.base_env.copy()
         if fail_upload:
             env["GOOARCHY_TEST_FAIL_UPLOAD"] = "1"
         if omit_asset:
             env["GOOARCHY_TEST_OMIT_ASSET"] = "1"
         return run([
-            str(self.checkout / "packaging/repository/sign-publish.sh"),
-            "--bundle", str(self.bundle),
+            str(self.checkout / "packaging/repository/upload.sh"),
+            "--uploader-role", "primary",
+            "--signed-bundle", str(signed),
             "--manifest-sha256", self.manifest_hash,
         ], env=env, check=False)
 
@@ -248,36 +266,88 @@ else:
             return ""
         return json.loads(self.state.read_text())["latest"]
 
-    def test_incomplete_upload_and_failed_readback_never_advance_latest(self) -> None:
-        failed_upload = self.publish(fail_upload=True)
+    def test_backup_signs_all_assets_but_upload_is_separate(self) -> None:
+        signed_backup = self.root / "signed-backup"
+        result = self.sign("backup", signed_backup)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads((signed_backup / "SIGNATURES.json").read_text())
+        self.assertEqual(receipt["signer_role"], "backup")
+        self.assertEqual(receipt["signing_fingerprint"], self.fingerprint)
+        self.assertEqual(len(receipt["signatures"]), len(REQUIRED) + 1)
+        self.assertEqual(len(list((signed_backup / "signatures").iterdir())), len(REQUIRED) + 1)
+        self.assertFalse(self.state.exists())
+        self.assertEqual(list(self.drafts.iterdir()), [])
+
+        # A distinct uploader invocation consumes the exact signed output.
+        uploaded = self.upload(signed_backup)
+        self.assertEqual(uploaded.returncode, 0, uploaded.stderr)
+        self.assertTrue(self.latest())
+
+    def test_primary_signs_all_assets_without_upload_then_uploads_complete_set(self) -> None:
+        receipt = json.loads((self.signed_primary / "SIGNATURES.json").read_text())
+        self.assertEqual(receipt["signer_role"], "primary")
+        self.assertEqual(len(receipt["signatures"]), len(REQUIRED) + 1)
+        self.assertFalse(self.state.exists())
+        self.assertEqual(list(self.drafts.iterdir()), [])
+
+        uploaded = self.upload(self.signed_primary)
+        self.assertEqual(uploaded.returncode, 0, uploaded.stderr)
+        latest = self.latest()
+        self.assertTrue(latest)
+        assets = set(os.listdir(self.releases / latest))
+        expected = {"gooarchy.db", "gooarchy.db.sig"}
+        for package in REQUIRED:
+            filename = f"{package}-{VERSION}-any.pkg.tar.zst"
+            expected.update({filename, f"{filename}.sig"})
+        self.assertEqual(assets, expected)
+
+    def test_upload_failures_never_advance_latest(self) -> None:
+        failed_upload = self.upload(self.signed_primary, fail_upload=True)
         self.assertNotEqual(failed_upload.returncode, 0)
         self.assertEqual(self.latest(), "")
 
-        failed_readback = self.publish(omit_asset=True)
+        failed_readback = self.upload(self.signed_primary, omit_asset=True)
         self.assertNotEqual(failed_readback.returncode, 0)
         self.assertEqual(self.latest(), "")
         self.assertEqual(len(list(self.drafts.iterdir())), 2)
         self.assertEqual(list(self.releases.iterdir()), [])
 
-    def test_complete_verified_release_advances_latest_with_all_detached_signatures(self) -> None:
-        result = self.publish()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        tag = self.latest()
-        self.assertTrue(tag.startswith(f"gooarchy-repo-{self.commit[:12]}-"))
-        release = self.releases / tag
-        expected_names = {"gooarchy.db", "gooarchy.db.sig"}
-        for path in (self.bundle / "payload").iterdir():
-            if path.name != "gooarchy.db":
-                expected_names.update({path.name, f"{path.name}.sig"})
-        self.assertEqual({path.name for path in release.iterdir()}, expected_names)
-        verify_home = self.root / "verify-home"
-        verify_home.mkdir(mode=0o700)
-        run(["gpg", "--homedir", str(verify_home), "--batch", "--import", str(self.checkout / "packaging/keys/gooarchy.asc")])
-        for name in sorted(expected_names):
-            if name.endswith(".sig"):
-                continue
-            run(["gpg", "--homedir", str(verify_home), "--batch", "--verify", str(release / f"{name}.sig"), str(release / name)])
+    def test_signer_rejects_wrong_manifest_digest_and_wrong_fingerprint(self) -> None:
+        wrong_hash = run([
+            str(self.checkout / "packaging/repository/sign.sh"),
+            "--signer-role", "backup",
+            "--bundle", str(self.bundle),
+            "--output", str(self.root / "wrong-hash"),
+            "--manifest-sha256", "0" * 64,
+        ], env=self.base_env.copy(), check=False)
+        self.assertNotEqual(wrong_hash.returncode, 0)
+
+        env = self.base_env.copy()
+        env["GOOARCHY_TEST_EXPECT_KEY_REF"] = BACKUP_REF
+        env["GOOARCHY_BACKUP_SIGNING_KEY_REF"] = BACKUP_REF
+        env["GOOARCHY_SIGNING_KEY_REF"] = PRIMARY_REF
+        old_manifest_hash = self.manifest_hash
+        manifest_path = self.bundle / "manifest.json"
+        original = manifest_path.read_bytes()
+        try:
+            manifest = json.loads(original)
+            manifest["signing_fingerprint"] = "A" * 40
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
+            self.manifest_hash = digest(manifest_path)
+            mismatch = self.sign("backup", self.root / "wrong-fingerprint", reference=BACKUP_REF)
+        finally:
+            manifest_path.write_bytes(original)
+            self.manifest_hash = old_manifest_hash
+        self.assertNotEqual(mismatch.returncode, 0)
+
+    def test_uploader_rejects_tampered_payload_before_creating_a_draft(self) -> None:
+        package = next((self.signed_primary / "payload").glob("*.pkg.tar.zst"))
+        package.write_bytes(package.read_bytes() + b"tamper")
+        result = self.upload(self.signed_primary)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(self.drafts.iterdir()), [])
+        self.assertFalse(self.state.exists())
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

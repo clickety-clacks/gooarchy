@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build unsigned Arch packages and an unsigned repository database for a separate signer.
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null) || {

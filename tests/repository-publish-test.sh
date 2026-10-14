@@ -7,4 +7,4 @@ if (($#)); then
   exit 2
 fi
 python3 "$script_dir/repository-transfer-test.py"
-python3 "$script_dir/repository-sign-publish-test.py"
+python3 "$script_dir/repository-sign-upload-test.py"
