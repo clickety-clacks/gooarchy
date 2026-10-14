@@ -1,0 +1,34 @@
+#!/bin/sh
+# Link only the two skills in a Gooarchy installation. Leave an existing different skill alone.
+scottland_src=${GOOARCHY_SCOTTLAND_SKILL_DIR:-/usr/share/scottland/agents/skills/scottland}
+gooarchy_src=${GOOARCHY_SKILL_DIR:-/usr/share/gooarchy/agents/skills/gooarchy}
+
+link_skill() {
+  src=$1
+  dest=$2
+  [ -f "$src/SKILL.md" ] || return 0
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    [ "$(readlink "$dest" 2>/dev/null)" = "$src" ] ||
+      printf 'Gooarchy: keeping existing agent skill %s\n' "$dest" >&2
+    return 0
+  fi
+  # Scottland's 02 hook can run concurrently. Never follow a newly created directory symlink or
+  # replace an existing custom skill when both hooks reach the same destination.
+  if ln -sT -- "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    [ "$(readlink "$dest" 2>/dev/null)" = "$src" ] ||
+      printf 'Gooarchy: keeping existing agent skill %s\n' "$dest" >&2
+    return 0
+  fi
+  printf 'Gooarchy: could not link agent skill %s\n' "$dest" >&2
+  return 1
+}
+
+for harness in "$HOME/.agents" "$HOME/.claude" "$HOME/.codex" "$HOME/.pi/agent" "$HOME/.hermes" "$HOME"/.hermes/profiles/*; do
+  [ -d "$harness" ] || continue
+  mkdir -p "$harness/skills"
+  link_skill "$scottland_src" "$harness/skills/scottland"
+  link_skill "$gooarchy_src" "$harness/skills/gooarchy"
+done

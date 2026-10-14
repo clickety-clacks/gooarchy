@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 unset GOOARCHY_SCOTTLAND_REF GOOARCHY_SCOTTLAND_REF_KIND
 source "$repo_root/install/sources.conf"
-[[ $GOOARCHY_SCOTTLAND_PIN_REF == v0.3.0 ]]
+[[ $GOOARCHY_SCOTTLAND_PIN_REF == v0.3.1 ]]
 [[ $GOOARCHY_SCOTTLAND_PIN_KIND == tag ]]
 [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag ]]
 [[ $GOOARCHY_SCOTTLAND_REF == "$GOOARCHY_SCOTTLAND_PIN_REF" ]]
