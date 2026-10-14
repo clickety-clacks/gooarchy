@@ -24,6 +24,14 @@
 #   tests/vm/run.sh start   boot the existing disk again (after stop)
 #   tests/vm/run.sh ssh [CMD]   a shell (or CMD) in the guest
 #   tests/vm/run.sh stop    power the guest off
+#   tests/vm/run.sh manifest capture the guest package set and VM build details
+#   tests/vm/run.sh nvidia-preflight  check current and older NVIDIA package pairs before package changes
+#   tests/vm/run.sh nvidia-matrix preinstall|postinstall|focused prepare|preset-assignment-edge|mixed-preset
+#   tests/vm/run.sh nvidia-install   run the supported-device full install through this wrapper
+#   tests/vm/run.sh nvidia-r15-row ROW   hold a failure state through each sound-kernel desktop reboot
+#   focused package-hook R15 row: set GOOARCHY_VM_NVIDIA_FOCUSED_CASE=package-hook-partial-lts;
+#   the bounded pressure cap defaults to 4 GiB and may be lowered by the runner
+#   tests/vm/run.sh nvidia-reference   fresh VM for R18's reference-state rerun
 #
 # Looking at the desktop: GOOARCHY_VM_GPU=software GOOARCHY_VM_VNC=1 tests/vm/run.sh start, then
 # point a VNC viewer at 127.0.0.1:5900 on this machine (e.g. through ssh -L 5900:127.0.0.1:5900).
@@ -55,6 +63,9 @@
 #                           socks5h://127.0.0.1:1080): used for the image download and, with
 #                           127.0.0.1 rewritten to the host as the guest sees it, inside the guest.
 #                           Test-only; Gooarchy's installer knows nothing about it.
+#   GOOARCHY_VM_KERNEL      1: pass --kernel when the integrated Gooarchy kernel step is present
+# The NVIDIA wrapper sets GOOARCHY_TEST_NVIDIA_DEVICES only for its test commands. Ordinary install
+# runs leave the synthetic sysfs override unset.
 # Host needs: x86_64 Linux with KVM (/dev/kvm), QEMU (or tests/vm/fetch-qemu.sh), with virgl a
 # usable render node, plus python3, ssh/ssh-keygen, curl, git, tar.
 set -euo pipefail
@@ -104,6 +115,42 @@ artifacts() {
     echo "$dir/artifacts/$stamp" >"$run/artifacts"
   fi
   cat "$run/artifacts"
+}
+
+nvidia_test_stamp() {
+  [[ -s $run/nvidia-test-stamp ]] || die "boot the guest before an NVIDIA matrix command"
+  cat "$run/nvidia-test-stamp"
+}
+
+nvidia_guest_env() {
+  local stamp=$1 focused_case=${GOOARCHY_VM_NVIDIA_FOCUSED_CASE:-}
+  local pressure_max=${GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB:-4194304}
+  printf 'GOOARCHY_VM_GUEST_NVIDIA_MATRIX=1 GOOARCHY_NVIDIA_REPO=$HOME/gooarchy GOOARCHY_NVIDIA_ARTIFACTS=$HOME/gooarchy-nvidia-matrix/%s GOOARCHY_VM_NVIDIA_TEST_ROOT=$HOME/gooarchy-nvidia-matrix/%s GOOARCHY_NVIDIA_TEST_STAMP=%s' \
+    "$stamp" "$stamp" "$stamp"
+  if [[ -n $focused_case ]]; then
+    [[ $focused_case == package-hook-partial-lts ]] || die "invalid focused NVIDIA R15 case"
+    printf ' GOOARCHY_VM_NVIDIA_FOCUSED_CASE=%s' "$focused_case"
+  fi
+  [[ $pressure_max =~ ^[0-9]+$ ]] || die "NVIDIA pressure cap must be an integer KiB value"
+  ((pressure_max > 0 && pressure_max <= 4194304)) || die "NVIDIA pressure cap must be at most 4 GiB"
+  printf ' GOOARCHY_VM_NVIDIA_PRESSURE_MAX_KB=%s' "$pressure_max"
+}
+
+copy_nvidia_artifacts() {
+  local stamp=$1 dest
+  dest=$(artifacts)/nvidia-matrix/$stamp
+  mkdir -p "$dest"
+  guest "test -d \$HOME/gooarchy-nvidia-matrix/$stamp && tar -C \$HOME/gooarchy-nvidia-matrix/$stamp -cf - ." |
+    tar -C "$dest" -xf -
+}
+
+installer_flags() {
+  local -a flags=(--yes --autologin)
+  if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
+    guest 'grep -q -- --kernel ~/gooarchy/install.sh' || die "GOOARCHY_VM_KERNEL=1 but the checkout has no --kernel option"
+    flags+=(--kernel)
+  fi
+  printf '%q ' "${flags[@]}"
 }
 
 ssh_opts=(-i "$run/id_ed25519" -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
@@ -214,6 +261,7 @@ wait_ssh() {
 screendump() {
   # The display as QEMU shows it (independent of anything running in the guest).
   local out; out="$(artifacts)/$1"
+  mkdir -p "$(dirname "$out")"
   local reply
   if reply=$(python3 "$here/qmp.py" "$run/qmp.sock" screendump "{\"filename\": \"$out\", \"format\": \"png\"}"); then
     log "screendump $out"
@@ -227,6 +275,7 @@ cmd_boot() {
   local image
   image=$(fetch_image)
   rm -rf "$run/disk.qcow2" "$run/artifacts" "$run/seed"
+  python3 -c 'import uuid; print(uuid.uuid4().hex)' >"$run/nvidia-test-stamp"
   # Never smaller than the image (that would cut its partitions off); cloud-init grows the root
   # partition into the rest on first boot.
   "$qemu_img" create -q -f qcow2 -F qcow2 -b "$image" "$run/disk.qcow2" "$disk"
@@ -318,17 +367,17 @@ cmd_install() {
   running || die "the guest isn't running (tests/vm/run.sh boot)"
   local out; out=$(artifacts)
   copy_checkout
+  local flags; flags=$(installer_flags)
   local status=0
-  local kernel_option= kernel_build_env=
+  local kernel_build_env=
   if [[ ${GOOARCHY_VM_KERNEL:-0} == 1 ]]; then
-    kernel_option=--kernel
     kernel_build_env=MAKEFLAGS=-j$kernel_jobs
     grub_snapshot
   fi
   if [[ ${GOOARCHY_VM_RETRY_TEST:-1} == 1 ]]; then
     # A failed attempt (made to fail at the Strata step), then a retry that must complete.
     log "running ./install.sh, made to fail at packaging/strata.sh (log: $out/install-failed-attempt.log)"
-    guest "cd ~/gooarchy && GOOARCHY_TEST_FAIL_AT=packaging/strata.sh $(guest_proxy_env) ./install.sh --yes --autologin" \
+    guest "cd ~/gooarchy && GOOARCHY_TEST_FAIL_AT=packaging/strata.sh $(guest_proxy_env) ./install.sh $flags" \
       >"$out/install-failed-attempt.log" 2>&1 || status=$?
     local last; last=$(guest 'cat ~/.local/state/gooarchy/last-step 2>/dev/null')
     local ok=0
@@ -338,8 +387,8 @@ cmd_install() {
       "exit $status, last completed step: $last"
     status=0
   fi
-  log "running ./install.sh --yes --autologin (log: $out/install.log)"
-  guest "cd ~/gooarchy && $kernel_build_env $(guest_proxy_env) ./install.sh --yes --autologin $kernel_option" >"$out/install.log" 2>&1 || status=$?
+  log "running ./install.sh $flags (log: $out/install.log)"
+  guest "cd ~/gooarchy && $kernel_build_env $(guest_proxy_env) ./install.sh $flags" >"$out/install.log" 2>&1 || status=$?
   tail -n 30 "$out/install.log" >&2
   guest 'tar -C ~/.local/state/gooarchy -cf - logs builds.tsv reports.log 2>/dev/null' | tar -C "$out" -xf - 2>/dev/null || true
   hcheck "./install.sh completes (after the failed attempt, when the retry test runs)" "$(( status == 0 ))" "exit $status"
@@ -512,6 +561,106 @@ boot_disk() {
   log "booted from the disk: $(guest 'uname -r')"
 }
 
+qemu_uses_direct_kernel() {
+  running || return 1
+  local pid
+  pid=$(cat "$run/qemu.pid") || return 1
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  tr '\0' '\n' <"/proc/$pid/cmdline" | grep -Fxq -- -kernel
+}
+
+prepare_r15_grub() {
+  local row=$1 out log_path
+  # R15 needs a real disk-bootloader reboot for every sound kernel. If the optional-kernel
+  # acceptance left QEMU running with -kernel, return to the disk first; changing a shell flag
+  # cannot change the arguments of an already running emulator.
+  if qemu_uses_direct_kernel; then
+    log "R15 is switching from QEMU direct-kernel boot to the guest's disk GRUB"
+    boot_disk
+  fi
+  export GOOARCHY_VM_KERNEL_BOOT=0
+  guest 'command -v grub-mkconfig >/dev/null && command -v grub-reboot >/dev/null && test -d /boot/grub' ||
+    die "R15 per-kernel checks require the fixture's GRUB bootloader"
+  out=$(artifacts)
+  log_path=$out/r15-grub-mkconfig-$row.log
+  guest 'sudo grub-mkconfig -o /boot/grub/grub.cfg' >"$log_path" 2>&1 || {
+    tail -n 30 "$log_path" >&2
+    die "could not prepare GRUB entries for the held R15 kernels"
+  }
+  guest 'test -s /boot/grub/grub.cfg' || die "GRUB did not leave a usable menu for the held R15 kernels"
+}
+
+r15_grub_selector() {
+  local grub_cfg=$1 pkgbase=$2
+  python3 - "$grub_cfg" "$pkgbase" <<'PY'
+import os
+import re
+import sys
+
+path, pkgbase = sys.argv[1:]
+lines = open(path, encoding="utf-8").read().splitlines()
+stack = []
+depth = 0
+entries = []
+
+for line in lines:
+    header = re.match(r"^\s*(submenu|menuentry)\s+", line)
+    delta = line.count("{") - line.count("}")
+    if header:
+        kind = header.group(1)
+        menu_id = re.search(r"\$menuentry_id_option\s+(['\"])([^'\"]+)\1", line)
+        title = re.match(r"^\s*(?:submenu|menuentry)\s+(['\"])(.*?)\1", line)
+        node = {
+            "kind": kind,
+            "id": menu_id.group(2) if menu_id else None,
+            "title": title.group(2) if title else "",
+            "level": depth + delta,
+            "linux": [],
+            "initrd": [],
+        }
+        stack.append(node)
+        if kind == "menuentry":
+            node["selector_parts"] = [
+                parent["id"] for parent in stack
+                if parent["kind"] in ("submenu", "menuentry")
+            ]
+            entries.append(node)
+    else:
+        entry = next((node for node in reversed(stack) if node["kind"] == "menuentry"), None)
+        if entry is not None:
+            linux = re.match(r"^\s*linux(?:efi)?\s+(\S+)", line)
+            if linux:
+                entry["linux"].append(linux.group(1))
+            initrd = re.match(r"^\s*initrd(?:efi)?\s+(.+)$", line)
+            if initrd:
+                entry["initrd"].extend(initrd.group(1).split())
+
+    depth += delta
+    while stack and stack[-1]["level"] > depth:
+        stack.pop()
+
+matches = []
+for entry in entries:
+    if not any(os.path.basename(image) == "vmlinuz-" + pkgbase for image in entry["linux"]):
+        continue
+    if not entry["initrd"]:
+        continue
+    parts = entry["selector_parts"]
+    if not parts or any(not part for part in parts):
+        continue
+    selector = ">".join(parts)
+    if not re.fullmatch(r"[A-Za-z0-9_.+-]+(?:>[A-Za-z0-9_.+-]+)*", selector):
+        continue
+    fallback = any("fallback" in os.path.basename(image).lower() for image in entry["initrd"])
+    matches.append((fallback, selector, entry["title"]))
+
+regular = [candidate for candidate in matches if not candidate[0]]
+if not regular:
+    raise SystemExit(f"no non-fallback GRUB entry with an initrd for vmlinuz-{pkgbase}")
+print(regular[0][1])
+PY
+}
+
 plugin_state() {
   guest 'printf "%s %s\n" "$(pacman -Q scottland | cut -d" " -f2)" \
            "$(sha256sum "$(pacman -Qlq scottland | grep "/libscottland.so$")" | cut -c1-16)"'
@@ -648,15 +797,22 @@ cmd_reboot() {
 
 cmd_check() {
   running || die "the guest isn't running"
-  local out; out=$(artifacts)
-  screendump vm-display-before-check.png
+  local root; root=$(artifacts)
+  local suffix=${1:-} out=$root relative=.
+  if [[ -n $suffix ]]; then
+    [[ $suffix =~ ^[[:alnum:]_.+-]+$ ]] || die "invalid guest-check artifact suffix"
+    out=$root/session-checks/$suffix
+    relative=session-checks/$suffix
+    mkdir -p "$out"
+  fi
+  screendump "$relative/vm-display-before-check.png"
   guest 'rm -rf /tmp/gooarchy-check && mkdir -p /tmp/gooarchy-check'
   guest 'cat >/tmp/gooarchy-check/guest-check.py' <"$here/guest-check.py"
   log "checking the session in the guest"
   local status=0
   guest "timeout 1500 python3 /tmp/gooarchy-check/guest-check.py /tmp/gooarchy-check/out --gpu $gpu" 2>&1 |
     tee "$out/guest-check.log" >&2 || status=$?
-  screendump vm-display-after-check.png
+  screendump "$relative/vm-display-after-check.png"
   guest 'cd /tmp/gooarchy-check/out && tar -cf - .' | tar -C "$out" -xf - || true
   guest 'journalctl -b --no-pager -o short-monotonic' >"$out/journal.log" 2>/dev/null || true
   guest 'cat ~/.local/state/scottland/wayfire.log' >"$out/wayfire-last-session.log" 2>/dev/null || true
@@ -664,6 +820,174 @@ cmd_check() {
   cp "$run/serial.log" "$out/serial.log" 2>/dev/null || true
   log "artifacts: $out"
   return "$status"
+}
+
+cmd_nvidia_matrix() {
+  running || die "the guest isn't running"
+  local phase=${1:-} arg=${2:-} stamp env out name remote_command status=0
+  case $phase in
+    preflight | preinstall | postinstall | reference | focused | r15-row | r15-release) ;;
+    *) die "unknown NVIDIA matrix phase: $phase" ;;
+  esac
+  if [[ -n $arg ]]; then
+    [[ $arg =~ ^[[:alnum:]_.+-]+$ ]] || die "invalid NVIDIA matrix row"
+  fi
+  stamp=$(nvidia_test_stamp)
+  env=$(nvidia_guest_env "$stamp")
+  out=$(artifacts)
+  name=nvidia-$phase${arg:+-$arg}
+  remote_command="cd ~/gooarchy && env $env"
+  if [[ $phase == preinstall || $phase == postinstall ]]; then
+    remote_command+=" GOOARCHY_VM_NVIDIA_SKIP_R15_ROWS=1"
+  fi
+  remote_command+=" bash tests/vm/nvidia-matrix.sh $phase${arg:+ $arg}"
+  guest "$remote_command" >"$out/$name.log" 2>&1 || status=$?
+  copy_nvidia_artifacts "$stamp" || status=1
+  # This status controls safe orchestration only; the guest's results.tsv contains product assertions.
+  ((status == 0)) || die "NVIDIA matrix $phase${arg:+ $arg} failed; see $out/$name.log"
+  tail -n 30 "$out/$name.log" >&2
+}
+
+cmd_nvidia_preflight() {
+  running || die "the guest isn't running"
+  copy_checkout
+  cmd_nvidia_matrix preflight
+}
+
+cmd_nvidia_install() {
+  running || die "the guest isn't running"
+  local stamp env flags out status=0
+  stamp=$(nvidia_test_stamp)
+  env=$(nvidia_guest_env "$stamp")
+  flags=$(installer_flags)
+  out=$(artifacts)
+  guest "cd ~/gooarchy && test -r \$HOME/gooarchy-nvidia-matrix/$stamp/nvidia-test-bash-env.sh && env $env BASH_ENV=\$HOME/gooarchy-nvidia-matrix/$stamp/nvidia-test-bash-env.sh GOOARCHY_TEST_NVIDIA_DEVICES=0x10de,0x030000,0x25a2,0 $(guest_proxy_env) ./install.sh $flags" \
+    >"$out/nvidia-supported-install.log" 2>&1 || status=$?
+  guest 'tar -C ~/.local/state/gooarchy -cf - logs builds.tsv reports.log 2>/dev/null' |
+    tar -C "$out" -xf - 2>/dev/null || true
+  copy_nvidia_artifacts "$stamp" || status=1
+  hcheck "full install.sh completes with the supported NVIDIA test device" "$((status == 0))" \
+    "exit $status; synthetic sysfs input was set only by tests/vm/run.sh"
+  ((status == 0)) || die "supported NVIDIA full install failed; see $out/nvidia-supported-install.log"
+}
+
+cmd_nvidia_r15_row() {
+  running || die "the guest isn't running"
+  local row=${1:-} stamp test_root held_data held_row held_stamp plan_sha plan
+  local kernel pkgbase grub_cfg grub_map entry_selector current_kernel boot_id suffix evidence
+  local -a sound_kernels=()
+  local -A kernel_pkgbase=()
+  case $row in
+    precommit-download | precommit-space | prebuilt-refused | linux-gooarchy-dkms | interrupt-after-commit | \
+    package-hook-linux-only | package-hook-linux-partial-lts | prebuilt-linux-dkms | stale-baseline-repair-failure | \
+    arch-upgrade-step-regen | arch-upgrade-hook-repaired | arch-upgrade-hook-repair-failure | pacman-commit-interruption) ;;
+    *) die "unknown NVIDIA R15 row: $row" ;;
+  esac
+  stamp=$(nvidia_test_stamp)
+  test_root='$HOME/gooarchy-nvidia-matrix/'"$stamp"
+
+  if guest "test -f $test_root/r15-boot-held"; then
+    held_data=$(guest "cat $test_root/r15-boot-held")
+    IFS=$'\t' read -r held_row held_stamp plan_sha <<<"$held_data"
+    [[ $held_row == "$row" && $held_stamp == "$stamp" && $plan_sha =~ ^[[:xdigit:]]{64}$ ]] ||
+      die "the guest is holding a different R15 row; preserve its state and inspect the artifacts"
+  else
+    cmd_nvidia_matrix r15-row "$row"
+  fi
+
+  if [[ $row == pacman-commit-interruption ]]; then
+    if guest "test -f $test_root/r15-boot-held"; then
+      die "the pacman-commit R15 row must not create a desktop-boot hold"
+    fi
+    log "R15 pacman-commit acceptance uses stale-lock refusal and no-image-write evidence; no reboot or simulated interruption"
+    copy_nvidia_artifacts "$stamp"
+    return 0
+  fi
+
+  held_data=$(guest "cat $test_root/r15-boot-held")
+  IFS=$'\t' read -r held_row held_stamp plan_sha <<<"$held_data"
+  [[ $held_row == "$row" && $held_stamp == "$stamp" && $plan_sha =~ ^[[:xdigit:]]{64}$ ]] ||
+    die "the R15 row did not leave a valid held-state record"
+  plan=$(artifacts)/nvidia-matrix/$stamp/r15-boot-$row.tsv
+  guest "cat $test_root/r15-boot-$row.tsv" >"$plan"
+  [[ $(sha256sum "$plan" | awk '{print $1}') == "$plan_sha" ]] ||
+    die "the copied R15 boot manifest does not match the held-state hash"
+  while IFS=$'\t' read -r kind classification kernel pkgbase _; do
+    if [[ $kind == kernel && $classification == sound ]]; then
+      [[ $kernel =~ ^[[:alnum:]_.+-]+$ && $pkgbase =~ ^[[:alnum:]_.+-]+$ ]] ||
+        die "the R15 manifest contains an invalid kernel name"
+      sound_kernels+=("$kernel")
+      kernel_pkgbase[$kernel]=$pkgbase
+    fi
+  done <"$plan"
+  ((${#sound_kernels[@]} > 0)) || die "the R15 manifest has no sound kernel to boot"
+
+  prepare_r15_grub "$row"
+  grub_cfg=$(artifacts)/nvidia-matrix/$stamp/grub-r15-$row-$stamp-$$.cfg
+  grub_map=$(artifacts)/nvidia-matrix/$stamp/grub-r15-$row-$stamp-$$.tsv
+  mkdir -p "$(dirname "$grub_cfg")"
+  guest 'sudo cat /boot/grub/grub.cfg' >"$grub_cfg" || {
+    copy_nvidia_artifacts "$stamp" || true
+    die "could not capture the prepared GRUB menu while R15 row $row is held"
+  }
+  printf 'schema\t1\nrow\t%s\n' "$row" >"$grub_map"
+
+  for kernel in "${sound_kernels[@]}"; do
+    pkgbase=${kernel_pkgbase[$kernel]}
+    if ! entry_selector=$(r15_grub_selector "$grub_cfg" "$pkgbase"); then
+      copy_nvidia_artifacts "$stamp" || true
+      die "could not select a GRUB entry for $pkgbase while the R15 failure is held"
+    fi
+    printf 'kernel\t%s\npkgbase\t%s\ngrub-one-shot\t%s\n' \
+      "$kernel" "$pkgbase" "$entry_selector" >>"$grub_map"
+    guest "sudo grub-reboot '$entry_selector'" || {
+      copy_nvidia_artifacts "$stamp" || true
+      die "GRUB refused the one-shot entry for $kernel; the R15 state remains held"
+    }
+    cmd_reboot
+    current_kernel=$(guest 'uname -r')
+    if [[ $current_kernel != "$kernel" ]]; then
+      copy_nvidia_artifacts "$stamp" || true
+      die "R15 selected $kernel but the guest started $current_kernel; the failure state remains held"
+    fi
+    suffix=r15-$row-$kernel
+    local check_status=0
+    cmd_check "$suffix" || check_status=$?
+    if ((check_status != 0)); then
+      copy_nvidia_artifacts "$stamp" || true
+      die "desktop check failed on $kernel with R15 row $row still held"
+    fi
+    if ! guest 'for path in /sys/bus/pci/devices/*; do
+         [[ -r $path/vendor && -r $path/class ]] || continue
+         vendor=$(<"$path/vendor"); class=$(<"$path/class")
+         if [[ $vendor == 0x10de && $class == 0x03* ]]; then printf "%s %s\\n" "$path" "$class"; exit 1; fi
+       done
+       printf "no NVIDIA display device\\n"'; then
+      copy_nvidia_artifacts "$stamp" || true
+      die "the R15 guest unexpectedly exposed an NVIDIA display device"
+    fi
+    boot_id=$(guest 'cat /proc/sys/kernel/random/boot_id')
+    evidence="$test_root/r15-boot-evidence-$row-$kernel.tsv"
+    if guest "test -e $evidence"; then
+      die "R15 boot evidence already exists for $row on $kernel; do not overwrite it"
+    fi
+    printf 'schema\t1\nrow\t%s\nstamp\t%s\nkernel\t%s\nboot-id\t%s\ndesktop\tpass\nnvidia-device\tno-device\n' \
+      "$row" "$stamp" "$kernel" "$boot_id" |
+      guest "umask 077; cat >$evidence" || die "could not persist R15 boot evidence for $kernel"
+    hcheck "R15 $row boots $kernel to the desktop" 1 "boot-id $boot_id; nvidia-device no-device"
+  done
+  cmd_nvidia_matrix r15-release "$row"
+}
+
+cmd_nvidia_reference() {
+  cmd_boot
+  manifest
+  cmd_nvidia_preflight
+  GOOARCHY_VM_KERNEL=0 GOOARCHY_VM_RETRY_TEST=0 cmd_install
+  cmd_reboot
+  cmd_check nvidia-reference-baseline
+  cmd_nvidia_matrix reference
+  manifest
 }
 
 cmd_login_check() {
@@ -735,6 +1059,7 @@ case ${1:-all} in
   boot) cmd_boot ;;
   start) cmd_start ;;
   install) cmd_install ;;
+  manifest) manifest ;;
   rebuild-check) cmd_rebuild_check ;;
   reboot) cmd_reboot ;;
   check) cmd_check ;;
@@ -743,6 +1068,11 @@ case ${1:-all} in
   login-check) cmd_login_check ;;
   upgrade-guard) cmd_upgrade_guard ;;
   no-toolchain) cmd_no_toolchain ;;
+  nvidia-preflight) cmd_nvidia_preflight ;;
+  nvidia-matrix) shift; cmd_nvidia_matrix "$@" ;;
+  nvidia-install) cmd_nvidia_install ;;
+  nvidia-r15-row) shift; cmd_nvidia_r15_row "$@" ;;
+  nvidia-reference) trap cmd_stop EXIT; cmd_nvidia_reference ;;
   ssh) shift; guest -t "$@" ;;
   stop) cmd_stop ;;
   all)

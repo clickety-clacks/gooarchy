@@ -7,3 +7,4 @@ run_logged "$GOOARCHY_INSTALL/packaging/gooarchy.sh"
 if ((GOOARCHY_KERNEL)); then
   run_logged "$GOOARCHY_INSTALL/packaging/kernel.sh"
 fi
+run_logged "$GOOARCHY_INSTALL/packaging/nvidia.sh"
