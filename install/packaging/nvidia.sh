@@ -704,8 +704,62 @@ nvidia_record_package_hook_errors() {
   return 0
 }
 
+nvidia_record_invalid_preset_image_failures() {
+  local image detail kernel preset candidate matched recorded existing
+  while (($# >= 2)); do
+    image=$1
+    detail=$2
+    shift 2
+    recorded=0
+    for kernel in "${NV_KERNELS[@]}"; do
+      nvidia_collect_kernel_presets "$kernel"
+      matched=0
+      for preset in "${NV_KERNEL_PRESETS[@]}"; do
+        nvidia_preset_images "$preset"
+        for candidate in "${NV_IMAGES[@]}"; do
+          if [[ $candidate == "$image" ]]; then
+            matched=1
+            break
+          fi
+        done
+        ((matched)) && break
+      done
+      if ((matched)); then
+        existing=${NV_PACKAGE_HOOK_FAILURES[$kernel]:-}
+        NV_PACKAGE_HOOK_FAILURES[$kernel]="${existing:+$existing; }Gooarchy found invalid post-transaction image $image: $detail"
+        recorded=1
+      fi
+    done
+    if ((recorded == 0)); then
+      existing=${NV_PACKAGE_HOOK_FAILURES[unknown]:-}
+      NV_PACKAGE_HOOK_FAILURES[unknown]="${existing:+$existing; }Gooarchy found invalid post-transaction image $image: $detail"
+    fi
+  done
+  return 0
+}
+
+nvidia_report_package_hook_failure_details() {
+  local kernel failure restore_note=${1:-"Any captured pre-transaction images were restored where possible."}
+  for kernel in "${NV_KERNELS[@]}"; do
+    failure=${NV_PACKAGE_HOOK_FAILURES[$kernel]:-}
+    [[ -n $failure ]] || continue
+    nvidia_kernel_user_partial_state "$kernel" "$NV_DRIVER_MODULE_VERSION"
+    if ((NV_USER_PARTIAL || NV_USER_PARTIAL_UNKNOWN)); then
+      nvidia_report_uncovered_kernel "$kernel" \
+        "pacman's post-transaction mkinitcpio step failed or produced invalid image output: $failure"
+    else
+      nvidia_report_direct_config_hook_failure "$kernel"
+    fi
+    nvidia_report "pacman's post-transaction mkinitcpio step failed or left invalid image output for ${NV_PKGBASE[$kernel]} kernel $kernel: $failure. $restore_note Resolve the reported issue and rerun before relying on this kernel."
+  done
+  if [[ -n ${NV_PACKAGE_HOOK_FAILURES[unknown]:-} ]]; then
+    nvidia_report "pacman's post-transaction mkinitcpio hook failed or left invalid output for an image that could not be matched to an installed kernel: ${NV_PACKAGE_HOOK_FAILURES[unknown]}. $restore_note Resolve the issue and rerun."
+  fi
+  return 0
+}
+
 nvidia_run_pacman_transaction() {
-  local output rc kernel failure image
+  local output rc kernel image
   local -a invalid_images=()
   output=$(mktemp "${TMPDIR:-/var/tmp}/gooarchy-nvidia-pacman.XXXXXXXX") || return 1
   if command -v mkinitcpio >/dev/null 2>&1; then
@@ -736,46 +790,31 @@ nvidia_run_pacman_transaction() {
   if ((${#NV_IMAGE_BACKUP_IMAGES[@]})); then
     if ((rc != 0)) || ((${#NV_PACKAGE_HOOK_FAILURES[@]})); then
       if ! nvidia_restore_preset_images; then
+        nvidia_report_package_hook_failure_details "Gooarchy could not restore every pre-transaction image; preserved copies remain in their .gooarchy-nvidia-preserve directories where restoration did not complete."
         nvidia_fail "pacman did not complete cleanly and Gooarchy could not restore every pre-transaction image. The preserved copies remain in their .gooarchy-nvidia-preserve directories; restore them before booting another kernel."
       fi
     else
       for image in "${NV_IMAGE_BACKUP_IMAGES[@]}"; do
         if ! nvidia_image_listable "$image"; then
-          invalid_images+=("$image: absent or unlistable")
+          invalid_images+=("$image" "absent or unlistable")
         elif ! nvidia_image_module_state "$image" "$NV_DRIVER_MODULE_VERSION"; then
-          invalid_images+=("$image: ${NV_IMAGE_ERROR:-inconsistent NVIDIA modules or firmware}")
+          invalid_images+=("$image" "${NV_IMAGE_ERROR:-inconsistent NVIDIA modules or firmware}")
         fi
       done
       if ((${#invalid_images[@]})); then
+        nvidia_record_invalid_preset_image_failures "${invalid_images[@]}"
         if ! nvidia_restore_preset_images; then
+          nvidia_report_package_hook_failure_details "Gooarchy could not restore every pre-transaction image; preserved copies remain in their .gooarchy-nvidia-preserve directories where restoration did not complete."
           nvidia_fail "the NVIDIA package transaction completed, but its hooks left one or more initramfs images invalid and Gooarchy could not restore every pre-transaction image. The preserved copies remain in their .gooarchy-nvidia-preserve directories; restore them before booting another kernel."
         fi
-        for image in "${invalid_images[@]}"; do
-          nvidia_report "pacman's post-transaction hook left initramfs image $image; Gooarchy restored its pre-transaction image where one existed. Repair the hook output before booting this kernel, then rerun."
-        done
-        nvidia_fail "the NVIDIA package transaction completed, but one or more initramfs images were absent, unlistable, or inconsistent with the driver and firmware; Gooarchy restored their pre-transaction state where available. Repair the image state before booting another kernel, then rerun."
       fi
       nvidia_discard_preset_image_backups || nvidia_fail "the NVIDIA package transaction completed, but temporary image-preservation copies could not be removed. Inspect the .gooarchy-nvidia-preserve directories."
     fi
   fi
   if ((${#NV_PACKAGE_HOOK_FAILURES[@]})); then
-    for kernel in "${NV_KERNELS[@]}"; do
-      failure=${NV_PACKAGE_HOOK_FAILURES[$kernel]:-}
-      [[ -n $failure ]] || continue
-      nvidia_kernel_user_partial_state "$kernel" "$NV_DRIVER_MODULE_VERSION"
-      if ((NV_USER_PARTIAL || NV_USER_PARTIAL_UNKNOWN)); then
-        nvidia_report_uncovered_kernel "$kernel" \
-          "pacman's post-transaction mkinitcpio hook reported an image-generation error: $failure"
-      else
-        nvidia_report_direct_config_hook_failure "$kernel"
-      fi
-      nvidia_report "pacman's post-transaction mkinitcpio hook reported an image-generation error for ${NV_PKGBASE[$kernel]} kernel $kernel: $failure. The step checked or repaired the image state where possible; resolve it and rerun."
-    done
+    nvidia_report_package_hook_failure_details
     nvidia_report_other_user_partial_kernels "__package_hook_failures__"
-    if [[ -n ${NV_PACKAGE_HOOK_FAILURES[unknown]:-} ]]; then
-      nvidia_report "pacman's post-transaction mkinitcpio hook reported an image-generation error for an unknown kernel: ${NV_PACKAGE_HOOK_FAILURES[unknown]}. Gooarchy restored the images from before the transaction; resolve the hook error and rerun."
-    fi
-    nvidia_fail "pacman's post-transaction mkinitcpio hook reported an image-generation error for one or more installed kernels. Gooarchy checked or restored the affected images where possible; resolve every reported hook error and rerun."
+    nvidia_fail "pacman's post-transaction mkinitcpio hook failed or left one or more active images absent, unlistable, or inconsistent with the driver and firmware. Any captured pre-transaction images were restored where possible; resolve every reported issue and rerun before relying on another kernel."
   fi
   return "$rc"
 }
@@ -1791,7 +1830,7 @@ nvidia_report_direct_config_hook_failure() {
     else
       reason="its literal MODULES value does not contain all four NVIDIA modules"
     fi
-    nvidia_report "the ${entry} image in ${preset##*/} reads $config directly; $reason. Gooarchy left that named config and the prior image unchanged after the package hook failure. To load NVIDIA early, add nvidia nvidia_modeset nvidia_uvm nvidia_drm to that file, then run sudo mkinitcpio -P."
+    nvidia_report "the ${entry} image in ${preset##*/} reads $config directly; $reason. Gooarchy left that named config unchanged; image recovery is handled separately. To load NVIDIA early, add nvidia nvidia_modeset nvidia_uvm nvidia_drm to that file, then run sudo mkinitcpio -P."
   done
 }
 
