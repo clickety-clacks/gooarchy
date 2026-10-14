@@ -480,6 +480,7 @@ cleanup() {
       status=1
     fi
   fi
+  remove_r11_mixed_synthetic_image || status=1
   sudo rm -f "$user_config" "$dynamic_modules" "$r11_config" "$test_root"/config-probe-*.img 2>/dev/null || true
   if [[ -f $test_root/owned-original.conf ]]; then sudo mv -f "$test_root/owned-original.conf" "$owned" 2>/dev/null || true; fi
   if [[ -f $test_root/owned-before-dynamic.conf ]]; then sudo mv -f "$test_root/owned-before-dynamic.conf" "$owned" 2>/dev/null || true; fi
@@ -1673,18 +1674,37 @@ restore_mixed_preset_fixture() {
   if [[ -f $test_root/r11-mixed-images.tsv ]]; then
     restore_kernel_images r11-mixed || status=1
   fi
+  remove_r11_mixed_synthetic_image || status=1
   if ((status == 0)); then
     rm -f "$test_root/r11-mixed-images.tsv"
+    rm -f "$test_root/linux.preset.mixed.seed"
     sudo rm -f "$test_root"/r11-mixed-image-*.img || status=1
     sudo rm -f "$r11_config"
   fi
   return "$status"
 }
 
+remove_r11_mixed_synthetic_image() {
+  local marker=$test_root/r11-mixed-synthetic-image.path image expected
+  [[ -f $marker ]] || return 0
+  image=$(<"$marker")
+  expected=/boot/.gooarchy-nvidia-r11-${test_stamp}.img
+  [[ $image == "$expected" && ! -L $image ]] || return 1
+  if [[ -f $image ]]; then
+    sudo rm -f -- "$image" || return 1
+  elif [[ -e $image ]]; then
+    return 1
+  fi
+  rm -f "$marker"
+}
+
 test_mixed_preset_selected_entry_regeneration() {
   local preset=/etc/mkinitcpio.d/linux.preset saved=$test_root/linux.preset.mixed.saved
-  local test_copy=$test_root/linux.preset.mixed empty_config=$r11_config active_pattern kernel module_version
+  local test_copy=$test_root/linux.preset.mixed seed_preset=$test_root/linux.preset.mixed.seed
+  local base_preset=$saved empty_config=$r11_config active_pattern kernel module_version
   local preset_hash config_hash image modules status image_ok=1 first_entry entry idx
+  local synthetic_entry=gooarchy_r11_test_${test_stamp}
+  local synthetic_image=/boot/.gooarchy-nvidia-r11-${test_stamp}.img
   local first_after= other_images_ok=1 other_changed=1 image_hash
   local -a active_entries=() other_entries=() first_images=() other_images=() first_hashes=() other_hashes=()
   if [[ ! -f $preset ]]; then
@@ -1703,13 +1723,55 @@ test_mixed_preset_selected_entry_regeneration() {
   fi
   active_entries=("${NV_TEST_PRESET_ENTRIES[@]}")
   if ((${#active_entries[@]} < 2)); then
-    sudo mv -f "$saved" "$preset"
-    fixture_refuse 'R11 mixed-preset fixture' 'preset has fewer than two active entries'
-    return 75
+    if [[ -e $synthetic_image || -L $synthetic_image ]]; then
+      sudo mv -f "$saved" "$preset"
+      fixture_refuse 'R11 mixed-preset fixture' "$synthetic_image already exists; left it untouched"
+      return 75
+    fi
+    if ! awk -v first="${active_entries[0]}" -v second="$synthetic_entry" '
+      BEGIN { replaced=0 }
+      /^[[:space:]]*PRESETS[[:space:]]*=[[:space:]]*\([^)]*\)[[:space:]]*$/ && !replaced {
+        printf "PRESETS=(%s %s)\n", first, second
+        replaced=1
+        next
+      }
+      { print }
+      END { if (!replaced) exit 1 }
+    ' "$saved" >"$seed_preset" || {
+      sudo mv -f "$saved" "$preset"
+      fixture_refuse 'R11 mixed-preset fixture' 'could not seed a second literal active preset entry'
+      return 75
+    }
+    printf '%s_image="%s"\n' "$synthetic_entry" "$synthetic_image" >>"$seed_preset"
+    if ! sudo cp "$seed_preset" "$preset" || ! preset_images "$preset"; then
+      if restore_mixed_preset_fixture; then
+        fixture_event CLEANUP-OK 'R11 mixed-preset setup refusal' 'original preset restored'
+      else
+        fixture_event CLEANUP-FAIL 'R11 mixed-preset setup refusal' 'could not restore the original preset'
+      fi
+      fixture_refuse 'R11 mixed-preset fixture' 'could not activate the seeded second preset entry'
+      return 75
+    fi
+    if [[ -e $synthetic_image || -L $synthetic_image ]]; then
+      restore_mixed_preset_fixture || true
+      fixture_refuse 'R11 mixed-preset fixture' "$synthetic_image appeared during fixture setup; left it untouched"
+      return 75
+    fi
+    printf '%s\n' "$synthetic_image" >"$test_root/r11-mixed-synthetic-image.path"
+    if ! sudo cp -a -- "${NV_TEST_IMAGES[0]}" "$synthetic_image"; then
+      if restore_mixed_preset_fixture; then
+        fixture_event CLEANUP-OK 'R11 mixed-preset setup refusal' 'original preset restored and synthetic image removed'
+      else
+        fixture_event CLEANUP-FAIL 'R11 mixed-preset setup refusal' 'could not restore the preset or remove the synthetic image'
+      fi
+      fixture_refuse 'R11 mixed-preset fixture' 'could not create the second listable image fixture'
+      return 75
+    fi
+    base_preset=$seed_preset
+    active_entries=("${NV_TEST_PRESET_ENTRIES[@]}")
   fi
   if ! save_kernel_images linux r11-mixed; then
-    sudo mv -f "$saved" "$preset"
-    rm -f "$test_root/r11-mixed-images.tsv"
+    restore_mixed_preset_fixture || true
     fixture_refuse 'R11 mixed-preset fixture' 'could not save the stock images'
     return 75
   fi
@@ -1725,7 +1787,7 @@ test_mixed_preset_selected_entry_regeneration() {
       print
     }
     END { print first "_config=\"" config "\"" }
-  ' "$saved" >"$test_copy" || {
+  ' "$base_preset" >"$test_copy" || {
     if restore_mixed_preset_fixture; then
       fixture_event CLEANUP-OK 'R11 mixed-preset setup refusal' 'original preset and images restored'
     else
@@ -2414,7 +2476,7 @@ prepare_bounded_disk_pressure() {
       fixture_refuse 'C2 bounded disk-pressure setup' "could not measure free space after preparing $filesystem"
       return 75
     }
-    if ((after < required + margin_kb || after > required + margin_kb + 4096)); then
+    if ((after < required + margin_kb || after > required + margin_kb + 16384)); then
       cleanup_bounded_pressure || true
       fixture_refuse 'C2 bounded disk-pressure setup' \
         "$filesystem reports ${after} KiB; fixture target is ${required} KiB plus ${margin_kb} KiB reserve"

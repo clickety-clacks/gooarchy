@@ -668,7 +668,7 @@ nvidia_record_package_hook_errors() {
 }
 
 nvidia_run_pacman_transaction() {
-  local output rc kernel
+  local output rc kernel failure
   output=$(mktemp "${TMPDIR:-/var/tmp}/gooarchy-nvidia-pacman.XXXXXXXX") || return 1
   if command -v mkinitcpio >/dev/null 2>&1; then
     if ! nvidia_preserve_preset_images; then
@@ -700,14 +700,22 @@ nvidia_run_pacman_transaction() {
   fi
   if ((${#NV_PACKAGE_HOOK_FAILURES[@]})); then
     for kernel in "${NV_KERNELS[@]}"; do
-      if [[ -n ${NV_PACKAGE_HOOK_FAILURES[$kernel]:-} ]]; then
-        nvidia_fail_if_package_hook_failed "$kernel"
+      failure=${NV_PACKAGE_HOOK_FAILURES[$kernel]:-}
+      [[ -n $failure ]] || continue
+      nvidia_kernel_user_partial_state "$kernel" "$NV_DRIVER_MODULE_VERSION"
+      if ((NV_USER_PARTIAL || NV_USER_PARTIAL_UNKNOWN)); then
+        nvidia_report_uncovered_kernel "$kernel" \
+          "pacman's post-transaction mkinitcpio hook reported an image-generation error: $failure"
+      else
+        nvidia_report_direct_config_hook_failure "$kernel"
       fi
+      nvidia_report "pacman's post-transaction mkinitcpio hook reported an image-generation error for ${NV_PKGBASE[$kernel]} kernel $kernel: $failure. The step checked or repaired the image state where possible; resolve it and rerun."
     done
+    nvidia_report_other_user_partial_kernels "__package_hook_failures__"
     if [[ -n ${NV_PACKAGE_HOOK_FAILURES[unknown]:-} ]]; then
-      nvidia_report_other_user_partial_kernels "__unknown__"
-      nvidia_fail "pacman's post-transaction mkinitcpio hook reported an image-generation error for an unknown kernel: ${NV_PACKAGE_HOOK_FAILURES[unknown]}. Gooarchy restored the images from before the transaction; resolve the hook error and rerun."
+      nvidia_report "pacman's post-transaction mkinitcpio hook reported an image-generation error for an unknown kernel: ${NV_PACKAGE_HOOK_FAILURES[unknown]}. Gooarchy restored the images from before the transaction; resolve the hook error and rerun."
     fi
+    nvidia_fail "pacman's post-transaction mkinitcpio hook reported an image-generation error for one or more installed kernels. Gooarchy checked or restored the affected images where possible; resolve every reported hook error and rerun."
   fi
   return "$rc"
 }
@@ -1665,7 +1673,11 @@ nvidia_ensure_uncovered_images() {
 nvidia_report_other_user_partial_kernels() {
   local failed_kernel=$1 kernel reason partial partial_file
   for kernel in "${NV_KERNELS[@]}"; do
-    [[ $kernel == "$failed_kernel" ]] && continue
+    if [[ $failed_kernel == __package_hook_failures__ ]]; then
+      [[ -n ${NV_PACKAGE_HOOK_FAILURES[$kernel]:-} ]] && continue
+    else
+      [[ $kernel == "$failed_kernel" ]] && continue
+    fi
     nvidia_kernel_user_partial_state "$kernel" "$NV_DRIVER_MODULE_VERSION"
     ((NV_USER_PARTIAL)) || continue
     partial=1
@@ -1718,7 +1730,13 @@ nvidia_report_direct_config_hook_failure() {
 nvidia_fail_if_package_hook_failed() {
   local kernel=$1 failure=${NV_PACKAGE_HOOK_FAILURES[$1]:-}
   [[ -n $failure ]] || return 0
-  nvidia_report_direct_config_hook_failure "$kernel"
+  nvidia_kernel_user_partial_state "$kernel" "$NV_DRIVER_MODULE_VERSION"
+  if ((NV_USER_PARTIAL || NV_USER_PARTIAL_UNKNOWN)); then
+    nvidia_report_uncovered_kernel "$kernel" \
+      "pacman's post-transaction mkinitcpio hook reported an image-generation error: $failure"
+  else
+    nvidia_report_direct_config_hook_failure "$kernel"
+  fi
   nvidia_report_other_user_partial_kernels "$kernel"
   nvidia_fail "pacman's post-transaction mkinitcpio hook reported an image-generation error for ${NV_PKGBASE[$kernel]} kernel $kernel: $failure. The step checked or repaired the image state where possible, but the hook error remains a failure; resolve it and rerun."
 }
