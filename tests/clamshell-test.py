@@ -4,7 +4,9 @@
 Needs a Scottland checkout with its plugin and test helpers built (make test-hooks), whose
 Scottland has output control (scottland-output, from v0.3.0, the pinned tag); run it on a test
 machine, never on a desktop in use. Everything it creates is under this checkout's
-build/clamshell-test/, removed at the start of the next run; the session is stopped at the end.
+build/clamshell-test/ and the session under the Scottland checkout's build/gooarchy-clamshell-test/
+(where Scottland's harness keeps sessions), both removed at the start of the next run; the session
+is stopped at the end.
 
   tests/clamshell-test.py /path/to/scottland      exits 1 if anything fails
 
@@ -13,12 +15,13 @@ no other integration. Setup the test supplies, none of it Gooarchy's code: a lap
 (the first virtual output is named eDP-1 and outputs added later DP-1, by tests/output-names.c,
 a copy of Scottland's; docking adds and removes DP-1 through Wayfire's headless-output IPC), the lid
 (Scottland's test-only virtual switch takes Wayfire's own switch path, only libinput bypassed, and
-/proc/acpi/button/lid/LID0/state is a file in the compositor's mount namespace the test writes
-with each event), the connected connectors (GOOARCHY_DRM_PATH), and the panel's configured scale
+/proc/acpi/button/lid/LID0/state is a file the test writes with each event, bound in place where
+gooarchy-clamshell runs), the connected connectors (GOOARCHY_DRM_PATH), and the panel's configured scale
 and position (an overrides.ini in the session's own config), and a failing output change
 (Scottland's scottland-output, wrapped to refuse turning an output on while the test holds a
-fault file, as when Wayfire does not apply a change). gooarchy-clamshell is wrapped to record
-when it finished and its exit status; the script itself runs unchanged.
+fault file, as when Wayfire does not apply a change). gooarchy-clamshell is wrapped to see that
+lid and those connectors and to record when it finished and its exit status; the script itself
+runs unchanged.
 
 Oracles: Wayfire's own output list (which outputs are on, and their layout geometry, where the
 scale shows as logical size) and a screencopy of the panel (grim -o) for whether it renders.
@@ -101,37 +104,39 @@ exec '{(built / "libexec/scottland-output").resolve()}' "$@"
 
 log = root / "calls.log"
 log.touch()
+lid_state = root / "lid-state"
+lid_state.write_text("state:      open  \n")
+drm = root / "drm"
 (bin_dir / "gooarchy-clamshell").write_text(f'''#!/bin/sh
-# Test stand-in: run Gooarchy's script unchanged and record that it finished.
-"{repo}/session/libexec/gooarchy-clamshell" "$@"; status=$?
+# Test stand-in: run Gooarchy's script unchanged, seeing the test's lid and connectors, and record
+# that it finished.
+bwrap --dev-bind / / --tmpfs /proc/acpi --dir /proc/acpi/button/lid/LID0 \\
+  --bind '{lid_state}' /proc/acpi/button/lid/LID0/state \\
+  env GOOARCHY_DRM_PATH='{drm}' "{repo}/session/libexec/gooarchy-clamshell" "$@"; status=$?
 printf 'gooarchy-clamshell-done\\t%s\\n' "$status" >>'{log}'
 exit $status
 ''')
 (bin_dir / "gooarchy-clamshell").chmod(0o755)
 
-lid_state = root / "lid-state"
-lid_state.write_text("state:      open  \n")
-drm = root / "drm"
 for connector in ("card0-eDP-1", "card0-DP-1"):
     (drm / connector).mkdir(parents=True)
 (drm / "card0-eDP-1/status").write_text("connected\n")
 (drm / "card0-DP-1/status").write_text("disconnected\n")
+# The output names, compiled in: Scottland's harness starts Wayfire with a clean environment.
+outputs_map = "HEADLESS-1=eDP-1," + ",".join(f"HEADLESS-{n}=DP-1" for n in range(2, 8))
+(root / "output-names-map.c").write_text(
+    "#include <stdlib.h>\n__attribute__((constructor)) static void names(void)\n"
+    f'{{ setenv("SCOTTLAND_TEST_OUTPUT_NAMES", "{outputs_map}", 1); }}\n')
 names = root / "output-names.so"
 subprocess.run(["cc", "-shared", "-fPIC", "-O1", "-o", str(names), str(repo / "tests/output-names.c"),
-                "-ldl"], check=True)
-outputs_map = "HEADLESS-1=eDP-1," + ",".join(f"HEADLESS-{n}=DP-1" for n in range(2, 8))
-wrap = root / "wrap-compositor"
-wrap.write_text(f'''#!/bin/sh
-exec bwrap --dev-bind / / --tmpfs /proc/acpi --dir /proc/acpi/button/lid/LID0 \\
-  --bind '{lid_state}' /proc/acpi/button/lid/LID0/state \\
-  env LD_PRELOAD='{names}' SCOTTLAND_TEST_OUTPUT_NAMES={outputs_map} GOOARCHY_DRM_PATH='{drm}' "$@"
-''')
-wrap.chmod(0o755)
+                str(root / "output-names-map.c"), "-ldl"], check=True)
 
-session_dir = root / "session"
+session_dir = scottland / "build/gooarchy-clamshell-test"
+if session_dir.exists():
+    shutil.rmtree(session_dir)
 env = {**os.environ, "HOME": str(home), "SCOTTLAND_HEADLESS_DIR": str(session_dir),
        "SCOTTLAND_TEST_PATH": str(bin_dir), "SCOTTLAND_TEST_HOOKS": str(hooks),
-       "SCOTTLAND_TEST_WRAP": str(wrap), "TMPDIR": str(root / "tmp")}
+       "SCOTTLAND_TEST_PRELOAD": str(names), "TMPDIR": str(root / "tmp")}
 
 
 def harness(*args, timeout=60):
@@ -179,7 +184,7 @@ def done_count():
 def lid(closed):
     """The lid as the hardware reports it: the ACPI state file, then the switch event."""
     before = done_count()
-    with open(lid_state, "r+") as handle:  # in place: the compositor's namespace binds this file
+    with open(lid_state, "r+") as handle:  # in place: gooarchy-clamshell's namespace binds this file
         handle.write("state:      closed\n" if closed else "state:      open  \n")
     ipc("scottland/test-switch", {"device": "Lid Switch", "state": closed})
     return wait(lambda: done_count() > before, timeout=30)
