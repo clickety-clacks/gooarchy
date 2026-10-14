@@ -10,16 +10,15 @@ desktop on Wayfire. In planning; nothing to install yet.
   packages, update channel, machine lifecycle). Put each change in the layer it belongs to.
 - **No silent overrides:** anything that replaces a user's existing setting is reported with its reason.
 - **Testing** uses an isolated machine with the capabilities the behavior needs and an authorized
-  execution window (see the private environment docs), never anyone's daily machine. A machine name
-  is not a product-acceptance condition.
+  test window, never anyone's daily-use machine. A hostname is not a product-acceptance condition.
 - **End-to-end behavior:** use [the independent runbooks](docs/e2e/README.md) for installed Gooarchy,
   Flavorings and Scottland behavior; collect them with [the final release pass](docs/e2e/final-release.md).
-  The attended display-zones and Adapter B checks are release-time prompts for Mike, not gates on
+  The attended display-zones and Adapter B checks are release-time prompts for an operator, not gates on
   unrelated source work.
 
-## Branches and releases (Mike, 2026-10-08)
+## Branches and releases (2026-10-08)
 
-Every agent working in this repository follows this.
+Every contributor working in this repository follows this.
 
 - `main` is what the next Gooarchy install gets. It pins Scottland and gooarchy-flavorings by **tag**
   (never a branch or untagged commit), and the kernel and portal versions in their pin files.
@@ -30,16 +29,16 @@ Every agent working in this repository follows this.
   whenever `main` changes.
 - Experiments are opt-in flags on `main` (as `install.sh --kernel` is), never long-lived branches.
   Feature branches are short-lived and deleted after merge.
-- A PR lands only on a target branch tip it was tested against (merge queue once the Gooarchy PDO sets it
-  up; until then, update to the tip and rerun the checks right before merging), after review by the other
-  harness.
+- A PR lands only on a target branch tip it was tested against, after independent review. Once the
+  repository's merge queue is enabled, use it; until then, update to the target tip and rerun the
+  required checks immediately before merging.
 - Acceptance for distro behavior (install, boot, kernel, drivers, compositor rendering) requires
   the relevant real hardware or session capabilities; a disposable VM or headless run establishes
-  only the behavior it actually exercises. The private environment docs identify available machines.
-- Shipping: tag, rehearse that exact tag on capable isolated hardware, then tell Mike the tag and its contents in product
-  terms. osanwe is never a test host.
+  only the behavior it actually exercises.
+- Shipping: tag, rehearse that exact tag on capable isolated hardware, then report the tag and its
+  contents in product terms.
 
-## Privacy of developer networks (Mike, 2026-10-04)
+## Privacy of developer networks (2026-10-04)
 
 - Never reveal the internal topology or identifiers of any developer's network in this repository: no
   host names, IP addresses, tailnet or domain names, user names, device names, paths under a developer's
