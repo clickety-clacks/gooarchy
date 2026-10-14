@@ -867,6 +867,7 @@ nvidia_collect_kernel_presets() {
     base=${preset##*/}; base=${base%.preset}
     [[ $base == "${NV_PKGBASE[$kernel]}" ]] && NV_KERNEL_PRESETS+=("$preset")
   done
+  return 0
 }
 
 nvidia_space_check() {
