@@ -132,8 +132,10 @@ actual_fingerprint=$(gpg --homedir "$test_root/gnupg" --batch --no-options \
   exit 1
 }
 
-if bash -c 'source "$1"' _ "$flavorings_recipe" >"$test_root/flavorings.out" 2>"$test_root/flavorings.err"; then
-  echo 'Flavorings recipe must fail closed with an empty _tag' >&2
+empty_tag_recipe=$test_root/flavorings-empty-tag.PKGBUILD
+sed 's/^_tag=.*/_tag=/' "$flavorings_recipe" >"$empty_tag_recipe"
+if bash -c 'source "$1"' _ "$empty_tag_recipe" >"$test_root/flavorings.out" 2>"$test_root/flavorings.err"; then
+  echo 'an empty Flavorings _tag must fail closed' >&2
   exit 1
 fi
 grep -Fq 'Set exactly one final version _tag' "$test_root/flavorings.err" || {

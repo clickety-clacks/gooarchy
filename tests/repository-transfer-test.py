@@ -154,6 +154,131 @@ class RepositoryTransferTests(unittest.TestCase):
     def verify(self, bundle: Path, manifest_hash: str) -> dict[str, Any]:
         return protocol.load_and_verify_bundle(bundle, manifest_hash, FINGERPRINT)
 
+    def test_committed_flavorings_input_matches_reviewed_tag_and_recipe(self) -> None:
+        input_path = ROOT / "packaging/gooarchy-flavorings/v0.1.1-input.json"
+        input_manifest = json.loads(input_path.read_text(encoding="utf-8"))
+        recipe = (ROOT / "packaging/gooarchy-flavorings/PKGBUILD").read_text(encoding="utf-8")
+        tag = re.search(r"(?m)^_tag=(.+)$", recipe)
+        pkgver = re.search(r"(?m)^pkgver=(.+)$", recipe)
+        pkgrel = re.search(r"(?m)^pkgrel=(.+)$", recipe)
+        self.assertIsNotNone(tag)
+        self.assertIsNotNone(pkgver)
+        self.assertIsNotNone(pkgrel)
+        self.assertEqual(input_manifest["schema"], protocol.PACKAGE_INPUT_SCHEMA)
+        self.assertEqual(input_manifest["package"], "gooarchy-flavorings")
+        self.assertEqual(input_manifest["version"], f"{pkgver.group(1)}-{pkgrel.group(1)}")
+        self.assertEqual(input_manifest["source"]["tag"], tag.group(1))
+        self.assertEqual(input_manifest["source"]["commit"], "14c4d5015936c427be0e60c7114ba528eae14e47")
+        self.assertEqual(input_manifest["source"]["tree"], "82ff4bdf00b96d9eb6189d10d3dc66ee70ca2dad")
+        self.assertEqual(input_manifest["sha256"], "c71c0195add828f223b73637d06a74df83d7fa9361913031ed5d405e9dda90d6")
+        self.assertEqual(input_manifest["pkgbuild_sha256"], "c793c9de28cd6bedb78387d0e8819c45e65e6b7689f4c2e5c70dfb26db1ce602")
+
+    def make_flavorings_input(self) -> tuple[Path, Path, str, str, dict[str, str]]:
+        version = "0.1.1-1"
+        tag = "v0.1.1"
+        filename = f"gooarchy-flavorings-{version}-any.pkg.tar.zst"
+        archive = self.root / filename
+        archive.write_bytes(b"synthetic pinned Flavorings archive")
+        manifest = {
+            "schema": protocol.PACKAGE_INPUT_SCHEMA,
+            "package": "gooarchy-flavorings",
+            "version": version,
+            "architecture": "any",
+            "filename": filename,
+            "sha256": sha256(archive),
+            "packager": "Gooarchy",
+            "pkgbuild_sha256": "c" * 64,
+            "source": {
+                "repository": "clickety-clacks/gooarchy-flavorings",
+                "tag": tag,
+                "commit": "3" * 40,
+                "tree": "4" * 40,
+                "archive_sha256": "d" * 64,
+            },
+        }
+        manifest_path = self.root / "v0.1.1-input.json"
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+        pkginfo = (
+            "pkgname = gooarchy-flavorings\n"
+            f"pkgver = {version}\n"
+            "arch = any\n"
+            "packager = Gooarchy\n"
+        )
+        buildinfo = (
+            "pkgname = gooarchy-flavorings\n"
+            f"pkgver = {version}\n"
+            "pkgarch = any\n"
+            "packager = Gooarchy\n"
+            f"pkgbuild_sha256sum = {manifest['pkgbuild_sha256']}\n"
+        )
+        metadata = {".PKGINFO": pkginfo, ".BUILDINFO": buildinfo}
+        return archive, manifest_path, tag, version, metadata
+
+    def test_prebuilt_flavorings_input_matches_source_archive_and_package_metadata(self) -> None:
+        archive, manifest_path, tag, version, metadata = self.make_flavorings_input()
+
+        def fake_bsdtar(args, **kwargs):
+            text = metadata.get(args[-1])
+            return SimpleNamespace(returncode=0 if text is not None else 1, stdout=text or "", stderr="")
+
+        with patch.object(protocol.subprocess, "run", side_effect=fake_bsdtar):
+            observed = protocol.verify_flavorings_input(archive, manifest_path, tag, version)
+        self.assertEqual(observed["source"]["tag"], tag)
+        self.assertEqual(observed["source"]["commit"], "3" * 40)
+        self.assertEqual(observed["sha256"], sha256(archive))
+
+    def test_prebuilt_flavorings_input_rejects_wrong_tag_version_hash_and_build_identity(self) -> None:
+        archive, manifest_path, tag, version, metadata = self.make_flavorings_input()
+        with self.assertRaisesRegex(ValueError, "does not match the current recipe"):
+            protocol.verify_flavorings_input(archive, manifest_path, "v0.1.2", version)
+
+        with self.assertRaisesRegex(ValueError, "does not match the current recipe"):
+            protocol.verify_flavorings_input(archive, manifest_path, tag, "0.1.2-1")
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["sha256"] = "e" * 64
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "package hash does not match"):
+            protocol.verify_flavorings_input(archive, manifest_path, tag, version)
+
+        manifest["sha256"] = sha256(archive)
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        metadata[".BUILDINFO"] = metadata[".BUILDINFO"].replace("packager = Gooarchy", "packager = Unknown Packager")
+
+        def fake_bsdtar(args, **kwargs):
+            text = metadata.get(args[-1])
+            return SimpleNamespace(returncode=0 if text is not None else 1, stdout=text or "", stderr="")
+
+        with patch.object(protocol.subprocess, "run", side_effect=fake_bsdtar):
+            with self.assertRaisesRegex(ValueError, "BUILDINFO does not match"):
+                protocol.verify_flavorings_input(archive, manifest_path, tag, version)
+
+    def test_staged_flavorings_input_rejects_source_swap_after_initial_verification(self) -> None:
+        archive, manifest_path, tag, version, metadata = self.make_flavorings_input()
+        staged_dir = self.root / "built"
+        staged_dir.mkdir()
+        staged_archive = staged_dir / archive.name
+
+        def fake_bsdtar(args, **kwargs):
+            text = metadata.get(args[-1])
+            return SimpleNamespace(returncode=0 if text is not None else 1, stdout=text or "", stderr="")
+
+        with patch.object(protocol.subprocess, "run", side_effect=fake_bsdtar):
+            verified = protocol.verify_flavorings_input(archive, manifest_path, tag, version)
+            original_bytes = archive.read_bytes()
+            archive.write_bytes(b"replacement after validation")
+            with self.assertRaisesRegex(ValueError, "package hash does not match"):
+                protocol.stage_flavorings_input(archive, staged_archive, manifest_path, tag, version)
+            self.assertFalse(staged_archive.exists())
+
+            archive.write_bytes(original_bytes)
+            staged = protocol.stage_flavorings_input(archive, staged_archive, manifest_path, tag, version)
+            archive.write_bytes(b"replacement after private staging")
+
+        self.assertEqual(staged["sha256"], verified["sha256"])
+        self.assertEqual(sha256(staged_archive), verified["sha256"])
+        self.assertEqual(staged_archive.stat().st_mode & 0o777, 0o400)
+
     def test_complete_initial_snapshot_matches_database_and_manifest(self) -> None:
         versions = {name: "1.0.0-1" for name in NAMES}
         bundle, manifest_hash, manifest = make_bundle(self.root, versions)
