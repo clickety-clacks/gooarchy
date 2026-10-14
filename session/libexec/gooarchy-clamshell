@@ -104,27 +104,37 @@ internal_enabled() {
 enable_internal() {
   [[ -n $INTERNAL ]] || return 0
 
-  if [[ -f $CLAMSHELL_FLAG ]]; then
-    rm -f "$CLAMSHELL_FLAG"
-  elif internal_enabled || external_active; then
+  if [[ ! -f $CLAMSHELL_FLAG ]] && { internal_enabled || external_active; }; then
     # On already, or off by the user's own choice while another display is in use: leave it.
     return 0
   fi
   # Turned off by the lid, or off with nothing else to show the desktop on: on again, with the
-  # mode, position and scale its settings still hold.
-  internal_enabled || "$OUTPUT" set "$INTERNAL" --on >/dev/null || true
+  # mode, position and scale its settings still hold. The record stays until the panel is on, so
+  # a failed attempt is tried again at the next lid change or session start, not taken for the
+  # user's own choice.
+  if ! internal_enabled && ! "$OUTPUT" set "$INTERNAL" --on >/dev/null; then
+    echo "gooarchy-clamshell: could not turn $INTERNAL on; trying again at the next lid change" >&2
+    return 1
+  fi
+  rm -f "$CLAMSHELL_FLAG"
   "$POWER" --output "$INTERNAL" on >/dev/null 2>&1 || true
 }
 
 disable_internal() {
   [[ -n $INTERNAL ]] || exit 0
-  # Off already and not by this script: the user turned it off; leave it to them.
+  # Off already: by the user (no record), or by this script, which keeps its record.
   if ! internal_enabled; then
     return 0
   fi
 
   printf '%s\n' "$INTERNAL" >"$CLAMSHELL_FLAG"
-  "$OUTPUT" set "$INTERNAL" --off >/dev/null || rm -f "$CLAMSHELL_FLAG"
+  if ! "$OUTPUT" set "$INTERNAL" --off >/dev/null; then
+    echo "gooarchy-clamshell: could not turn $INTERNAL off" >&2
+    # Still on: not this script's to bring back. Off anyway, or unknown: keep the record, so
+    # opening the lid turns it on.
+    OUTPUTS=$("$OUTPUT" list) && internal_enabled && rm -f "$CLAMSHELL_FLAG"
+    return 1
+  fi
 }
 
 if laptop_closed && external_connected && external_active; then

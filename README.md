@@ -163,7 +163,7 @@ without Gooarchy:
 | `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
 | `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem as they are written. The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
-| `tests/clamshell-test.py` | Clamshell mode on the lid in a headless Scottland session (needs a Scottland checkout with output control; run on a test machine) |
+| `tests/clamshell-test.py` | Clamshell mode on the lid in a headless Scottland session (needs a Scottland checkout with output control, as at the pinned v0.3.0; run on a test machine) |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
 Gooarchy's programs, hooks, themes and default configuration all come from packages. Outside

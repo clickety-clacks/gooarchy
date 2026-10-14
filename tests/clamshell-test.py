@@ -2,7 +2,7 @@
 """Test Gooarchy's clamshell mode (gooarchy-clamshell on the lid switch) in a headless Scottland.
 
 Needs a Scottland checkout with its plugin and test helpers built (make test-hooks), whose
-Scottland has output control (scottland-output); run it on a test machine, never on a desktop in
+Scottland has output control (scottland-output, from v0.3.0, the pinned tag); run it on a test machine, never on a desktop in
 use. Everything it creates is under this checkout's build/clamshell-test/, removed at the start
 of the next run; the session is stopped at the end.
 
@@ -10,13 +10,15 @@ of the next run; the session is stopped at the end.
 
 The session runs Scottland's shipped config plus Gooarchy's lid fragment (35-gooarchy-lid) and
 no other integration. Setup the test supplies, none of it Gooarchy's code: a laptop with a dock
-(the first virtual output is named eDP-1 and outputs added later DP-1, by Scottland's
-tests/output-names.c; docking adds and removes DP-1 through Wayfire's headless-output IPC), the lid
+(the first virtual output is named eDP-1 and outputs added later DP-1, by
+tests/output-names.c, a copy of Scottland's; docking adds and removes DP-1 through Wayfire's headless-output IPC), the lid
 (Scottland's test-only virtual switch takes Wayfire's own switch path, only libinput bypassed, and
 /proc/acpi/button/lid/LID0/state is a file in the compositor's mount namespace the test writes
 with each event), the connected connectors (GOOARCHY_DRM_PATH), and the panel's configured scale
-and position (an overrides.ini in the session's own config). gooarchy-clamshell is wrapped to
-record when it finished; the script itself runs unchanged.
+and position (an overrides.ini in the session's own config), and a failing output change (Scottland's
+scottland-output, wrapped to refuse turning an output on while the test holds a fault file, as when
+Wayfire does not apply a change). gooarchy-clamshell is wrapped to record when it finished and its
+exit status; the script itself runs unchanged.
 
 Oracles: Wayfire's own output list (which outputs are on, and their layout geometry, where the
 scale shows as logical size) and a screencopy of the panel (grim -o) for whether it renders.
@@ -67,7 +69,12 @@ for directory in (home, bin_dir, hooks, root / "tmp"):
 # Omarchy adapter's would import the test machine's own Hyprland config).
 built = scottland / "build/hooks"
 for entry in built.iterdir():
-    if entry.name in ("config.d", "autostart.d"):
+    if entry.name == "libexec":
+        (hooks / "libexec").mkdir()
+        for item in entry.iterdir():
+            if item.name != "scottland-output":
+                (hooks / "libexec" / item.name).symlink_to(item.resolve())
+    elif entry.name in ("config.d", "autostart.d"):
         (hooks / entry.name).mkdir(parents=True)
         for item in entry.iterdir():
             if "omarchy" not in item.name:
@@ -76,6 +83,21 @@ for entry in built.iterdir():
         (hooks / entry.name).symlink_to(entry.resolve())
 (hooks / "config.d/35-gooarchy-lid").symlink_to(repo / "session/35-gooarchy-lid")
 (hooks / "autostart.d/45-gooarchy-clamshell").symlink_to(repo / "session/autostart.d/45-gooarchy-clamshell")
+
+fault = root / "output-on-fails"
+(hooks / "libexec/scottland-output").write_text(f'''#!/bin/sh
+# Test stand-in: Scottland's scottland-output, refusing to turn an output on while {fault} exists.
+if [ -e '{fault}' ] && [ "$1" = set ]; then
+  for arg; do
+    if [ "$arg" = --on ]; then
+      echo "scottland-output: not applied (test fault)" >&2
+      exit 1
+    fi
+  done
+fi
+exec '{(built / "libexec/scottland-output").resolve()}' "$@"
+''')
+(hooks / "libexec/scottland-output").chmod(0o755)
 
 log = root / "calls.log"
 log.touch()
@@ -95,7 +117,7 @@ for connector in ("card0-eDP-1", "card0-DP-1"):
 (drm / "card0-eDP-1/status").write_text("connected\n")
 (drm / "card0-DP-1/status").write_text("disconnected\n")
 names = root / "output-names.so"
-subprocess.run(["cc", "-shared", "-fPIC", "-O1", "-o", str(names), str(scottland / "tests/output-names.c"),
+subprocess.run(["cc", "-shared", "-fPIC", "-O1", "-o", str(names), str(repo / "tests/output-names.c"),
                 "-ldl"], check=True)
 outputs_map = "HEADLESS-1=eDP-1," + ",".join(f"HEADLESS-{n}=DP-1" for n in range(2, 8))
 wrap = root / "wrap-compositor"
@@ -144,8 +166,14 @@ def capture(output, name):
     return int(header[1]), int(header[2])
 
 
+def statuses():
+    """gooarchy-clamshell's exit status for each run so far."""
+    return [line.split("\t")[1] for line in log.read_text().splitlines()
+            if line.startswith("gooarchy-clamshell-done\t")]
+
+
 def done_count():
-    return log.read_text().count("gooarchy-clamshell-done\t0")
+    return len(statuses())
 
 
 def lid(closed):
@@ -206,6 +234,30 @@ try:
     shot = capture("eDP-1", "open")
     check("the panel produces frames again (screencopy of eDP-1 returns its 1280x720 mode)", shot == (1280, 720), shot)
     check("the record is gone", not flag.exists())
+    check("every run so far succeeded", set(statuses()) == {"0"}, statuses())
+
+    # Lid open while Scottland fails to turn the panel on: the record stays, so a later lid change
+    # brings the panel back instead of taking it for one the user turned off.
+    ok, _ = lid(True)
+    ok2, seen = wait(lambda: "eDP-1" not in outputs(), timeout=10)
+    check("setup: docked lid close turns the panel off again", ok and ok2 and flag.exists(), seen)
+    fault.touch()
+    ok, _ = lid(False)
+    check("lid open with a failing output change reports the failure (nonzero exit)",
+          ok and statuses()[-1] != "0", statuses()[-1:])
+    check("the failed lid open leaves the panel off and keeps the record",
+          "eDP-1" not in outputs() and flag.exists(), (outputs(), flag.exists()))
+    ok, _ = lid(True)
+    check("the next lid close keeps the record: the panel off is still the script's",
+          ok and statuses()[-1] == "0" and "eDP-1" not in outputs() and flag.exists(),
+          (statuses()[-1:], outputs(), flag.exists()))
+    fault.unlink()
+    ok, _ = lid(False)
+    ok2, seen = wait(lambda: outputs().get("eDP-1") == PANEL, timeout=10)
+    check("the retried lid open brings the panel back at its scale (1.5) and position (1920,0)",
+          ok and ok2 and statuses()[-1] == "0", (seen, statuses()[-1:]))
+    check("the record is gone once the panel is on", not flag.exists())
+    after_fault = done_count()
 
     # A panel the user turned off stays off while docked.
     output_tool("set", "eDP-1", "--off")
@@ -246,6 +298,8 @@ try:
     ok, _ = lid(False)
     ok2, seen = wait(lambda: outputs().get("eDP-1") == PANEL, timeout=10)
     check("then opening the lid brings it back as configured", ok and ok2, seen)
+    check("every run after the failure succeeded", set(statuses()[after_fault:]) == {"0"},
+          statuses()[after_fault:])
 finally:
     if (session_dir / "wayfire.log").exists():  # evidence outlives the session directory
         shutil.copy(session_dir / "wayfire.log", root / "wayfire.log")
