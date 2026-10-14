@@ -9,8 +9,9 @@ desktop on Wayfire. In planning; nothing to install yet.
   defaults, also installed on Omarchy through Scottland's adapter) → Gooarchy (the distro: installer,
   packages, update channel, machine lifecycle). Put each change in the layer it belongs to.
 - **No silent overrides:** anything that replaces a user's existing setting is reported with its reason.
-- **Testing** happens only on the designated test machines (see the private environment docs), never on
-  anyone's daily machine.
+- **Testing** uses an isolated machine with the capabilities the behavior needs and an authorized
+  execution window (see the private environment docs), never anyone's daily machine. A machine name
+  is not a product-acceptance condition.
 - **End-to-end behavior:** use [the independent runbooks](docs/e2e/README.md) for installed Gooarchy,
   Flavorings and Scottland behavior; collect them with [the final release pass](docs/e2e/final-release.md).
   The attended display-zones and Adapter B checks are release-time prompts for Mike, not gates on
@@ -32,9 +33,10 @@ Every agent working in this repository follows this.
 - A PR lands only on a target branch tip it was tested against (merge queue once the Gooarchy PDO sets it
   up; until then, update to the tip and rerun the checks right before merging), after review by the other
   harness.
-- Acceptance for distro behavior (install, boot, kernel, drivers, compositor rendering) is on racter, real
-  NVIDIA hardware. A disposable VM or headless run on plumbus is a fixture, never distro acceptance.
-- Shipping: tag, rehearse that exact tag on racter, then tell Mike the tag and its contents in product
+- Acceptance for distro behavior (install, boot, kernel, drivers, compositor rendering) requires
+  the relevant real hardware or session capabilities; a disposable VM or headless run establishes
+  only the behavior it actually exercises. The private environment docs identify available machines.
+- Shipping: tag, rehearse that exact tag on capable isolated hardware, then tell Mike the tag and its contents in product
   terms. osanwe is never a test host.
 
 ## Privacy of developer networks (Mike, 2026-10-04)
