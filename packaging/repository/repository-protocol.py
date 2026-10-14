@@ -7,7 +7,10 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -185,6 +188,41 @@ def verify_flavorings_input(
     }:
         fail("prebuilt Flavorings .BUILDINFO does not match its reviewed build identity")
     return manifest
+
+
+def stage_flavorings_input(
+    archive: Path, output: Path, manifest_path: Path, expected_tag: str, expected_version: str
+) -> dict[str, Any]:
+    """Copy a prebuilt input into private staging, then validate the staged bytes."""
+    if output.exists() or output.is_symlink():
+        fail("staged Flavorings output already exists")
+    if not hasattr(os, "O_NOFOLLOW"):
+        fail("safe Flavorings input staging requires O_NOFOLLOW support")
+
+    source_fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    output_fd = -1
+    created_output = False
+    try:
+        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+            fail("prebuilt Flavorings input must be a regular package archive")
+        output_fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created_output = True
+        with os.fdopen(source_fd, "rb") as source:
+            source_fd = -1
+            with os.fdopen(output_fd, "wb") as destination:
+                output_fd = -1
+                shutil.copyfileobj(source, destination)
+        os.chmod(output, 0o400)
+        return verify_flavorings_input(output, manifest_path, expected_tag, expected_version)
+    except BaseException:
+        if created_output:
+            output.unlink(missing_ok=True)
+        raise
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if output_fd >= 0:
+            os.close(output_fd)
 
 
 def load_sources(path: Path) -> dict[str, dict[str, Any]]:
@@ -709,6 +747,12 @@ def main() -> int:
     flavorings_input.add_argument("--manifest", type=Path, required=True)
     flavorings_input.add_argument("--expected-tag", required=True)
     flavorings_input.add_argument("--expected-version", required=True)
+    flavorings_stage = commands.add_parser("stage-flavorings-input")
+    flavorings_stage.add_argument("--archive", type=Path, required=True)
+    flavorings_stage.add_argument("--output", type=Path, required=True)
+    flavorings_stage.add_argument("--manifest", type=Path, required=True)
+    flavorings_stage.add_argument("--expected-tag", required=True)
+    flavorings_stage.add_argument("--expected-version", required=True)
     writer = commands.add_parser("write")
     writer.add_argument("--bundle", type=Path, required=True)
     writer.add_argument("--source-root", type=Path, required=True)
@@ -739,6 +783,18 @@ def main() -> int:
         if args.command == "verify-flavorings-input":
             manifest = verify_flavorings_input(
                 args.archive, args.manifest, args.expected_tag, args.expected_version
+            )
+            print(json.dumps({
+                "package": manifest["package"],
+                "version": manifest["version"],
+                "filename": manifest["filename"],
+                "sha256": manifest["sha256"],
+                "source": manifest["source"],
+                "pkgbuild_sha256": manifest["pkgbuild_sha256"],
+            }, sort_keys=True, separators=(",", ":")))
+        elif args.command == "stage-flavorings-input":
+            manifest = stage_flavorings_input(
+                args.archive, args.output, args.manifest, args.expected_tag, args.expected_version
             )
             print(json.dumps({
                 "package": manifest["package"],

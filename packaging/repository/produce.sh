@@ -302,8 +302,11 @@ for package_name in "${requested_packages[@]}"; do
     source_revision[$package_name]="$scottland_source_label (resolved $scottland_source_revision)"
   else
     if [[ $package_name == gooarchy-flavorings && -n $flavorings_package ]]; then
-      cp -- "$flavorings_package" "$built_dir/$flavorings_input_filename" ||
-        die "could not stage the verified prebuilt Flavorings archive."
+      python3 "$script_dir/repository-protocol.py" stage-flavorings-input \
+        --archive "$flavorings_package" --output "$built_dir/$flavorings_input_filename" \
+        --manifest "$repo_root/packaging/gooarchy-flavorings/v0.1.1-input.json" \
+        --expected-tag "$flavorings_source_ref" --expected-version "$flavorings_package_version" \
+        >/dev/null || die "the staged prebuilt Flavorings archive does not match its reviewed source input."
       recipe_built[$recipe_file]=1
       source_revision[$package_name]=$flavorings_source_revision
     else

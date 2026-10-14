@@ -253,6 +253,32 @@ class RepositoryTransferTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "BUILDINFO does not match"):
                 protocol.verify_flavorings_input(archive, manifest_path, tag, version)
 
+    def test_staged_flavorings_input_rejects_source_swap_after_initial_verification(self) -> None:
+        archive, manifest_path, tag, version, metadata = self.make_flavorings_input()
+        staged_dir = self.root / "built"
+        staged_dir.mkdir()
+        staged_archive = staged_dir / archive.name
+
+        def fake_bsdtar(args, **kwargs):
+            text = metadata.get(args[-1])
+            return SimpleNamespace(returncode=0 if text is not None else 1, stdout=text or "", stderr="")
+
+        with patch.object(protocol.subprocess, "run", side_effect=fake_bsdtar):
+            verified = protocol.verify_flavorings_input(archive, manifest_path, tag, version)
+            original_bytes = archive.read_bytes()
+            archive.write_bytes(b"replacement after validation")
+            with self.assertRaisesRegex(ValueError, "package hash does not match"):
+                protocol.stage_flavorings_input(archive, staged_archive, manifest_path, tag, version)
+            self.assertFalse(staged_archive.exists())
+
+            archive.write_bytes(original_bytes)
+            staged = protocol.stage_flavorings_input(archive, staged_archive, manifest_path, tag, version)
+            archive.write_bytes(b"replacement after private staging")
+
+        self.assertEqual(staged["sha256"], verified["sha256"])
+        self.assertEqual(sha256(staged_archive), verified["sha256"])
+        self.assertEqual(staged_archive.stat().st_mode & 0o777, 0o400)
+
     def test_complete_initial_snapshot_matches_database_and_manifest(self) -> None:
         versions = {name: "1.0.0-1" for name in NAMES}
         bundle, manifest_hash, manifest = make_bundle(self.root, versions)
