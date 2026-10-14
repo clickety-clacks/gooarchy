@@ -345,17 +345,20 @@ done
 
 for package_path in "$built_dir"/*.pkg.tar.* "$kernel_dir"/*.pkg.tar.*; do
   [[ -f $package_path ]] || continue
-  pkginfo=$(bsdtar -xOf "$package_path" .PKGINFO 2>/dev/null) || die "cannot read package metadata from $(basename -- "$package_path")."
-  package_name=$(awk -F ' = ' '$1 == "pkgname" { print $2; exit }' <<<"$pkginfo")
+  # .PKGINFO carries the full epoch:pkgver-pkgrel; pacman -Qp does not accept --print-format.
+  package_info=$(python3 "$script_dir/repository-protocol.py" package-info --archive "$package_path") ||
+    die "cannot read package metadata from $(basename -- "$package_path")."
+  package_name=$(jq -er '.name' <<<"$package_info") ||
+    die "package metadata has no valid package name: $(basename -- "$package_path")."
   [[ ${selected[$package_name]+present} ]] || continue
   [[ ! ${package_archive[$package_name]+present} ]] || die "more than one archive was built for $package_name."
-  [[ $(awk -F ' = ' '$1 == "packager" { print $2; exit }' <<<"$pkginfo") == Gooarchy ]] ||
+  [[ $(jq -er '.packager' <<<"$package_info") == Gooarchy ]] ||
     die "$package_name does not carry the Gooarchy packager identity."
-  package_arch=$(awk -F ' = ' '$1 == "arch" { print $2; exit }' <<<"$pkginfo")
+  package_arch=$(jq -er '.arch' <<<"$package_info") || die "$package_name has no valid architecture."
   [[ $package_arch == any || $package_arch == x86_64 ]] || die "$package_name has unsupported architecture $package_arch."
   package_archive[$package_name]=$package_path
-  package_version[$package_name]=$(pacman -Qp --print-format '%v' "$package_path") ||
-    die "pacman could not read the version of $package_name."
+  package_version[$package_name]=$(jq -er '.version' <<<"$package_info") ||
+    die "$package_name has no valid package version."
 done
 for package_name in "${requested_packages[@]}"; do
   [[ ${package_archive[$package_name]+present} ]] || die "the selected recipe did not produce $package_name."

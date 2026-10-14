@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -433,6 +434,43 @@ class RepositoryTransferTests(unittest.TestCase):
         path = self.root / package_filename("gooarchy", "2:1.2.3-4")
         create_package(path, "gooarchy", "2:1.2.3-4")
         self.assertEqual(protocol.package_info(path)["version"], "2:1.2.3-4")
+
+    def test_package_info_cli_preserves_full_arch_pkgver_field(self) -> None:
+        pkginfo = (
+            "pkgname = gooarchy\n"
+            "pkgver = 2:1.2.3-4\n"
+            "arch = x86_64\n"
+            "packager = Gooarchy\n"
+        )
+        result = subprocess.run(
+            [sys.executable, str(PROTOCOL_PATH), "package-info", "--stdin"],
+            input=pkginfo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["version"], "2:1.2.3-4")
+
+    def test_pkginfo_parser_rejects_ambiguous_version_fields(self) -> None:
+        pkginfo = (
+            "pkgname = gooarchy\n"
+            "pkgver = 1.2.3-1\n"
+            "pkgver = 9.9.9-9\n"
+            "arch = x86_64\n"
+            "packager = Gooarchy\n"
+        )
+        result = subprocess.run(
+            [sys.executable, str(PROTOCOL_PATH), "package-info", "--stdin"],
+            input=pkginfo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("exactly one non-empty pkgver field", result.stderr)
 
     def test_manifest_writer_binds_source_tree_and_package_records(self) -> None:
         versions = {name: "1.0.0-1" for name in NAMES}
