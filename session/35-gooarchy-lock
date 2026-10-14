@@ -1,4 +1,7 @@
 #!/bin/sh
+if [ "${1:-}" = --watch-paths ]; then
+  exit 0
+fi
 cat <<'CONFIG'
 [command]
 binding_gooarchy_lock = <super> KEY_L
