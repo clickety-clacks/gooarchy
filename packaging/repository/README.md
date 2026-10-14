@@ -26,7 +26,13 @@ From a clean Gooarchy `main` checkout on x86_64 Arch, the package builder runs:
 packaging/repository/produce.sh --output /path/to/new-transfer --all
 ```
 
-Pass package names instead of `--all` to rebuild a selected set. The command builds unsigned
+Pass package names instead of `--all` to rebuild a selected set. The command checks each recipe's
+`makedepends` and `checkdepends` against the builder's installed packages, then runs makepkg without
+dependency installation. This distinction lets one transfer build packages whose runtime
+`depends` refer to other packages in that same transfer; those runtime dependencies remain in each
+resulting package's `.PKGINFO` and the repository database. Missing build-time tools stop the
+producer before that recipe builds, with their package names reported for the builder environment.
+It does not use `sudo` or ask pacman to install runtime packages. The command builds unsigned
 packages, verifies the current public latest release and its detached signatures when one exists,
 retains packages that were not rebuilt, and creates the next unsigned `gooarchy.db`. It reads only
 the configured public key and fingerprint. It does not read signing credentials, make signatures,
@@ -149,3 +155,6 @@ package and the database, and refusal to advance latest after an incomplete uplo
 readback. It does not exercise a real Arch build, 1Password, GitHub, the production signing key,
 installer, or redirect. Those checks require their separately admitted release route and must be
 reported against the exact source tree and transfer.
+`tests/repository-build-dependencies-test.py` exercises the producer's build boundary with local
+command fixtures: only `makedepends` and `checkdepends` are preflighted, missing build tools stop
+before makepkg runs, and the build invocation does not ask pacman to install runtime dependencies.

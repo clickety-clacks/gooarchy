@@ -21,5 +21,5 @@ export GNUPGHOME=$dir/gnupg
 mkdir -m700 "$GNUPGHOME"
 gpg --quiet --import "$here"/keys/pgp/*.asc
 cd "$dir"
-makepkg --syncdeps --rmdeps --noconfirm --needed --cleanbuild --force
+"$here/../repository/build-recipe.sh" --noconfirm --needed --cleanbuild --force
 makepkg --packagelist
