@@ -3,8 +3,8 @@
 The package repository uses separate builder, signer, and uploader operations. The package builder
 creates x86_64 Arch package archives and an **unsigned** repository database. A signer validates that
 immutable transfer and creates detached signatures for every package and the database. A separately
-qualified uploader verifies the signed transfer and uploads the complete GitHub Release. Never run
-the retired `publish.sh` command on a package builder.
+qualified primary uploader verifies the signed transfer and uploads the complete GitHub Release
+through GitHub's Releases REST API. Never run the retired `publish.sh` command on a package builder.
 
 The installer defaults to the full database URL `https://gooarchy.com/gooarchy.db`; an explicit
 `GOOARCHY_REPOSITORY_URL` may select another full database URL ending in `/gooarchy.db` or an
@@ -84,20 +84,31 @@ requires the independently qualified primary uploader below to publish it.
 Only a separately qualified primary uploader runs this operation, regardless of which authorized
 signer produced the signatures. Upload qualification and custody are separate from signing. The
 uploader consumes the signed transfer; it does not read a private key or change the builder's
-immutable manifest:
+immutable manifest. Its repo-scoped GitHub token must be stored in the approved vault and granted
+`Contents: write` for `clickety-clacks/gooarchy`; set only the vault item reference at execution time.
+The reference is intentionally unset by default, so upload fails closed until the approved item is
+provisioned and selected.
+The uploader reads the token with `op read` and pipes it to the REST client on standard input. It does
+not require GitHub CLI or SSH trust, and never places the token in a command argument or repository
+file:
 
 ```sh
+GOOARCHY_RELEASE_UPLOAD_TOKEN_REF='op://<approved-vault>/<repo-scoped-upload-token-item>/credential' \
 packaging/repository/upload.sh --uploader-role primary \
   --signed-bundle /path/to/new-signed-transfer \
   --manifest-sha256 <64-hex-manifest-sha256>
 ```
 
 The uploader verifies the configured public fingerprint, signature receipt, each detached package
-and database signature, the exact source identity, and unchanged current latest release. It creates a
-GitHub Release draft with the complete package set, downloads the draft to compare every asset name
-and byte, rechecks the prior latest release, then makes one final operation to publish the verified
-release as latest. A failed check leaves the prior latest release in place; an incomplete draft is
-not made latest. Backup signing alone does not qualify an uploader.
+and database signature, the exact source identity, and unchanged current latest release before it
+reads the upload token. The REST client creates a release draft with `make_latest=false`, uploads the
+complete package, signature, and database set, then checks the exact asset names, uploaded states,
+sizes, and server SHA-256 digests when available. It downloads each draft asset through the release
+asset API and compares its byte count and SHA-256 with the local file. Only after every asset passes
+and the previous latest still matches the transfer base does one final API update mark the release
+published and explicitly promote it to latest. It then reads back the release and latest record. A failed check leaves the
+previous latest release in place; an incomplete draft remains unpublished. Backup signing alone does
+not qualify an uploader, and backup signing does not confer upload custody.
 
 The old `publish.sh` entry point now exits with a clear message directing operators to the two
 role-specific commands. Do not restore the single-machine build/sign/upload flow.
@@ -109,7 +120,9 @@ committed public-key fingerprint, and fail-closed empty Flavorings `_tag` withou
 access.
 `tests/repository-publish-test.sh` exercises the transfer, primary and backup signing, role separation,
 and upload behavior with synthetic package/database records, a throwaway OpenPGP key, and a local
-Releases-shaped service. It covers complete initial contents, manifest and payload hashes,
+Releases-shaped fixture. `tests/repository-release-api-test.py` exercises the production release
+promotion policy against an in-process fake API without network access or credentials. The tests
+cover complete initial contents, manifest and payload hashes,
 source/database identity, retained package bytes, version advancement, detached signatures for every
 package and the database, and refusal to advance latest after an incomplete upload or failed
 readback. It does not exercise a real Arch build, 1Password, GitHub, the production signing key,

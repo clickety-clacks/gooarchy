@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate the transfer manifest and package/database behavior without signing or publishing.
+# Validate repository transfer, signing roles, and release promotion with synthetic fixtures only.
 set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 if (($#)); then
@@ -7,4 +7,5 @@ if (($#)); then
   exit 2
 fi
 python3 "$script_dir/repository-transfer-test.py"
+python3 "$script_dir/repository-release-api-test.py"
 python3 "$script_dir/repository-sign-upload-test.py"

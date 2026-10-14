@@ -72,6 +72,8 @@ public_fingerprint=$(awk '/^[[:space:]]*($|#)/ { next } { gsub(/[[:space:]]/, ""
 
 release_repo=${GOOARCHY_RELEASE_REPOSITORY:-clickety-clacks/gooarchy}
 [[ $release_repo == clickety-clacks/gooarchy ]] || die "release repository must be clickety-clacks/gooarchy."
+release_api="https://api.github.com/repos/$release_repo"
+release_download="https://github.com/$release_repo/releases/download"
 
 work_parent=${GOOARCHY_UPLOADER_TMPDIR:-${TMPDIR:-/tmp}}
 mkdir -p -- "$work_parent"
@@ -125,10 +127,19 @@ actual_public_fingerprint=$(GNUPGHOME=$public_home gpg --batch --with-colons --s
 manifest_file="$snapshot/manifest.json"
 base_tag=$(jq -r '.base.release_tag // ""' "$manifest_file")
 read_latest_tag() {
-  local release_list
-  release_list=$(gh release list --repo "$release_repo" --limit 1000 --exclude-drafts \
-    --exclude-pre-releases --json tagName,isLatest) || return 1
-  jq -r '[.[] | select(.isLatest == true)][0].tagName // ""' <<<"$release_list"
+  local latest_json status
+  latest_json="$work_dir/latest-release.json"
+  status=$(curl --silent --show-error --output "$latest_json" --write-out '%{http_code}' \
+    "$release_api/releases/latest") || return 1
+  if [[ $status == 200 ]]; then
+    jq -e '.draft == false and .prerelease == false and (.tag_name | type == "string")' \
+      "$latest_json" >/dev/null || return 1
+    jq -r '.tag_name' "$latest_json"
+  elif [[ $status == 404 ]]; then
+    printf '\n'
+  else
+    return 1
+  fi
 }
 current_latest=$(read_latest_tag) || die "could not read the current published release."
 [[ $current_latest == "$base_tag" ]] ||
@@ -151,14 +162,26 @@ for filename in "${asset_names[@]}"; do release_asset_names+=("$filename" "$file
 if [[ -n $base_tag ]]; then
   previous_dir="$work_dir/previous"
   mkdir -m 700 "$previous_dir"
-  gh release download "$base_tag" --repo "$release_repo" --dir "$previous_dir" ||
-    die "could not download the current latest release for base verification."
+  curl --fail --silent --show-error --location \
+    "$release_download/$base_tag/gooarchy.db" --output "$previous_dir/gooarchy.db" ||
+    die "could not download the current latest repository database."
+  curl --fail --silent --show-error --location \
+    "$release_download/$base_tag/gooarchy.db.sig" --output "$previous_dir/gooarchy.db.sig" ||
+    die "could not download the current latest database signature."
   [[ -s $previous_dir/gooarchy.db && -s $previous_dir/gooarchy.db.sig ]] ||
     die "the current release is missing its repository database or detached signature."
   GNUPGHOME=$public_home gpg --batch --verify "$previous_dir/gooarchy.db.sig" \
     "$previous_dir/gooarchy.db" >/dev/null 2>&1 || die "the current repository database signature is invalid."
   while IFS=$'\t' read -r old_name old_version old_filename; do
     [[ -n $old_name ]] || continue
+    [[ $old_filename =~ ^[A-Za-z0-9][A-Za-z0-9._+:-]*$ && $old_filename != *..* ]] ||
+      die "the current repository database contains an unsafe package filename."
+    curl --fail --silent --show-error --location \
+      "$release_download/$base_tag/$old_filename" --output "$previous_dir/$old_filename" ||
+      die "could not download current package data for $old_name."
+    curl --fail --silent --show-error --location \
+      "$release_download/$base_tag/$old_filename.sig" --output "$previous_dir/$old_filename.sig" ||
+      die "could not download the current package signature for $old_name."
     [[ -s $previous_dir/$old_filename && -s $previous_dir/$old_filename.sig ]] ||
       die "the current release is missing package data for $old_name."
     GNUPGHOME=$public_home gpg --batch --verify "$previous_dir/$old_filename.sig" \
@@ -186,42 +209,15 @@ manifest_tag=${expected_manifest_sha256:0:12}
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 nonce=${work_dir##*.}
 release_tag="gooarchy-repo-${source_commit:0:12}-${timestamp}-${manifest_tag}-${nonce}"
-notes=$(printf 'Complete repository snapshot built from Gooarchy %s (tree %s).\nBuild manifest SHA-256: %s. Signer role: %s.' \
-  "$source_commit" "$source_tree" "$expected_manifest_sha256" "$signer_role")
-asset_paths=()
-for filename in "${release_asset_names[@]}"; do asset_paths+=("$asset_dir/$filename"); done
-gh release create "$release_tag" "${asset_paths[@]}" --repo "$release_repo" \
-  --target "$source_commit" --draft --latest=false \
-  --title "Gooarchy package repository $release_tag" --notes "$notes" ||
-  die "could not upload the complete unpublished release draft; the previous latest remains supported."
+upload_token_ref=${GOOARCHY_RELEASE_UPLOAD_TOKEN_REF:-}
+[[ -n $upload_token_ref ]] ||
+  die "set GOOARCHY_RELEASE_UPLOAD_TOKEN_REF to the approved repository-scoped vault token reference."
+command -v op >/dev/null 2>&1 || die "the approved vault CLI is unavailable for release upload."
 
-# The draft cannot become latest until every expected asset has been read back byte-for-byte.
-verify_dir="$work_dir/upload-readback"
-mkdir -m 700 "$verify_dir"
-gh release download "$release_tag" --repo "$release_repo" --dir "$verify_dir" ||
-  die "could not read back the complete release draft; the previous latest remains supported."
-expected_names=$(printf '%s\n' "${release_asset_names[@]}" | sort)
-shopt -s nullglob dotglob
-verify_paths=("$verify_dir"/*)
-shopt -u nullglob dotglob
-for path in "${verify_paths[@]}"; do
-  [[ -f $path && ! -L $path ]] || die "draft download contains a non-regular entry."
-done
-actual_names=$(printf '%s\n' "${verify_paths[@]##*/}" | sort)
-[[ $actual_names == "$expected_names" ]] ||
-  die "draft assets are incomplete or have changed names; the previous latest remains supported."
-for filename in "${release_asset_names[@]}"; do
-  cmp -s -- "$asset_dir/$filename" "$verify_dir/$filename" ||
-    die "draft asset bytes differ for $filename; the previous latest remains supported."
-done
-assert_latest_unchanged
-
-# This final GitHub operation is the only step that advances the public latest release.
-if ! gh release edit "$release_tag" --repo "$release_repo" --draft=false --latest; then
-  current_latest=$(read_latest_tag) || die "publish response was unclear and latest readback failed."
-  [[ $current_latest == "$release_tag" ]] || die "GitHub did not make the verified release latest."
-fi
-current_latest=$(read_latest_tag) || die "could not read back the published latest release."
-[[ $current_latest == "$release_tag" ]] || die "the verified release was published but is not latest."
-printf 'Published complete repository release %s as latest from Gooarchy %s.\n' "$release_tag" "$source_commit"
-printf 'Transfer manifest SHA-256: %s\n' "$expected_manifest_sha256"
+# The token travels only through stdin. The REST client creates a non-latest draft, uploads and
+# reads every expected byte back, then publishes and promotes it in the final API operation.
+op read "$upload_token_ref" | python3 "$script_dir/release-api.py" publish \
+  --manifest "$manifest_file" --signatures "$snapshot/SIGNATURES.json" --assets-dir "$asset_dir" \
+  --manifest-sha256 "$expected_manifest_sha256" --release-tag "$release_tag" \
+  --source-commit "$source_commit" --source-tree "$source_tree" --signer-role "$signer_role" ||
+  die "release upload did not complete its exact-content and latest-release checks."

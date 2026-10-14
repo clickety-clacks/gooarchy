@@ -83,6 +83,8 @@ class SignAndUploadTests(unittest.TestCase):
             "GOOARCHY_TEST_RELEASES": str(self.releases),
             "GOOARCHY_TEST_DRAFTS": str(self.drafts),
             "GOOARCHY_TEST_SECRET_KEY": str(self.secret_key),
+            "GOOARCHY_TEST_UPLOAD_TOKEN_REF": "op://test/vault/release/credential",
+            "GOOARCHY_RELEASE_UPLOAD_TOKEN_REF": "op://test/vault/release/credential",
             "PATH": f"{self.bin}:{os.environ['PATH']}",
         })
         self.install_test_commands()
@@ -109,55 +111,30 @@ with tarfile.open(sys.argv[2], 'r:*') as archive:
         op = self.bin / "op"
         op.write_text("""#!/usr/bin/env bash
 set -euo pipefail
-[[ ${1:-} == read && $# == 2 && ${2:-} == ${GOOARCHY_TEST_EXPECT_KEY_REF:-} ]] || exit 2
-cat "$GOOARCHY_TEST_SECRET_KEY"
+[[ ${1:-} == read && $# == 2 ]] || exit 2
+if [[ ${2:-} == ${GOOARCHY_TEST_EXPECT_KEY_REF:-} ]]; then
+  cat "$GOOARCHY_TEST_SECRET_KEY"
+elif [[ ${2:-} == ${GOOARCHY_TEST_UPLOAD_TOKEN_REF:-} ]]; then
+  printf 'synthetic-release-token\\n'
+else
+  exit 2
+fi
 """)
         op.chmod(0o755)
-        gh = self.bin / "gh"
-        gh.write_text("""#!/usr/bin/env python3
-import json, os, shutil, sys
+        curl = self.bin / "curl"
+        curl.write_text("""#!/usr/bin/env python3
+import pathlib, sys
 args = sys.argv[1:]
-state_path = os.environ['GOOARCHY_TEST_RELEASE_STATE']
-releases = os.environ['GOOARCHY_TEST_RELEASES']
-drafts = os.environ['GOOARCHY_TEST_DRAFTS']
 try:
-    state = json.load(open(state_path, encoding='utf-8'))
-except FileNotFoundError:
-    state = {'latest': ''}
-if args[:2] == ['release', 'list']:
-    print(json.dumps([{'tagName': state['latest'], 'isLatest': True}] if state['latest'] else []))
-elif args[:2] == ['release', 'create']:
-    tag = args[2]
-    assets = []
-    for value in args[3:]:
-        if value.startswith('--'): break
-        assets.append(value)
-    target = os.path.join(drafts, tag)
-    os.mkdir(target)
-    chosen = assets[:1] if os.environ.get('GOOARCHY_TEST_FAIL_UPLOAD') == '1' else assets
-    for source in chosen:
-        shutil.copyfile(source, os.path.join(target, os.path.basename(source)))
-    if os.environ.get('GOOARCHY_TEST_FAIL_UPLOAD') == '1': raise SystemExit(1)
-elif args[:2] == ['release', 'download']:
-    tag = args[2]
-    destination = args[args.index('--dir') + 1]
-    source = os.path.join(releases, tag)
-    if not os.path.isdir(source): source = os.path.join(drafts, tag)
-    if not os.path.isdir(source): raise SystemExit(1)
-    names = sorted(os.listdir(source))
-    if os.environ.get('GOOARCHY_TEST_OMIT_ASSET') == '1' and names: names = names[1:]
-    for name in names: shutil.copyfile(os.path.join(source, name), os.path.join(destination, name))
-elif args[:2] == ['release', 'edit']:
-    tag = args[2]
-    source = os.path.join(drafts, tag)
-    target = os.path.join(releases, tag)
-    shutil.move(source, target)
-    state['latest'] = tag
-    with open(state_path, 'w', encoding='utf-8') as stream: json.dump(state, stream)
-else:
+    output = pathlib.Path(args[args.index('--output') + 1])
+    output.write_bytes(b'')
+except (ValueError, IndexError):
     raise SystemExit(2)
+if not args or not args[-1].endswith('/releases/latest'):
+    raise SystemExit(2)
+sys.stdout.write('404')
 """)
-        gh.chmod(0o755)
+        curl.chmod(0o755)
 
     def create_key(self) -> None:
         run([
@@ -187,6 +164,51 @@ else:
         repository.mkdir(parents=True)
         for name in ("sign.sh", "upload.sh", "repository-protocol.py", "read-db.py"):
             shutil.copy2(ROOT / "packaging/repository" / name, repository / name)
+        (repository / "release-api.py").write_text("""#!/usr/bin/env python3
+import argparse, hashlib, json, os, shutil, sys
+parser = argparse.ArgumentParser()
+sub = parser.add_subparsers(dest='command', required=True)
+publish = sub.add_parser('publish')
+for name in ('manifest', 'signatures', 'assets-dir', 'manifest-sha256', 'release-tag', 'source-commit', 'source-tree', 'signer-role'):
+    publish.add_argument('--' + name, required=True)
+args = parser.parse_args()
+token = sys.stdin.buffer.read().decode('ascii').strip()
+if token != 'synthetic-release-token': raise SystemExit('mock vault token mismatch')
+manifest_path = args.manifest
+with open(manifest_path, encoding='utf-8') as stream: manifest = json.load(stream)
+digest = hashlib.sha256(open(manifest_path, 'rb').read()).hexdigest()
+if digest != args.manifest_sha256: raise SystemExit('manifest hash mismatch')
+if manifest['source_commit'] != args.source_commit or manifest['source_tree'] != args.source_tree:
+    raise SystemExit('source mismatch')
+state_path = os.environ['GOOARCHY_TEST_RELEASE_STATE']
+drafts = os.environ['GOOARCHY_TEST_DRAFTS']
+releases = os.environ['GOOARCHY_TEST_RELEASES']
+try:
+    with open(state_path, encoding='utf-8') as stream: state = json.load(stream)
+except FileNotFoundError:
+    state = {'latest': ''}
+base = (manifest.get('base') or {}).get('release_tag', '')
+if state['latest'] != base: raise SystemExit('base/latest mismatch')
+expected = {'gooarchy.db', 'gooarchy.db.sig'}
+for package in manifest['packages']:
+    expected.add(package['filename'])
+    expected.add(package['filename'] + '.sig')
+source_dir = args.assets_dir
+if set(os.listdir(source_dir)) != expected: raise SystemExit('asset set mismatch')
+target = os.path.join(drafts, args.release_tag)
+if os.path.exists(target): raise SystemExit('draft tag already exists')
+os.mkdir(target)
+names = sorted(expected)
+if os.environ.get('GOOARCHY_TEST_FAIL_UPLOAD') == '1': names = names[:1]
+if os.environ.get('GOOARCHY_TEST_OMIT_ASSET') == '1': names = names[:-1]
+for name in names: shutil.copyfile(os.path.join(source_dir, name), os.path.join(target, name))
+if set(os.listdir(target)) != expected: raise SystemExit('draft did not contain the complete release')
+published = os.path.join(releases, args.release_tag)
+shutil.move(target, published)
+state['latest'] = args.release_tag
+with open(state_path, 'w', encoding='utf-8') as stream: json.dump(state, stream)
+""")
+        (repository / "release-api.py").chmod(0o755)
         run(["git", "init", "-q", "-b", "main", str(self.checkout)])
         run(["git", "-C", str(self.checkout), "config", "user.name", "Transfer Test"])
         run(["git", "-C", str(self.checkout), "config", "user.email", "transfer-test@example.invalid"])
@@ -254,6 +276,7 @@ else:
             env["GOOARCHY_TEST_FAIL_UPLOAD"] = "1"
         if omit_asset:
             env["GOOARCHY_TEST_OMIT_ASSET"] = "1"
+        env["GOOARCHY_RELEASE_UPLOAD_TOKEN_REF"] = "op://test/vault/release/credential"
         return run([
             str(self.checkout / "packaging/repository/upload.sh"),
             "--uploader-role", "primary",
