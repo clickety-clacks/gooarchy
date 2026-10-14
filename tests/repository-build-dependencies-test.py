@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_RECIPE = REPO_ROOT / "packaging/repository/build-recipe.sh"
+KERNEL_BUILD = REPO_ROOT / "packaging/linux-gooarchy/build.sh"
 
 
 class BuildDependencyBoundaryTests(unittest.TestCase):
@@ -131,6 +132,70 @@ fi
         self.assertIn("dependency installation is disabled", result.stderr)
         self.assertFalse(self.pacman_log.exists())
         self.assertFalse(self.makepkg_log.exists())
+
+    def test_kernel_installer_keeps_syncdeps_but_repository_build_uses_checked_nodeps(self) -> None:
+        makepkg_calls = self.root / "kernel-makepkg-calls"
+        self._write_executable(
+            self.bin / "uname",
+            "#!/usr/bin/env bash\nprintf '%s\\n' x86_64\n",
+        )
+        self._write_executable(self.bin / "gpg", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_executable(
+            self.bin / "makepkg",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$KERNEL_MAKEPKG_CALLS"
+case ${1:-} in
+  --printsrcinfo)
+    printf '%s\\n' 'pkgbase = linux-gooarchy' 'makedepends = cargo' 'depends = gooarchy-runtime'
+    ;;
+  --packagelist)
+    printf '%s/linux-gooarchy.pkg.tar.zst\\n' "$PWD"
+    ;;
+esac
+""",
+        )
+        self.env["KERNEL_MAKEPKG_CALLS"] = str(makepkg_calls)
+
+        installer_build = self.root / "installer-kernel-build"
+        installer_env = self.env.copy()
+        installer_env["GOOARCHY_KERNEL_BUILD"] = str(installer_build)
+        installer_env.pop("GOOARCHY_REPOSITORY_BUILD", None)
+        installer_result = subprocess.run(
+            [str(KERNEL_BUILD)],
+            cwd=self.root,
+            env=installer_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
+        self.assertEqual(
+            makepkg_calls.read_text(encoding="utf-8").splitlines(),
+            ["--syncdeps --rmdeps --noconfirm --needed --cleanbuild --force", "--packagelist"],
+        )
+        makepkg_calls.unlink()
+
+        producer_build = self.root / "producer-kernel-build"
+        producer_env = self.env.copy()
+        producer_env["GOOARCHY_KERNEL_BUILD"] = str(producer_build)
+        producer_env["GOOARCHY_REPOSITORY_BUILD"] = "1"
+        producer_result = subprocess.run(
+            [str(KERNEL_BUILD)],
+            cwd=self.root,
+            env=producer_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(producer_result.returncode, 0, producer_result.stderr)
+        self.assertEqual(
+            makepkg_calls.read_text(encoding="utf-8").splitlines(),
+            ["--printsrcinfo", "--nodeps --noconfirm --needed --cleanbuild --force", "--packagelist"],
+        )
+        self.assertEqual(self._nul_args(self.pacman_log), ["-T", "cargo"])
 
 
 if __name__ == "__main__":

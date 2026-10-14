@@ -21,5 +21,12 @@ export GNUPGHOME=$dir/gnupg
 mkdir -m700 "$GNUPGHOME"
 gpg --quiet --import "$here"/keys/pgp/*.asc
 cd "$dir"
-"$here/../repository/build-recipe.sh" --noconfirm --needed --cleanbuild --force
+if [[ ${GOOARCHY_REPOSITORY_BUILD:-0} == 1 ]]; then
+  # The repository producer already performs a read-only build-tool preflight. Do not let this
+  # package install dependencies from a transfer that is still being built.
+  "$here/../repository/build-recipe.sh" --noconfirm --needed --cleanbuild --force
+else
+  # Installer opt-in builds retain makepkg's normal dependency installation behavior.
+  makepkg --syncdeps --rmdeps --noconfirm --needed --cleanbuild --force
+fi
 makepkg --packagelist
