@@ -35,9 +35,13 @@ To back out instead:
 
 ## 1. Packages
 
-Everything the installer added from packages hangs off two packages, `gooarchy` and
-`gooarchy-flavorings`. The Arch packages from `install/gooarchy-base.packages` and the repository's
-`scottland` and locally built `strata-bin` packages went in as their dependencies. Remove those two
+Everything the installer added from packages hangs off `gooarchy` and `gooarchy-flavorings`. The Arch
+packages from `install/gooarchy-base.packages`, the signed repository's `scottland` and
+`xdg-desktop-portal-wlr-gooarchy`, and locally built `strata-bin` went in as their dependencies.
+(`xdg-desktop-portal-wlr-gooarchy` is Gooarchy's screen-sharing backend from our fork; if it replaced
+Arch's `xdg-desktop-portal-wlr`,
+reinstall Arch's package after removing Gooarchy if you want it back:
+[xdg-desktop-portal-wlr.md](xdg-desktop-portal-wlr.md).) Remove those two
 packages from a console, not from inside Scottland:
 
 ```sh
@@ -55,6 +59,9 @@ Removing the packages also removes what they own: `/etc/profile.d/gooarchy-sessi
 tty1 session start), `/etc/profile.d/gooarchy-flavorings.sh`, `/etc/tmux.conf`,
 `/etc/xdg/scottland-mimeapps.list`, `/usr/lib/gooarchy/`, `/usr/share/gooarchy/` and the Gooarchy
 hooks and config fragments under `/usr/lib/scottland/`.
+The per-user `gooarchy` and `scottland` skill links under existing agent directories may remain;
+remove only links that still point to `/usr/share/gooarchy/agents/skills/gooarchy` or
+`/usr/share/scottland/agents/skills/scottland` if you no longer want them.
 If you edited `/etc/tmux.conf`, pacman keeps your edited copy as `/etc/tmux.conf.pacsave`.
 
 ## 2. The package repository and key

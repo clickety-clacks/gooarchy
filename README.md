@@ -9,14 +9,23 @@ screen's edges, and a window dropped on a side rail becomes a widget. Gooarchy i
 clean on plain Arch Linux. Nothing is borrowed to fill a gap: Gooarchy has no bar yet, so it has no
 bar. Everything missing is listed in [DEFICIT.md](DEFICIT.md), found by using the built system.
 
+The Gooarchy package installs the [Gooarchy agent skill](agents/skills/gooarchy/SKILL.md). The
+Scottland package supplies its separate `scottland` skill. Gooarchy links both for the installing
+user and at later logins; it does not install the Scottland Omarchy-adapter skill.
+
 ![Gooarchy in the VM test: a terminal in the center, Chromium scaled down in the periphery, Strata as a widget on the right rail](docs/screenshots/vm-desktop.webp)
 
 ## Current state: pre-alpha
 
-The install script is prepared to consume Gooarchy's signed package repository. Its address and key
-are still placeholders while hosting and key custody are undecided, so it stops before installing or
-upgrading packages until they are configured. There is no public package repository, installer ISO
-or update channel, and no hardware support beyond what Arch and Mesa give. It is for trying the
+The installer defaults to Gooarchy's signed package repository at `https://gooarchy.com/gooarchy.db`
+and trusts the committed public key with fingerprint
+`F56B5368815D6C607C41265A69FCC98C28CD08EC`. The endpoint and trust identity are configured.
+Package archives and the repository database are intended to ship together as assets in Gooarchy's
+GitHub Release. The repository workflow produces an unsigned transfer first; a separately
+credentialed signer adds detached signatures for every package and the database, and an independently
+qualified uploader publishes the complete signed set. No signed package Release asset has been
+published, so installation and upgrades cannot complete until one is available. There is no installer
+ISO or update channel, and no hardware support beyond what Arch and Mesa give. It is for trying the
 desktop and for building the distro, not for daily use.
 
 What you get:
@@ -42,6 +51,8 @@ Foot and failed with Ghostty. Ghostty stays the default. The Foot work and its c
 are kept on the `foot` branch, which is not merged.
 
 ## Trying it
+
+For behavior checks on an installed candidate, use the [end-to-end runbooks](docs/e2e/README.md). Each runbook can be run on its own; the [final distro pass](docs/e2e/final-release.md) collects all four and prompts Mike for the attended display-zones and Adapter B checks at release time.
 
 ### In a VM (recommended)
 
@@ -130,10 +141,13 @@ pacman stops ("wayfire=… required by scottland"), because the Scottland plugin
 Wayfire version. Once a matching Scottland package is published, `pacman -Syu` updates it with
 Wayfire. To deliberately build Scottland locally, set `GOOARCHY_SCOTTLAND_REF` when running
 `./install.sh`. Overrides accept final version tags (`vMAJOR.MINOR.PATCH`) or branches; the
-2026.11 test line uses the Scottland `0.3` branch and sets
-`GOOARCHY_SCOTTLAND_REF_KIND=branch`. Raw commit overrides and release-candidate tags are rejected.
-Main keeps the current fixed Scottland pin until v0.2.0 is final and keeps the current Flavorings
-pin until the first reviewed-main final tag is cut; main then uses only those final tags.
+2026.11 release line selects the Scottland `0.3` branch by name and resolves its exact head in
+runner evidence, then must use a final Scottland tag before the distro tag. Raw commit overrides and
+release-candidate tags are rejected.
+Main selects Scottland's final `v0.3.1` tag, which contains the portal configuration required for
+screen sharing and the safe concurrent agent-skill link hook. The empty Flavorings `_tag` remains
+fail-closed until its qualifying final tag and acceptance are available; no consumer pin is inferred
+from source eligibility alone.
 
 ### Gooarchy's defaults on stock Omarchy
 
@@ -152,15 +166,17 @@ without Gooarchy:
 
 | Path | What |
 |---|---|
-| `install.sh`, `install/` | The installer, in ordered steps like Omarchy's: `preflight/` (checks), `packaging/` (Arch packages, then Scottland, Strata and Gooarchy's own packages), `user/` (per-user defaults), `login/` (tty1 session, optional autologin), `post-install/` |
+| `install.sh`, `install/` | The installer, in ordered steps like Omarchy's: `preflight/` (checks), `packaging/` (Arch packages, the portal backend, Scottland, Strata and Gooarchy's own packages), `user/` (per-user defaults), `login/` (tty1 session, optional autologin), `post-install/` |
 | `install/gooarchy-base.packages` | The Arch packages Gooarchy is made of |
-| `install/sources.conf` | Scottland and Strata, pinned to the versions tested together |
+| `install/sources.conf` | Scottland's final `v0.3.1` tag on main; the 2026.11 test line selects the `0.3` branch |
+| `packaging/arch/xdg-desktop-portal-wlr/` | Gooarchy's screen-sharing backend, built from our own fork ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)) |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, keyboard-layout config fragment, and Gooarchy's Super+L lock binding |
 | `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
 | `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem, including [the session lock](docs/lock.md). The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
+| `tests/clamshell-test.py` | Clamshell mode on the lid in a headless Scottland session (needs a Scottland checkout with output control, as at the pinned v0.3.1; run on a test machine) |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
 Gooarchy's programs, hooks, themes and default configuration all come from packages. Outside

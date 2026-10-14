@@ -356,6 +356,34 @@ cmd_install() {
   log "install finished"
 }
 
+cmd_install_observation() {
+  running || die "the guest isn't running"
+  local phase=$1
+  [[ $phase == fresh-install || $phase == ordinary-rerun ]] || die "unknown install observation phase: $phase"
+  local out; out=$(artifacts)
+  local phase_out="/tmp/gooarchy-check/out/$phase"
+  mkdir -p "$out/install-observation-$phase"
+  log "checking Xwayland and linux-firmware after $phase"
+  local status=0
+  guest "timeout 240 python3 ~/gooarchy/tests/vm/guest-check.py '$phase_out' --install-observation '$phase'" \
+    >"$out/install-observation-$phase.log" 2>&1 || status=$?
+  guest "mkdir -p '$phase_out' && tar -C '$phase_out' -cf - ." |
+    tar -C "$out/install-observation-$phase" -xf - || true
+  hcheck "install-boundary Xwayland/firmware observation completes ($phase)" "$(( status == 0 ))" \
+    "exit $status; guest report: install-observation-$phase/results.json"
+  return "$status"
+}
+
+cmd_install_rerun() {
+  running || die "the guest isn't running"
+  local out; out=$(artifacts)
+  local status=0
+  log "running ordinary ./install.sh --yes after the fresh-install observation"
+  guest "cd ~/gooarchy && $(guest_proxy_env) ./install.sh --yes" >"$out/install-ordinary-rerun.log" 2>&1 || status=$?
+  hcheck "ordinary ./install.sh --yes rerun completes" "$(( status == 0 ))" "exit $status"
+  return "$status"
+}
+
 prepare_kernel_boot() {
   mkdir -p "$run/kernel"
   guest 'sudo cat /boot/vmlinuz-linux-gooarchy' >"$run/kernel/vmlinuz"
@@ -672,7 +700,9 @@ summary() {
   python3 - "$out" <<'EOF'
 import json, os, sys
 out, total, failed = sys.argv[1], 0, []
-for name in ("harness-checks.json", "results.json", "login-check.json"):
+for name in ("harness-checks.json", "results.json", "login-check.json",
+             "install-observation-fresh-install/results.json",
+             "install-observation-ordinary-rerun/results.json"):
     path = os.path.join(out, name)
     if not os.path.exists(path):
         failed.append(f"{name} missing")
@@ -721,6 +751,10 @@ case ${1:-all} in
     cmd_boot
     manifest
     cmd_install
+    cmd_reboot
+    cmd_install_observation fresh-install || true
+    cmd_install_rerun || true
+    cmd_install_observation ordinary-rerun || true
     cmd_rebuild_check
     cmd_reboot
     cmd_check || true

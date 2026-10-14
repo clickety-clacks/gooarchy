@@ -1,6 +1,7 @@
 # Prepare the signed Gooarchy repository before any package is installed or upgraded.
 source "$GOOARCHY_INSTALL/helpers/logging.sh"
 source "$GOOARCHY_INSTALL/helpers/repository.sh"
+source "$GOOARCHY_INSTALL/helpers/repository-url.sh"
 
 fail_repository() {
   echo "Gooarchy can't install here: $*" >&2
@@ -17,6 +18,10 @@ repository_url=${GOOARCHY_REPOSITORY_URL%/}
 case $repository_url in
   *\\*) fail_repository "the Gooarchy repository address must not contain backslashes." ;;
 esac
+repository_server=$(gooarchy_pacman_server "$repository_url") ||
+  fail_repository "the Gooarchy repository address must be a database URL or Pacman Server directory using https://, http:// or file://."
+repository_database_url=$(gooarchy_repository_database_url "$repository_url") ||
+  fail_repository "the Gooarchy repository address could not be resolved to a database URL."
 
 fingerprint_file=$GOOARCHY_PATH/packaging/keys/gooarchy.fingerprint
 key_file=$GOOARCHY_PATH/packaging/keys/gooarchy.asc
@@ -64,7 +69,7 @@ report "Trusted Gooarchy repository key $fingerprint. To undo: sudo pacman-key -
 config_tmp=$(mktemp)
 root_config_tmp=/etc/.pacman.conf.gooarchy.$$
 trap 'rm -f -- "$config_tmp"; sudo rm -f -- "$root_config_tmp"' EXIT
-awk -v url="$repository_url" '
+awk -v url="$repository_server" '
   $0 == "# Gooarchy installer repository" { marker_pending = 1; next }
   /^\[gooarchy\][[:space:]]*(#.*)?$/ { marker_pending = 0; in_repo = 1; next }
   /^\[[^]]+\][[:space:]]*(#.*)?$/ {
@@ -98,12 +103,12 @@ old_server=$(awk '
 if ! cmp -s "$config_tmp" "$pacman_conf"; then
   sudo install -o root -g root -m 0644 "$config_tmp" "$root_config_tmp"
   sudo mv -f -- "$root_config_tmp" "$pacman_conf"
-  report "Added [gooarchy] at $repository_url with package signatures required. To undo: remove the [gooarchy] section from /etc/pacman.conf."
-  if [[ -n $old_server && $old_server != "$repository_url" ]]; then
-    report "Updated the installer-managed [gooarchy] Server from $old_server to $repository_url."
+  report "Added [gooarchy] at $repository_server for database $repository_database_url with package signatures required. To undo: remove the [gooarchy] section from /etc/pacman.conf."
+  if [[ -n $old_server && $old_server != "$repository_server" ]]; then
+    report "Updated the installer-managed [gooarchy] Server from $old_server to $repository_server."
   fi
 else
-  report "[gooarchy] already points at $repository_url with package signatures required."
+  report "[gooarchy] already points at $repository_server for database $repository_database_url with package signatures required."
 fi
 rm -f -- "$config_tmp"
 config_tmp=
@@ -117,15 +122,15 @@ SigLevel = Required TrustedOnly
 
 [gooarchy]
 SigLevel = PackageRequired DatabaseOptional
-Server = $repository_url
+Server = $repository_server
 EOF
 trap 'rm -f -- "$refresh_conf"' EXIT
 if ! sudo pacman --config "$refresh_conf" -Syy --noconfirm; then
-  fail_repository "the Gooarchy repository at $repository_url could not be reached during pacman database refresh; no package was installed or built."
+  fail_repository "the Gooarchy repository database at $repository_database_url could not be reached during pacman refresh; no package was installed or built."
 fi
 if ! sudo pacman -Syy --noconfirm; then
   if ! sudo pacman --config "$refresh_conf" -Syy --noconfirm; then
-    fail_repository "the Gooarchy repository at $repository_url could not be reached during pacman database refresh; no package was installed or built."
+    fail_repository "the Gooarchy repository database at $repository_database_url could not be reached during pacman refresh; no package was installed or built."
   fi
   rm -f -- "$refresh_conf"
   trap - EXIT
@@ -134,7 +139,7 @@ fi
 rm -f -- "$refresh_conf"
 trap - EXIT
 
-for package in gooarchy gooarchy-flavorings scottland; do
+for package in gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-gooarchy; do
   sync_package_field "$package" Version >/dev/null ||
     fail_repository "the Gooarchy repository at $repository_url did not provide $package after refresh; no package was installed or built."
 done
@@ -210,8 +215,8 @@ fi
 scottland_target=
 if ((local_scottland == 0)); then scottland_target=gooarchy/scottland; fi
 
-# Save the pre-upgrade Gooarchy package state. pacman -Syu runs before the final source selection
-# and can itself replace a local package with a newer repository copy.
+# Save the pre-upgrade package state. The later base step runs pacman -Syu and can replace local
+# packages or upgrade signed repository copies before the individual consumer steps report them.
 previous_gooarchy_installed=0
 previous_gooarchy_repository_copy=0
 previous_gooarchy_version=
@@ -233,6 +238,20 @@ if package_is_installed gooarchy-flavorings; then
   previous_flavorings_installed=1
   previous_flavorings_version=$(installed_package_version gooarchy-flavorings)
   package_is_repository_copy gooarchy-flavorings && previous_flavorings_repository_copy=1
+fi
+previous_portal_installed=0
+previous_portal_repository_copy=0
+previous_portal_version=
+previous_arch_portal_installed=0
+previous_arch_portal_version=
+if package_is_installed xdg-desktop-portal-wlr-gooarchy; then
+  previous_portal_installed=1
+  previous_portal_version=$(installed_package_version xdg-desktop-portal-wlr-gooarchy)
+  package_is_repository_copy xdg-desktop-portal-wlr-gooarchy && previous_portal_repository_copy=1
+fi
+if package_is_installed xdg-desktop-portal-wlr; then
+  previous_arch_portal_installed=1
+  previous_arch_portal_version=$(installed_package_version xdg-desktop-portal-wlr)
 fi
 
 plan_tmp=$GOOARCHY_STATE/repository-plan.sh.$$
@@ -257,6 +276,11 @@ plan_tmp=$GOOARCHY_STATE/repository-plan.sh.$$
   printf 'GOOARCHY_PREVIOUS_FLAVORINGS_INSTALLED=%q\n' "$previous_flavorings_installed"
   printf 'GOOARCHY_PREVIOUS_FLAVORINGS_REPOSITORY_COPY=%q\n' "$previous_flavorings_repository_copy"
   printf 'GOOARCHY_PREVIOUS_FLAVORINGS_VERSION=%q\n' "$previous_flavorings_version"
+  printf 'GOOARCHY_PREVIOUS_PORTAL_INSTALLED=%q\n' "$previous_portal_installed"
+  printf 'GOOARCHY_PREVIOUS_PORTAL_REPOSITORY_COPY=%q\n' "$previous_portal_repository_copy"
+  printf 'GOOARCHY_PREVIOUS_PORTAL_VERSION=%q\n' "$previous_portal_version"
+  printf 'GOOARCHY_PREVIOUS_ARCH_PORTAL_INSTALLED=%q\n' "$previous_arch_portal_installed"
+  printf 'GOOARCHY_PREVIOUS_ARCH_PORTAL_VERSION=%q\n' "$previous_arch_portal_version"
   printf 'GOOARCHY_PREVIOUS_GOOARCHY_SOURCE_COMMIT=%q\n' "$previous_gooarchy_source_commit"
 } >"$plan_tmp"
 mv -f -- "$plan_tmp" "$GOOARCHY_STATE/repository-plan.sh"

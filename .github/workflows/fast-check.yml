@@ -34,3 +34,4 @@ jobs:
           python3 tests/vm/selftest.py
           bash tests/vm/process-guard-test.sh
           tests/flavorings-pkgbuild-source-test.sh
+          bash tests/scottland-portal-provider-test.sh
