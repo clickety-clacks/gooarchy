@@ -1,10 +1,13 @@
 # Building and publishing the Gooarchy package repository
 
-The package repository uses separate builder, signer, and uploader operations. The package builder
-creates x86_64 Arch package archives and an **unsigned** repository database. A signer validates that
-immutable transfer and creates detached signatures for every package and the database. A separately
-qualified primary uploader verifies the signed transfer and uploads the complete GitHub Release
-through GitHub's Releases REST API. Never run the retired `publish.sh` command on a package builder.
+The package repository uses separate builder, signer, and uploader operations. On x86_64 Arch, the
+package builder creates package archives, an **unsigned** repository database, and an immutable
+manifest-bound transfer. Its responsibility ends with that unsigned transfer: it does not read
+signing credentials, create signatures, or upload files. A separately credentialed signer verifies
+the transfer and creates a detached signature for every package and the database. An independently
+qualified uploader verifies the complete signed transfer and uploads the full GitHub Release through
+GitHub's Releases REST API. Signing authority does not grant upload authority. Never run the retired
+`publish.sh` command on a package builder.
 
 The installer defaults to the full database URL `https://gooarchy.com/gooarchy.db`; an explicit
 `GOOARCHY_REPOSITORY_URL` may select another full database URL ending in `/gooarchy.db` or an
@@ -118,6 +121,10 @@ role-specific commands. Do not restore the single-machine build/sign/upload flow
 `tests/repository-config-source-test.sh` checks the default URL, explicit mirror override,
 committed public-key fingerprint, and fail-closed empty Flavorings `_tag` without host or credential
 access.
+`tests/repository-transfer-test.py` also checks that primary and backup signature receipts bind the
+same manifest hash, public fingerprint, and complete package-plus-database payload set, and that a
+backup uploader role is rejected before vault or release-client access. Its synthetic signature
+files exercise structural binding only; they are not cryptographic signatures.
 `tests/repository-publish-test.sh` exercises the transfer, primary and backup signing, role separation,
 and upload behavior with synthetic package/database records, a throwaway OpenPGP key, and a local
 Releases-shaped fixture. `tests/repository-release-api-test.py` exercises the production release
