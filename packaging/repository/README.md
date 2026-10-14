@@ -1,53 +1,69 @@
-# Publishing the Gooarchy pacman repository
+# Building and publishing the Gooarchy package repository
 
-Run `packaging/repository/publish.sh --all` for the first repository snapshot.
-Later, pass package names to rebuild, or use `--all` to rebuild every recipe
-discovered under `packaging/arch/`, `packaging/gooarchy-flavorings/`, and
-`packaging/linux-gooarchy/`. Adding a recipe there makes its package available
-to this command without changing the client address or signing key.
+The package repository uses two separate roles. The package builder creates x86_64 Arch package
+archives and an **unsigned** repository database. The authorized signer validates that transfer,
+creates detached signatures for every package and the database, and uploads the complete GitHub
+Release. Never run the retired `publish.sh` command on a package builder.
 
-The command requires a clean `main` checkout on an x86_64 Arch build machine.
-It builds in a private temporary directory, sets the package identity to
-`Gooarchy`, signs packages with the committed repository key, and uses the
-configured Arch `wayfire` version when building Scottland. Kernel publication
-also requires 35 GiB free in the temporary build location.
+## Produce the transfer
 
-On `main`, publication uses the unchanged fixed Scottland pin during the tag transition, then a
-final version tag once the approved release is available. The publisher reports the selected tag
-and resolved source revision, rejects release-candidate tags and branch pins, and refuses local
-Scottland ref overrides. The local installer accepts only final tag and branch overrides; its
-current default SHA remains fixed until the Scottland final tag is ready.
+From a clean Gooarchy `main` checkout on x86_64 Arch, the package builder runs:
 
-The private key reference is supplied by machine configuration through
-`GOOARCHY_SIGNING_KEY_REF` as a 1Password `op://` reference. The `op` CLI reads
-the key into a temporary GnuPG home for that publish. GitHub authorization is
-provided by the operator's existing `gh` setup. The public key and default
-repository address remain unavailable until their approved setup is complete;
-the install path fails clearly while either value is still a placeholder.
+```sh
+packaging/repository/produce.sh --output /path/to/new-transfer --all
+```
 
-Each publish downloads the current release database and its listed package
-files, builds requested packages, and compares versions with `vercmp`. A
-package that is not newer is refused and left at its currently published
-version. The updated database and all package files and signatures it lists,
-including files listed by the previous database, are uploaded to a draft
-release. The command verifies the uploaded asset names and publishes the draft
-as latest only after those checks pass. If GitHub changes any asset name, the
-draft stays unpublished and the prior latest release remains active.
+Pass package names instead of `--all` to rebuild a selected set. The command builds unsigned
+packages, verifies the current public latest release and its detached signatures when one exists,
+retains packages that were not rebuilt, and creates the next unsigned `gooarchy.db`. It reads only
+the configured public key and fingerprint. It does not read signing credentials, make signatures,
+or upload files.
 
-`tests/repository-publish-test.sh` exercises this flow with a local
-Releases-shaped stand-in, synthetic Arch packages, and a throwaway OpenPGP key.
-It checks the initial six-package database, adding a seventh recipe, signing,
-Scottland's exact Wayfire dependency, exact final flavorings `_tag`
-source reporting, refusal of missing/ambiguous/invalid flavorings pins, version
-refusal, package and signature retention, lookup through a local redirect, and
-the filename guard. The real
-1Password read, GitHub upload, and gooarchy.com redirect are separate setup and
-publish steps.
+The output directory is a complete immutable transfer with this layout:
 
-After stage 1 lands and stage 2 is rebased onto that exact main commit, wait
-for an adapter-approved window for the integrated SHA, then run
-`tests/repository-publish-test.sh --with-stage1-installer` to pass that signed
-release stand-in through the full stage 1 `install.sh` flow with the guest's
-real pacman client. The mode uses local Scottland and Strata source fixtures
-and a reduced package list so it exercises repository consumption without
-building the desktop payload.
+```text
+manifest.json
+SHA256SUMS
+payload/
+  gooarchy.db
+  <every package archive listed by gooarchy.db>
+```
+
+The command prints the SHA-256 of `manifest.json` separately. Carry that value with the transfer
+and verify it through the chosen transfer channel. The manifest binds the clean source commit and
+tree, signing fingerprint, exact base release and asset hashes, package names/versions/source
+revisions, and the unsigned database. `SHA256SUMS` and the signer independently verify every
+payload byte and database record before signing.
+
+## Sign and publish
+
+Only the authorized signing machine runs this step, from a clean `main` checkout whose commit and
+tree exactly match the transfer manifest:
+
+```sh
+GOOARCHY_SIGNING_KEY_REF='op://<approved-vault>/<approved-item>/<field>' \
+  packaging/repository/sign-publish.sh \
+  --bundle /path/to/new-transfer \
+  --manifest-sha256 <64-hex-manifest-sha256>
+```
+
+The signer imports the key directly from 1Password into a private temporary GnuPG home; it never
+prints the key or token. It verifies the configured public fingerprint, transfer hashes, exact
+source identity, and unchanged current latest release. It creates detached `.sig` files for each
+package and `gooarchy.db`, creates a GitHub Release draft with the complete package set, downloads
+the draft to compare every asset name and byte, rechecks the prior latest release, then makes one
+final operation to publish the verified release as latest. A failed check leaves the prior latest
+release in place; an incomplete draft is not made latest.
+
+The old `publish.sh` entry point now exits with a clear message directing operators to the two
+role-specific commands. Do not restore the single-machine build/sign/upload flow.
+
+## Checks and remaining acceptance
+
+`tests/repository-publish-test.sh` exercises the transfer contract and signer publication boundary
+with synthetic package/database records, a throwaway OpenPGP key, and a local Releases-shaped
+service. It covers complete initial contents, manifest and payload hashes, source/database identity,
+retained package bytes, version advancement, detached signatures, and refusal to advance latest after
+an incomplete upload or failed readback. It does not exercise a real Arch build, 1Password, GitHub,
+the production signing key, installer, or redirect. Those checks require their separately admitted
+release route and must be reported against the exact source tree and transfer.

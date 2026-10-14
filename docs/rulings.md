@@ -52,10 +52,13 @@ service and DNS configuration remain a separate setup step.
 On 2026-10-06, Mike ruled `dr_0e3dd8f9` as B2 with 1Password under his
 delegation. His words were: “yes do it this way. rule for me”.
 
-1Password holds the private signing key. One build machine fetches it when it
-publishes, without an interactive signing step, and the same key can be
-recovered onto a replacement machine. No additional custody mechanism is part
-of this ruling.
+1Password holds the private signing key. The initial single-machine workflow
+was superseded on 2026-10-14 (`wi_cc6ec1e9`): the package builder produces only
+unsigned packages and an unsigned repository database. A separate authorized
+signer reads the key from 1Password, creates detached signatures for every
+package and the database, then uploads the complete GitHub Release. The
+release becomes latest only after its complete asset set is read back and
+verified. The builder has no signing or release-upload credential.
 
 ## The kernel opt-in leaves the bootloader alone
 
