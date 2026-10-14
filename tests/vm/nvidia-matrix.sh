@@ -475,6 +475,7 @@ cleanup() {
   if [[ -f $test_root/r11-mixed-images.tsv ]]; then
     if restore_kernel_images r11-mixed; then
       rm -f "$test_root/r11-mixed-images.tsv"
+      sudo rm -f "$test_root"/r11-mixed-image-*.img || status=1
     else
       status=1
     fi
@@ -1674,6 +1675,7 @@ restore_mixed_preset_fixture() {
   fi
   if ((status == 0)); then
     rm -f "$test_root/r11-mixed-images.tsv"
+    sudo rm -f "$test_root"/r11-mixed-image-*.img || status=1
     sudo rm -f "$r11_config"
   fi
   return "$status"
