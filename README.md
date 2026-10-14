@@ -143,9 +143,10 @@ Wayfire. To deliberately build Scottland locally, set `GOOARCHY_SCOTTLAND_REF` w
 2026.11 release line selects the Scottland `0.3` branch by name and resolves its exact head in
 runner evidence, then must use a final Scottland tag before the distro tag. Raw commit overrides and
 release-candidate tags are rejected.
-Main selects Scottland's final `v0.3.0` tag, which contains the portal configuration required for
-screen sharing. The empty Flavorings `_tag` remains fail-closed until its qualifying final tag and
-acceptance are available; no consumer pin is inferred from source eligibility alone.
+Main selects Scottland's final `v0.3.1` tag, which contains the portal configuration required for
+screen sharing and the safe concurrent agent-skill link hook. The empty Flavorings `_tag` remains
+fail-closed until its qualifying final tag and acceptance are available; no consumer pin is inferred
+from source eligibility alone.
 
 ### Gooarchy's defaults on stock Omarchy
 
@@ -166,7 +167,7 @@ without Gooarchy:
 |---|---|
 | `install.sh`, `install/` | The installer, in ordered steps like Omarchy's: `preflight/` (checks), `packaging/` (Arch packages, the portal backend, Scottland, Strata and Gooarchy's own packages), `user/` (per-user defaults), `login/` (tty1 session, optional autologin), `post-install/` |
 | `install/gooarchy-base.packages` | The Arch packages Gooarchy is made of |
-| `install/sources.conf` | Scottland's final `v0.3.0` tag on main; the 2026.11 test line selects the `0.3` branch |
+| `install/sources.conf` | Scottland's final `v0.3.1` tag on main; the 2026.11 test line selects the `0.3` branch |
 | `packaging/arch/xdg-desktop-portal-wlr/` | Gooarchy's screen-sharing backend, built from our own fork ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)) |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
@@ -174,7 +175,7 @@ without Gooarchy:
 | `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
 | `system-tools/` | Gooarchy's system tools in Rust: one Cargo workspace with the `gooarchy` command (`gooarchy <tool> ...` runs `gooarchy-<tool>`; alone, it lists the tools), the library the tools share (`common/`), and one binary per subsystem as they are written. The `gooarchy` package builds, tests and installs them; the toolchain is needed to build, not to install or run ([docs/rulings.md](docs/rulings.md)). Parts derived from Omarchy carry its MIT notice (`LICENSE-omarchy`) |
 | `tests/vm/` | The VM test (`run.sh`), its in-guest checks, and a self-test of its own machinery (`selftest.py`) |
-| `tests/clamshell-test.py` | Clamshell mode on the lid in a headless Scottland session (needs a Scottland checkout with output control, as at the pinned v0.3.0; run on a test machine) |
+| `tests/clamshell-test.py` | Clamshell mode on the lid in a headless Scottland session (needs a Scottland checkout with output control, as at the pinned v0.3.1; run on a test machine) |
 | `tools/privacy-check.py` | Looks for developer-network details in the whole history (or `--tree`), with a deny list kept outside the repository |
 
 Gooarchy's programs, hooks, themes and default configuration all come from packages. Outside
