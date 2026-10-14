@@ -1728,7 +1728,7 @@ test_mixed_preset_selected_entry_regeneration() {
       fixture_refuse 'R11 mixed-preset fixture' "$synthetic_image already exists; left it untouched"
       return 75
     fi
-    if ! awk -v first="${active_entries[0]}" -v second="$synthetic_entry" '
+    awk -v first="${active_entries[0]}" -v second="$synthetic_entry" '
       BEGIN { replaced=0 }
       /^[[:space:]]*PRESETS[[:space:]]*=[[:space:]]*\([^)]*\)[[:space:]]*$/ && !replaced {
         printf "PRESETS=(%s %s)\n", first, second
