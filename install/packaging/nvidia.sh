@@ -620,6 +620,43 @@ nvidia_user_config_source_files() {
   ((${#NV_USER_CONFIG_SOURCE_FILES[@]} > 0))
 }
 
+nvidia_literal_config_module_set() {
+  # A failed throwaway build must not hide a static user partial effect already present in a
+  # listable image. Parse only literal MODULES arrays here; never evaluate user shell.
+  local preset=$1 entry=$2 file line append value token
+  local -a tokens=()
+  NV_CONFIG_PROBE_MODULE_SET=()
+  nvidia_user_config_source_files "$preset" "$entry" || return 2
+  for file in "${NV_USER_CONFIG_SOURCE_FILES[@]}"; do
+    while IFS= read -r line || [[ -n $line ]]; do
+      line=${line%%#*}
+      [[ -n ${line//[[:space:]]/} ]] || continue
+      [[ $line =~ ^[[:space:]]*(source|\.)[[:space:]]+ ]] && return 2
+      if [[ $line =~ ^[[:space:]]*MODULES[[:space:]]*(\+)?[[:space:]]*=[[:space:]]*\(([^()]*)\)[[:space:]]*$ ]]; then
+        append=${BASH_REMATCH[1]:-}
+        value=${BASH_REMATCH[2]}
+        [[ $value != *'$'* && $value != *'`'* && $value != *';'* ]] || return 2
+        value=${value//\"/}
+        value=${value//\'/}
+        [[ -n $append ]] || NV_CONFIG_PROBE_MODULE_SET=()
+        read -r -a tokens <<<"$value"
+        for token in "${tokens[@]}"; do
+          token=${token%\?}
+          [[ $token =~ ^[[:alnum:]_-]+$ ]] || return 2
+          case $token in
+            nvidia | nvidia_modeset | nvidia_uvm | nvidia_drm)
+              NV_CONFIG_PROBE_MODULE_SET[$token]=1
+              ;;
+          esac
+        done
+      elif [[ $line =~ (^|[[:space:]])MODULES([[:space:]]|\+?=) ]]; then
+        return 2
+      fi
+    done <"$file"
+  done
+  ((${#NV_CONFIG_PROBE_MODULE_SET[@]} > 0))
+}
+
 nvidia_missing_nvidia_module_from_error_line() {
   local line=$1 module
   [[ $line == *"ERROR: module not found: '"* ]] || return 1
@@ -1177,7 +1214,15 @@ nvidia_kernel_user_partial_state() {
           probe_state=1
         else
           probe_state=2
-          NV_USER_PARTIAL_UNKNOWN=1
+          if nvidia_literal_config_module_set "$preset" "$entry"; then
+            for module in "${!NV_CONFIG_PROBE_MODULE_SET[@]}"; do
+              if [[ ${image_modules[$module]:-} ]]; then
+                probe_state=1
+                break
+              fi
+            done
+          fi
+          ((probe_state == 1)) || NV_USER_PARTIAL_UNKNOWN=1
         fi
         probe_states[$entry]=$probe_state
       fi

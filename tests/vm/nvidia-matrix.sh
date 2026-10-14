@@ -2900,7 +2900,8 @@ test_pacman_hook_failure_with_partial_kernel() {
     pressure_target=$(awk -F '\t' -v fs="$hook_filesystem" '$1 == fs { print $5; exit }' \
       "$test_root/r15-bounded-pressure.tsv")
     if [[ $hook_available =~ ^[0-9]+$ && $pressure_target =~ ^[0-9]+$ ]] &&
-       ((hook_available <= pressure_target)) && ((hook_after_write_ok == 1)) && bounded_pressure_files_present; then
+       ((hook_available >= pressure_target - 16384 && hook_available <= pressure_target + 16384)) &&
+       ((hook_after_write_ok == 1)) && bounded_pressure_files_present; then
       pressure_hook_ok=1
     fi
   fi
