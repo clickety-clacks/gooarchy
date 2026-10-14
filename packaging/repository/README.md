@@ -1,10 +1,13 @@
 # Building and publishing the Gooarchy package repository
 
-The package repository uses separate builder, signer, and uploader operations. The package builder
-creates x86_64 Arch package archives and an **unsigned** repository database. A signer validates that
-immutable transfer and creates detached signatures for every package and the database. A separately
-qualified primary uploader verifies the signed transfer and uploads the complete GitHub Release
-through GitHub's Releases REST API. Never run the retired `publish.sh` command on a package builder.
+The package repository uses separate builder, signer, and uploader operations. On x86_64 Arch, the
+package builder creates package archives, an **unsigned** repository database, and an immutable
+manifest-bound transfer. Its responsibility ends with that unsigned transfer: it does not read
+signing credentials, create signatures, or upload files. A separately credentialed signer verifies
+the transfer and creates a detached signature for every package and the database. An independently
+qualified uploader verifies the complete signed transfer and uploads the full GitHub Release through
+GitHub's Releases REST API. Signing authority does not grant upload authority. Never run the retired
+`publish.sh` command on a package builder.
 
 The installer defaults to the full database URL `https://gooarchy.com/gooarchy.db`; an explicit
 `GOOARCHY_REPOSITORY_URL` may select another full database URL ending in `/gooarchy.db` or an

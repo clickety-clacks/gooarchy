@@ -15,6 +15,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL_PATH = ROOT / "packaging/repository/repository-protocol.py"
@@ -160,6 +161,41 @@ class RepositoryTransferTests(unittest.TestCase):
         self.assertEqual(observed["source_tree"], TREE)
         self.assertEqual(len(observed["packages"]), 6)
         self.assertEqual({item["name"] for item in observed["packages"]}, protocol.REQUIRED_INITIAL)
+
+    def test_builder_transfer_stops_before_signature_artifacts(self) -> None:
+        versions = {name: "1.0.0-1" for name in NAMES}
+        bundle, manifest_hash, manifest = make_bundle(self.root, versions)
+        expected_payload = {"gooarchy.db", *(record["filename"] for record in manifest["packages"])}
+        self.assertEqual(
+            {path.name for path in bundle.iterdir()},
+            {"manifest.json", "SHA256SUMS", "payload"},
+        )
+        self.assertEqual({path.name for path in (bundle / "payload").iterdir()}, expected_payload)
+        self.assertFalse(any(path.name.endswith(".sig") for path in (bundle / "payload").iterdir()))
+
+        # This check targets transfer-envelope custody; package metadata parsing has its own test.
+        metadata = {
+            record["filename"]: {
+                "name": record["name"],
+                "version": record["version"],
+                "arch": "any",
+                "packager": "Gooarchy",
+            }
+            for record in manifest["packages"]
+        }
+        with patch.object(protocol, "package_info", side_effect=lambda path: metadata[path.name]):
+            self.verify(bundle, manifest_hash)
+
+            signature = bundle / "payload" / "gooarchy.db.sig"
+            signature.write_bytes(b"synthetic signature artifact")
+            with self.assertRaisesRegex(ValueError, "payload files do not exactly match"):
+                self.verify(bundle, manifest_hash)
+
+            signature.unlink()
+            (bundle / "signatures").mkdir()
+            (bundle / "SIGNATURES.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "root has unexpected entries"):
+                self.verify(bundle, manifest_hash)
 
     def test_pkginfo_version_uses_full_arch_pkgver_field(self) -> None:
         path = self.root / package_filename("gooarchy", "2:1.2.3-4")

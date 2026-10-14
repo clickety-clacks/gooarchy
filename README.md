@@ -16,14 +16,13 @@ bar. Everything missing is listed in [DEFICIT.md](DEFICIT.md), found by using th
 The installer defaults to Gooarchy's signed package repository at `https://gooarchy.com/gooarchy.db`
 and trusts the committed public key with fingerprint
 `F56B5368815D6C607C41265A69FCC98C28CD08EC`. The endpoint and trust identity are configured.
-Package files are intended to be published as assets in GitHub Releases for `clickety-clacks/gooarchy`,
-with `gooarchy.com` redirecting each repository request to the matching asset. Plumbus builds the
-packages and repository database; Racter is the primary signer and uploader, with Plumbus as the
-backup signer if Racter is unavailable. Signing-key custody is in 1Password. No signed package
-Release asset has been published, so installation and upgrades cannot complete until a complete
-signed Release is available. There is no installer ISO or update channel, and no hardware support
-beyond what Arch and Mesa give. It is for trying the desktop and for building the distro, not for
-daily use.
+Package archives and the repository database are intended to ship together as assets in Gooarchy's
+GitHub Release. The repository workflow produces an unsigned transfer first; a separately
+credentialed signer adds detached signatures for every package and the database, and an independently
+qualified uploader publishes the complete signed set. No signed package Release asset has been
+published, so installation and upgrades cannot complete until one is available. There is no installer
+ISO or update channel, and no hardware support beyond what Arch and Mesa give. It is for trying the
+desktop and for building the distro, not for daily use.
 
 What you get:
 
