@@ -1,0 +1,13 @@
+[package]
+name = "secure-execution"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/mahkoh/secure-execution"
+license = "MIT OR Apache-2.0"
+description = "Determine if your code requires secure execution"
+keywords = ["no_std", "ffi", "security"]
+categories = ["no-std", "os"]
+readme = "../README.md"
+
+[dependencies]
+cfg-if = "1.0.0"

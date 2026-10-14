@@ -1,0 +1,9 @@
+[package]
+name = "debug-fn"
+version = "1.0.0"
+edition = "2021"
+repository = "https://github.com/mahkoh/debug-fn"
+license = "MIT OR Apache-2.0"
+description = "A function adapter that implements Display and Debug"
+keywords = ["logging", "no_std", "string"]
+categories = ["rust-patterns", "no-std", ]

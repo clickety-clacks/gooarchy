@@ -35,3 +35,4 @@ jobs:
           bash tests/scottland-source-plan-test.sh
           bash tests/vm/process-guard-test.sh
           tests/flavorings-pkgbuild-source-test.sh
+          bash tests/scottland-portal-provider-test.sh

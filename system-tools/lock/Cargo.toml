@@ -1,0 +1,14 @@
+[package]
+name = "gooarchy-lock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+font8x8 = { version = "=0.3.1", default-features = false, features = ["unicode"] }
+kbvm = { version = "=0.1.7", features = ["compose"] }
+libc = "=0.2.177"
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+zeroize = "=1.8.2"
