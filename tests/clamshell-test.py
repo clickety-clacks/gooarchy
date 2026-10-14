@@ -2,23 +2,23 @@
 """Test Gooarchy's clamshell mode (gooarchy-clamshell on the lid switch) in a headless Scottland.
 
 Needs a Scottland checkout with its plugin and test helpers built (make test-hooks), whose
-Scottland has output control (scottland-output, from v0.3.0, the pinned tag); run it on a test machine, never on a desktop in
-use. Everything it creates is under this checkout's build/clamshell-test/, removed at the start
-of the next run; the session is stopped at the end.
+Scottland has output control (scottland-output, from v0.3.0, the pinned tag); run it on a test
+machine, never on a desktop in use. Everything it creates is under this checkout's
+build/clamshell-test/, removed at the start of the next run; the session is stopped at the end.
 
   tests/clamshell-test.py /path/to/scottland      exits 1 if anything fails
 
 The session runs Scottland's shipped config plus Gooarchy's lid fragment (35-gooarchy-lid) and
 no other integration. Setup the test supplies, none of it Gooarchy's code: a laptop with a dock
-(the first virtual output is named eDP-1 and outputs added later DP-1, by
-tests/output-names.c, a copy of Scottland's; docking adds and removes DP-1 through Wayfire's headless-output IPC), the lid
+(the first virtual output is named eDP-1 and outputs added later DP-1, by tests/output-names.c,
+a copy of Scottland's; docking adds and removes DP-1 through Wayfire's headless-output IPC), the lid
 (Scottland's test-only virtual switch takes Wayfire's own switch path, only libinput bypassed, and
 /proc/acpi/button/lid/LID0/state is a file in the compositor's mount namespace the test writes
 with each event), the connected connectors (GOOARCHY_DRM_PATH), and the panel's configured scale
-and position (an overrides.ini in the session's own config), and a failing output change (Scottland's
-scottland-output, wrapped to refuse turning an output on while the test holds a fault file, as when
-Wayfire does not apply a change). gooarchy-clamshell is wrapped to record when it finished and its
-exit status; the script itself runs unchanged.
+and position (an overrides.ini in the session's own config), and a failing output change
+(Scottland's scottland-output, wrapped to refuse turning an output on while the test holds a
+fault file, as when Wayfire does not apply a change). gooarchy-clamshell is wrapped to record
+when it finished and its exit status; the script itself runs unchanged.
 
 Oracles: Wayfire's own output list (which outputs are on, and their layout geometry, where the
 scale shows as logical size) and a screencopy of the panel (grim -o) for whether it renders.
