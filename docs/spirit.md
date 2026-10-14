@@ -8,9 +8,8 @@ say what the desktop itself is for, and this document doesn't repeat them.
 
 ## The problem
 
-Desktops manage windows. Mike wants one that manages attention. Scottland and Gooarchy are, in his
-words, "really what scottland and goomarchy are all about, attention, from the visual center to the
-periphery, to items not even on the desktop trying to get invited onto it."
+Desktops manage windows. Gooarchy and Scottland extend that model to attention, from the visual
+center to the periphery and to items outside the desktop that ask to be invited onto it.
 
 He describes it as attention regimes. The center of the screen holds what is foremost in your mind.
 The periphery and widgets hold what matters less right now. Everything not on the desktop is in "the
@@ -18,8 +17,8 @@ ether": a website you closed is still out there, and anything in the ether can a
 attention and be promoted to a higher regime. The desktop is a small window you use to pull in the
 things that have your attention.
 
-The idea is Scott Jenson's spatial "working memory" concept, and Scott gave Mike the go-ahead to
-build it. Scottland is that desktop, built on Wayfire, with no workspaces.
+The idea draws on Scott Jenson's spatial "working memory" concept. Scottland is that desktop, built
+on Wayfire, with no workspaces.
 
 A desktop alone doesn't reach people. Gooarchy is the distribution built around it, so someone can
 install a whole system where Scottland is the desktop. People who already run Omarchy should be able
@@ -27,10 +26,10 @@ to try Scottland without giving up their setup.
 
 ## Outcomes
 
-1. **Scottland is Mike's daily desktop.** Work that is ready reaches his machine often, rather than
-   waiting on edge cases that can come later. A deploy or update doesn't cost him his open windows,
-   widgets or session. A change to the running desktop goes in through a reload that was rehearsed
-   first on a test machine, and only with Mike's go.
+1. **Scottland is an everyday desktop.** Work that is ready reaches the target installation often,
+   rather than waiting on edge cases that can come later. A deploy or update preserves open windows,
+   widgets and the session. A change to the running desktop goes in through a reload rehearsed first
+   in an isolated test environment and only after explicit operator approval.
 2. **Scottland works for everyone, on more than one distro.** "our distro will need to install it so
    it needs to work for everyone." Scottland's core knows nothing about Omarchy. People should be
    able to install it natively on top of another distro, such as Ubuntu.
@@ -55,10 +54,10 @@ to try Scottland without giving up their setup.
    editing. Updates merge into local changes and stop on a conflict. They never silently overwrite
    a local change.
 7. **It runs on the machines people have.**
-   "we need 80-90% of modern machines. no really looking to support the weirdos right now". That
-   means x86_64 with Intel or AMD graphics, or NVIDIA with NVIDIA's own driver. Apple Silicon keeps
-   working. Where no GPU path works, the desktop still runs with plainer effects instead of
-   breaking. Uncommon hardware (Snapdragon, Mali, Raspberry Pi, nouveau) isn't a target for now.
+   Gooarchy targets about 80–90% of modern machines: x86_64 with Intel or AMD graphics, or NVIDIA
+   with NVIDIA's own driver. Apple Silicon keeps working. Where no GPU path works, the desktop still
+   runs with plainer effects instead of breaking. Uncommon hardware (Snapdragon, Mali, Raspberry Pi,
+   nouveau) isn't a target for now.
 
 ## Non-goals
 
@@ -68,14 +67,14 @@ to try Scottland without giving up their setup.
   has its own.
 - **Redesigning the spatial model.** "we're not designing anything the design is known and
   we'll-defined." Work implements the known design.
-- **Anything Mike didn't ask for.** Features "that do not fit within the spirit of the feature" are
-  dangerous to the product, however reasonable they look. Build what was asked.
+- **Anything outside the requested product scope.** Features "that do not fit within the spirit of
+  the feature" are dangerous to the product, however reasonable they look. Build what was asked.
 - **Uncommon hardware.** Supporting it is not a goal right now.
 
 ## Quality stances
 
-- **Mike's words are the spec.** A ruling he made outranks an inference about what he would want.
-  Rulings are recorded in Scottland's [docs/rulings.md](https://github.com/clickety-clacks/scottland/blob/main/docs/rulings.md).
+- **Explicit product decisions are the spec.** They outrank guesses about product intent. Decisions
+  are recorded in Scottland's [docs/rulings.md](https://github.com/clickety-clacks/scottland/blob/main/docs/rulings.md).
 - **No silent overrides.** Anything that replaces a user's existing setting is reported with its
   reason.
 - **Each change goes in its layer.** Scottland defines mechanisms; flavorings curate what ships;
@@ -86,5 +85,6 @@ to try Scottland without giving up their setup.
 
 ## Sources
 
-Mike's words from building Scottland and Gooarchy, including his rulings in Scottland's
-docs/rulings.md and docs/distro-notes.md. Quotes are his, with spelling kept.
+These principles reflect product intent established while building Scottland and Gooarchy. More
+detailed decisions live in Scottland's [rulings](https://github.com/clickety-clacks/scottland/blob/main/docs/rulings.md)
+and [distro notes](https://github.com/clickety-clacks/scottland/blob/main/docs/distro-notes.md).
