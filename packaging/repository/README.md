@@ -1,53 +1,130 @@
-# Publishing the Gooarchy pacman repository
+# Building and publishing the Gooarchy package repository
 
-Run `packaging/repository/publish.sh --all` for the first repository snapshot.
-Later, pass package names to rebuild, or use `--all` to rebuild every recipe
-discovered under `packaging/arch/`, `packaging/gooarchy-flavorings/`, and
-`packaging/linux-gooarchy/`. Adding a recipe there makes its package available
-to this command without changing the client address or signing key.
+The package repository uses separate builder, signer, and uploader operations. The package builder
+creates x86_64 Arch package archives and an **unsigned** repository database. A signer validates that
+immutable transfer and creates detached signatures for every package and the database. A separately
+qualified primary uploader verifies the signed transfer and uploads the complete GitHub Release
+through GitHub's Releases REST API. Never run the retired `publish.sh` command on a package builder.
 
-The command requires a clean `main` checkout on an x86_64 Arch build machine.
-It builds in a private temporary directory, sets the package identity to
-`Gooarchy`, signs packages with the committed repository key, and uses the
-configured Arch `wayfire` version when building Scottland. Kernel publication
-also requires 35 GiB free in the temporary build location.
+The installer defaults to the full database URL `https://gooarchy.com/gooarchy.db`; an explicit
+`GOOARCHY_REPOSITORY_URL` may select another full database URL ending in `/gooarchy.db` or an
+existing Pacman Server directory override. The installer resolves either form to the Pacman Server
+directory, so the default requests the database at `https://gooarchy.com/gooarchy.db` and package
+files beside it. The matching public key and fingerprint are committed at
+`packaging/keys/gooarchy.asc` and `packaging/keys/gooarchy.fingerprint`. Package production
+verifies that pair before using the key to validate any existing release. Private signing material
+is not part of the source tree.
 
-On `main`, publication uses the unchanged fixed Scottland pin during the tag transition, then a
-final version tag once the approved release is available. The publisher reports the selected tag
-and resolved source revision, rejects release-candidate tags and branch pins, and refuses local
-Scottland ref overrides. The local installer accepts only final tag and branch overrides; its
-current default SHA remains fixed until the Scottland final tag is ready.
+## Produce the transfer
 
-The private key reference is supplied by machine configuration through
-`GOOARCHY_SIGNING_KEY_REF` as a 1Password `op://` reference. The `op` CLI reads
-the key into a temporary GnuPG home for that publish. GitHub authorization is
-provided by the operator's existing `gh` setup. The public key and default
-repository address remain unavailable until their approved setup is complete;
-the install path fails clearly while either value is still a placeholder.
+From a clean Gooarchy `main` checkout on x86_64 Arch, the package builder runs:
 
-Each publish downloads the current release database and its listed package
-files, builds requested packages, and compares versions with `vercmp`. A
-package that is not newer is refused and left at its currently published
-version. The updated database and all package files and signatures it lists,
-including files listed by the previous database, are uploaded to a draft
-release. The command verifies the uploaded asset names and publishes the draft
-as latest only after those checks pass. If GitHub changes any asset name, the
-draft stays unpublished and the prior latest release remains active.
+```sh
+packaging/repository/produce.sh --output /path/to/new-transfer --all
+```
 
-`tests/repository-publish-test.sh` exercises this flow with a local
-Releases-shaped stand-in, synthetic Arch packages, and a throwaway OpenPGP key.
-It checks the initial six-package database, adding a seventh recipe, signing,
-Scottland's exact Wayfire dependency, exact final flavorings `_tag`
-source reporting, refusal of missing/ambiguous/invalid flavorings pins, version
-refusal, package and signature retention, lookup through a local redirect, and
-the filename guard. The real
-1Password read, GitHub upload, and gooarchy.com redirect are separate setup and
-publish steps.
+Pass package names instead of `--all` to rebuild a selected set. The command builds unsigned
+packages, verifies the current public latest release and its detached signatures when one exists,
+retains packages that were not rebuilt, and creates the next unsigned `gooarchy.db`. It reads only
+the configured public key and fingerprint. It does not read signing credentials, make signatures,
+or upload files.
 
-After stage 1 lands and stage 2 is rebased onto that exact main commit, wait
-for an adapter-approved window for the integrated SHA, then run
-`tests/repository-publish-test.sh --with-stage1-installer` to pass that signed
-release stand-in through the full stage 1 `install.sh` flow with the guest's
-real pacman client. The mode uses local Scottland and Strata source fixtures
-and a reduced package list so it exercises repository consumption without
-building the desktop payload.
+The output directory is a complete immutable transfer with this layout:
+
+```text
+manifest.json
+SHA256SUMS
+payload/
+  gooarchy.db
+  <every package archive listed by gooarchy.db>
+```
+
+The command prints the SHA-256 of `manifest.json` separately. Carry that value with the transfer
+and verify it through the chosen transfer channel. The manifest binds the clean source commit and
+tree, signing fingerprint, exact base release and asset hashes, package names/versions/source
+revisions, and the unsigned database. `SHA256SUMS` and the signer independently verify every
+payload byte and database record before signing.
+
+## Sign
+
+The primary signer uses its configured 1Password key item. Select the separately credentialed
+backup signer only after confirming that the primary signer is unavailable and that backup signing
+is authorized for this exact transfer. Keep upload custody qualified independently; backup signing
+does not grant upload permission. No automatic fallback occurs. Both roles require a clean `main`
+checkout whose commit and tree exactly match the transfer manifest and whose configured public
+fingerprint matches the transfer:
+
+```sh
+GOOARCHY_SIGNING_KEY_REF='op://<approved-vault>/<approved-item>/<field>' \
+  packaging/repository/sign.sh --signer-role primary \
+  --bundle /path/to/new-transfer \
+  --output /path/to/new-signed-transfer \
+  --manifest-sha256 <64-hex-manifest-sha256>
+```
+
+The explicit backup command reads a separate 1Password item and writes signatures only:
+
+```sh
+GOOARCHY_BACKUP_SIGNING_KEY_REF='op://<approved-vault>/<approved-backup-item>/<field>' \
+  packaging/repository/sign.sh --signer-role backup \
+  --bundle /path/to/new-transfer \
+  --output /path/to/new-signed-transfer \
+  --manifest-sha256 <64-hex-manifest-sha256>
+```
+
+The selected signer imports the key directly from 1Password into a private temporary GnuPG home;
+the command never prints the key or token. It verifies the configured public fingerprint, immutable
+manifest and payload hashes, and exact source identity. It creates and verifies one detached `.sig`
+for each package and `gooarchy.db`, then writes a separate signature receipt binding those bytes to
+the manifest SHA-256 and signer role. It never calls GitHub. A backup signature transfer still
+requires the independently qualified primary uploader below to publish it.
+
+## Upload
+
+Only a separately qualified primary uploader runs this operation, regardless of which authorized
+signer produced the signatures. Upload qualification and custody are separate from signing. The
+uploader consumes the signed transfer; it does not read a private key or change the builder's
+immutable manifest. Its repo-scoped GitHub token must be stored in the approved vault and granted
+`Contents: write` for `clickety-clacks/gooarchy`; set only the vault item reference at execution time.
+The reference is intentionally unset by default, so upload fails closed until the approved item is
+provisioned and selected.
+The uploader reads the token with `op read` and pipes it to the REST client on standard input. It does
+not require GitHub CLI or SSH trust, and never places the token in a command argument or repository
+file:
+
+```sh
+GOOARCHY_RELEASE_UPLOAD_TOKEN_REF='op://<approved-vault>/<repo-scoped-upload-token-item>/credential' \
+packaging/repository/upload.sh --uploader-role primary \
+  --signed-bundle /path/to/new-signed-transfer \
+  --manifest-sha256 <64-hex-manifest-sha256>
+```
+
+The uploader verifies the configured public fingerprint, signature receipt, each detached package
+and database signature, the exact source identity, and unchanged current latest release before it
+reads the upload token. The REST client creates a release draft with `make_latest=false`, uploads the
+complete package, signature, and database set, then checks the exact asset names, uploaded states,
+sizes, and server SHA-256 digests when available. It downloads each draft asset through the release
+asset API and compares its byte count and SHA-256 with the local file. Only after every asset passes
+and the previous latest still matches the transfer base does one final API update mark the release
+published and explicitly promote it to latest. It then reads back the release and latest record. A failed check leaves the
+previous latest release in place; an incomplete draft remains unpublished. Backup signing alone does
+not qualify an uploader, and backup signing does not confer upload custody.
+
+The old `publish.sh` entry point now exits with a clear message directing operators to the two
+role-specific commands. Do not restore the single-machine build/sign/upload flow.
+
+## Checks and remaining acceptance
+
+`tests/repository-config-source-test.sh` checks the default URL, explicit mirror override,
+committed public-key fingerprint, and fail-closed empty Flavorings `_tag` without host or credential
+access.
+`tests/repository-publish-test.sh` exercises the transfer, primary and backup signing, role separation,
+and upload behavior with synthetic package/database records, a throwaway OpenPGP key, and a local
+Releases-shaped fixture. `tests/repository-release-api-test.py` exercises the production release
+promotion policy against an in-process fake API without network access or credentials. The tests
+cover complete initial contents, manifest and payload hashes,
+source/database identity, retained package bytes, version advancement, detached signatures for every
+package and the database, and refusal to advance latest after an incomplete upload or failed
+readback. It does not exercise a real Arch build, 1Password, GitHub, the production signing key,
+installer, or redirect. Those checks require their separately admitted release route and must be
+reported against the exact source tree and transfer.

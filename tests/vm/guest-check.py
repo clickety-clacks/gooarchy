@@ -2,6 +2,7 @@
 """Check a Gooarchy session from inside the guest (tests/vm/run.sh copies and runs this).
 
   guest-check.py OUTDIR [--gpu virgl|software]
+  guest-check.py OUTDIR --install-observation fresh-install|ordinary-rerun
 
 Waits for the Scottland session the boot started on tty1, enters its environment, then uses it
 the way a person would, through Wayfire's virtual input (stipc): Super+Enter for a terminal, the
@@ -331,6 +332,16 @@ def save_session_log(name):
 # ---- the checks -----------------------------------------------------------------------------
 
 def main():
+    portal_info = run("pacman", "-Qi", "xdg-desktop-portal-wlr-gooarchy")
+    check("the Gooarchy portal provider is installed from the signed repository",
+          "Packager        : Gooarchy" in portal_info and "Validated By    : Signature" in portal_info,
+          portal_info[:240])
+    installed_packages_rc, installed_packages = run_rc("pacman", "-Qq")
+    arch_portal_installed = "xdg-desktop-portal-wlr" in installed_packages.splitlines()
+    check("Arch's portal package is absent after Gooarchy installs its provider",
+          installed_packages_rc == 0 and not arch_portal_installed,
+          f"pacman -Qq rc={installed_packages_rc}, exact package present={arch_portal_installed}")
+
     log("waiting for the Scottland session on tty1")
     env = wait_for(session_env, timeout=180, interval=2)
     if not check("a Scottland session is running (autologin on tty1 -> start-scottland)", env):
@@ -723,11 +734,110 @@ def main():
           f"scottland-session.target {target}; helpers left: {leftovers or 'none'}")
 
 
+def install_observation(phase):
+    """Verify X11 and firmware setup at one installer boundary, without running the full suite."""
+    if phase not in {"fresh-install", "ordinary-rerun"}:
+        check("the install observation phase is recognized", False, phase)
+        return
+
+    log(f"observing Xwayland and stock firmware after {phase}")
+    env = wait_for(session_env, timeout=180, interval=2)
+    if not check(f"{phase}: a Scottland session is available", bool(env)):
+        return
+    os.environ.update(env)
+
+    firmware_rc, firmware_installed = run_rc("pacman", "-Q", "linux-firmware")
+    firmware_package_count = sum(
+        1 for line in firmware_installed.splitlines()
+        if line.split() and line.split()[0] == "linux-firmware"
+    )
+    installed_version = firmware_installed.split()[1] if firmware_package_count == 1 else ""
+    repo_rc, firmware_repo = run_rc("pacman", "-Si", "linux-firmware")
+    repo_fields = {
+        line.partition(":")[0].strip(): line.partition(":")[2].strip()
+        for line in firmware_repo.splitlines() if ":" in line
+    }
+    repo_version = repo_fields.get("Version", "")
+    repo_name = repo_fields.get("Repository", "")
+    check(f"{phase}: exactly one stock linux-firmware package matches Arch repo metadata",
+          firmware_rc == 0 and firmware_package_count == 1 and repo_rc == 0 and
+          bool(repo_name) and installed_version == repo_version,
+          f"installed_package_count={firmware_package_count}; installed_version={installed_version or 'missing'}; "
+          f"repository={repo_name or 'missing'}; repository_version={repo_version or 'missing'}")
+
+    firmware_files_output = run(
+        "sh", "-c", "find /usr/lib/firmware -type f -print 2>/dev/null | wc -l"
+    )
+    try:
+        firmware_file_count = int(firmware_files_output)
+    except ValueError:
+        firmware_file_count = -1
+    check(f"{phase}: linux-firmware files are present on disk", firmware_file_count > 0,
+          f"regular_firmware_files={firmware_file_count}")
+
+    xterm_rc, xterm_installed = run_rc("pacman", "-Q", "xterm")
+    if xterm_rc != 0:
+        try:
+            installed = subprocess.run(
+                ["sudo", "pacman", "-S", "--noconfirm", "--needed", "xterm"],
+                capture_output=True, text=True, timeout=180,
+            )
+            check(f"{phase}: test-only xterm dependency installs from Arch repositories",
+                  installed.returncode == 0,
+                  f"exit={installed.returncode}; {(installed.stdout + installed.stderr).strip()[-500:]}")
+        except Exception as error:
+            check(f"{phase}: test-only xterm dependency installs from Arch repositories", False,
+                  f"{type(error).__name__}: {error}")
+        xterm_rc, xterm_installed = run_rc("pacman", "-Q", "xterm")
+    xterm_package_count = sum(
+        1 for line in xterm_installed.splitlines()
+        if line.split() and line.split()[0] == "xterm"
+    )
+    check(f"{phase}: exactly one xterm test package is installed",
+          xterm_rc == 0 and xterm_package_count == 1,
+          f"installed_package_count={xterm_package_count}; package_record={xterm_installed or 'missing'}")
+
+    def xterm_windows():
+        try:
+            return [v for v in views() if "xterm" in (v.get("app_id") or "").lower()]
+        except Exception:
+            return []
+
+    before_count = len(xterm_windows())
+    check(f"{phase}: xterm starts with zero stale mapped windows", before_count == 0,
+          f"mapped_xterm_windows_before_launch={before_count}")
+    process = None
+    try:
+        process = subprocess.Popen(["xterm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        wait_for(lambda: len(xterm_windows()) or None, timeout=20)
+        mapped_count = len(xterm_windows())
+        check(f"{phase}: Xwayland maps exactly one xterm window", mapped_count == 1,
+              f"mapped_xterm_windows={mapped_count}; app_ids=" + ",".join(
+                  v.get("app_id") or "" for v in xterm_windows()
+              ))
+    except Exception as error:
+        check(f"{phase}: Xwayland maps exactly one xterm window", False,
+              f"{type(error).__name__}: {error}")
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        no_windows = wait_for(lambda: 0 if not xterm_windows() else None, timeout=10)
+        remaining_count = 0 if no_windows is not None else len(xterm_windows())
+        check(f"{phase}: the test xterm window is cleaned up", remaining_count == 0,
+              f"mapped_xterm_windows_after_cleanup={remaining_count}")
+
+
 def finish():
-    if screenshots_failed:
-        check("screenshots are taken", False, screenshots_failed)
-    else:
-        check("screenshots are taken", True, len(glob.glob(os.path.join(OUT, "*.png"))))
+    if "--install-observation" not in sys.argv:
+        if screenshots_failed:
+            check("screenshots are taken", False, screenshots_failed)
+        else:
+            check("screenshots are taken", True, len(glob.glob(os.path.join(OUT, "*.png"))))
     with open(os.path.join(OUT, "results.json"), "w") as f:
         json.dump({"failures": failures, "results": results, "observations": observations}, f, indent=1)
     log(f"{len(results) - failures}/{len(results)} checks passed")
@@ -743,7 +853,12 @@ if __name__ == "__main__":
     signal.signal(signal.SIGALRM, on_deadline)
     signal.alarm(RUN_DEADLINE)
     try:
-        main()
+        if "--install-observation" in sys.argv:
+            phase_index = sys.argv.index("--install-observation") + 1
+            phase = sys.argv[phase_index] if phase_index < len(sys.argv) else ""
+            install_observation(phase)
+        else:
+            main()
     except BaseException as error:  # a broken session must still leave results behind
         check("the check ran to the end", False, f"{type(error).__name__}: {error}")
     finally:

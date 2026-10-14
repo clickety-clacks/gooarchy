@@ -52,10 +52,17 @@ service and DNS configuration remain a separate setup step.
 On 2026-10-06, Mike ruled `dr_0e3dd8f9` as B2 with 1Password under his
 delegation. His words were: “yes do it this way. rule for me”.
 
-1Password holds the private signing key. One build machine fetches it when it
-publishes, without an interactive signing step, and the same key can be
-recovered onto a replacement machine. No additional custody mechanism is part
-of this ruling.
+1Password holds the private signing key. The initial single-machine workflow
+was superseded on 2026-10-14 (`wi_cc6ec1e9`): the package builder produces only
+unsigned packages and an unsigned repository database. The primary signer and
+uploader are separate from that build operation. If the primary signer is
+unavailable, a separately authorized backup signer may be selected explicitly;
+that signing authority does not grant release-upload permission. Each signer
+validates the same immutable build manifest and key fingerprint, then creates
+detached signatures for every package and the database. A separately qualified
+uploader validates the signed transfer and advances latest only after its
+complete asset set is read back and verified. Normal package building has no
+signing or release-upload credential.
 
 ## The kernel opt-in leaves the bootloader alone
 

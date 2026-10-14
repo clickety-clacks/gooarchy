@@ -35,12 +35,15 @@ To back out instead:
 
 ## 1. Packages
 
-Everything the installer added from packages hangs off two packages, `gooarchy` and
-`gooarchy-flavorings`. The Arch packages from `install/gooarchy-base.packages` and the
-`scottland`, `strata-bin` and `xdg-desktop-portal-wlr-gooarchy` packages it builds went in as their
-dependencies. (`xdg-desktop-portal-wlr-gooarchy` is Gooarchy's screen-sharing backend, built from
-our fork; if it replaced Arch's `xdg-desktop-portal-wlr`, reinstall Arch's package after removing
-Gooarchy if you want it back: [xdg-desktop-portal-wlr.md](xdg-desktop-portal-wlr.md).) Remove those two
+Everything the installer added from packages hangs off `gooarchy` and `gooarchy-flavorings`. The Arch
+packages from `install/gooarchy-base.packages`, the signed repository's
+`xdg-desktop-portal-wlr-gooarchy`, and locally built `strata-bin` went in as their dependencies.
+This 2026.11 test line also builds Scottland locally from its provisional `0.4` branch selector;
+the release must use a final Scottland tag and matching served package.
+(`xdg-desktop-portal-wlr-gooarchy` is Gooarchy's screen-sharing backend from our fork; if it replaced
+Arch's `xdg-desktop-portal-wlr`,
+reinstall Arch's package after removing Gooarchy if you want it back:
+[xdg-desktop-portal-wlr.md](xdg-desktop-portal-wlr.md).) Remove those two
 packages from a console, not from inside Scottland:
 
 ```sh
@@ -49,8 +52,8 @@ sudo pacman -Rns gooarchy gooarchy-flavorings
 
 That also removes their dependencies that nothing else needs. A package you had installed
 yourself before Gooarchy stays: the installer never changes the install reason of a package
-that was already there. `git` and `base-devel` (installed to build Strata, and Scottland when its
-pin is overridden) stay;
+that was already there. `git` and `base-devel` (installed to build Strata, and Scottland while this
+test line selects its branch or when its final pin is overridden) stay;
 remove them yourself if you don't want them. To see what would go first, run
 `pacman -Rns --print gooarchy gooarchy-flavorings`.
 
