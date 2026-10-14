@@ -1,0 +1,10 @@
+# Appearance and defaults
+
+Run independently from a fresh Scottland login with Gooarchy Flavorings installed. Use a disposable user profile, or save and restore the specific theme and settings values changed here. Record installed Scottland and Flavorings source/package identities.
+
+1. **Theme choice.** Select the installed light theme, then the dark theme using Gooarchy's supported theme action. On each switch, check Scottland's visible palette/halos, Ghostty's palette, GTK appearance, and the wallpaper. A script exit code or changed file alone does not prove that running applications changed.
+2. **Manual choice.** Choose a mode manually and inspect the saved mode. Trigger the supported theme refresh or log out and back in. The user's manual choice must be retained or released according to the candidate's documented Scottland manual-choice policy; record the actual visible mode and saved state. Do not overwrite an unrelated custom theme file.
+3. **Solar scheduling, when shipped.** Supply a known location or controlled solar times through the product's supported input, set a transition near the current time, and observe one light-to-dark and one dark-to-light change at the calculated transitions. Verify no theme change merely because a periodic check ran; reboot or start a fresh login and confirm the next transition is scheduled and occurs. Repeat with manual hold active and check that the transition respects it. Record the calculated times, mode before/after, and scheduling evidence. A 10-minute fallback timer that happens to notice a changed mode does not pass transition-only behavior.
+4. **Defaults.** In one clean user profile, verify Gooarchy's intended app/theme defaults are applied once. In another with pre-existing values, rerun the Flavorings apply step and verify those values are preserved and any override is reported with a reason.
+
+If the candidate does not ship standalone transition-only Sunlight, mark step 3 `NOT SHIPPED` with the package/tag evidence; a release whose declared contents promise it cannot claim full appearance coverage. Restore the test profile or its saved values after recording results.

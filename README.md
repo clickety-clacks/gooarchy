@@ -43,6 +43,8 @@ are kept on the `foot` branch, which is not merged.
 
 ## Trying it
 
+For behavior checks on an installed candidate, use the [end-to-end runbooks](docs/e2e/README.md). Each runbook can be run on its own; the [final distro pass](docs/e2e/final-release.md) collects all four and prompts Mike for the attended display-zones and Adapter B checks at release time.
+
 ### In a VM (recommended)
 
 `tests/vm/run.sh` boots the official Arch Linux cloud image under QEMU/KVM, runs the installer in it
