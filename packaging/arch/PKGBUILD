@@ -34,7 +34,7 @@ check() {
 }
 
 package() {
-  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'glibc' 'gcc-libs'
+  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'jq' 'glibc' 'gcc-libs'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
   # Optional, not required: editing the system tools is the exception, and package upgrades work
   # without a toolchain (docs/rulings.md).
@@ -42,6 +42,9 @@ package() {
   install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
   install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
   install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
+  install -Dm755 "$_repo/session/35-gooarchy-lid" "$pkgdir/usr/lib/scottland/config.d/35-gooarchy-lid"
+  install -Dm755 "$_repo/session/autostart.d/45-gooarchy-clamshell" "$pkgdir/usr/lib/scottland/autostart.d/45-gooarchy-clamshell"
+  install -Dm755 "$_repo/session/libexec/gooarchy-clamshell" "$pkgdir/usr/bin/gooarchy-clamshell"
   install -Dm755 "$srcdir/target/release/gooarchy" "$pkgdir/usr/bin/gooarchy"
   install -Dm644 "$_repo/system-tools/LICENSE-omarchy" "$pkgdir/usr/share/licenses/gooarchy/LICENSE-omarchy"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
