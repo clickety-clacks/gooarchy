@@ -257,7 +257,7 @@ build_static_recipe() {
   (
     cd -- "$build_dir"
     GOOARCHY_PATH="$repo_root" GOOARCHY_INSTALL="$repo_root/install" \
-      PACKAGER=Gooarchy makepkg --syncdeps --rmdeps --noconfirm --needed --force --cleanbuild
+      PACKAGER=Gooarchy "$script_dir/build-recipe.sh" --noconfirm --needed --force --cleanbuild
   ) || die "makepkg failed for $recipe_file."
 }
 
@@ -286,7 +286,7 @@ build_scottland() {
     die "Scottland's PKGBUILD changed shape; refusing to build without the exact Wayfire dependency."
   (
     cd -- "$build_dir"
-    PACKAGER=Gooarchy makepkg --syncdeps --rmdeps --noconfirm --needed --force --cleanbuild
+    PACKAGER=Gooarchy "$script_dir/build-recipe.sh" --noconfirm --needed --force --cleanbuild
   ) || die "makepkg failed for the pinned Scottland recipe."
 }
 
@@ -312,7 +312,8 @@ for package_name in "${requested_packages[@]}"; do
         if [[ $recipe_dir == "$repo_root/packaging/linux-gooarchy" && -x $recipe_dir/build.sh ]]; then
           free_kb=$(df -Pk "$work_dir" | awk 'END { print $4 }')
           ((free_kb >= 35 * 1024 * 1024)) || die "linux-gooarchy needs at least 35 GiB free in the build workspace."
-          GOOARCHY_KERNEL_BUILD="$kernel_dir" PACKAGER=Gooarchy "$recipe_dir/build.sh" ||
+          GOOARCHY_KERNEL_BUILD="$kernel_dir" GOOARCHY_REPOSITORY_BUILD=1 PACKAGER=Gooarchy \
+            "$recipe_dir/build.sh" ||
             die "the pinned Gooarchy kernel build failed."
         else
           build_static_recipe "$recipe_file"

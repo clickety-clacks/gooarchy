@@ -9,3 +9,4 @@ fi
 python3 "$script_dir/repository-transfer-test.py"
 python3 "$script_dir/repository-release-api-test.py"
 python3 "$script_dir/repository-sign-upload-test.py"
+python3 "$script_dir/repository-build-dependencies-test.py"
