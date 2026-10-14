@@ -705,7 +705,8 @@ nvidia_record_package_hook_errors() {
 }
 
 nvidia_run_pacman_transaction() {
-  local output rc kernel failure
+  local output rc kernel failure image
+  local -a invalid_images=()
   output=$(mktemp "${TMPDIR:-/var/tmp}/gooarchy-nvidia-pacman.XXXXXXXX") || return 1
   if command -v mkinitcpio >/dev/null 2>&1; then
     if ! nvidia_preserve_preset_images; then
@@ -720,6 +721,12 @@ nvidia_run_pacman_transaction() {
   fi
   cat "$output"
   nvidia_record_package_hook_errors "$output"
+  # Pacman's hooks can return success while leaving a preset image unusable. Keep the
+  # pre-transaction copies until every active output has passed the same image checks used
+  # by the later kernel verification paths.
+  if ((rc == 0)) && ((${#NV_REPLACED_PACKAGES[@]})); then
+    nvidia_report "replaced ${NV_REPLACED_PACKAGES[*]} with nvidia-open-dkms (the same NVIDIA driver, built for every installed kernel). To undo, run sudo pacman -S ${NV_REPLACED_PACKAGES[*]}."
+  fi
   for kernel in "${NV_KERNELS[@]}"; do
     if nvidia_test_failure "pacman-hook:$kernel"; then
       NV_PACKAGE_HOOK_FAILURES[$kernel]="Gooarchy test hook simulated a mkinitcpio failure before that preset wrote an image"
@@ -731,8 +738,24 @@ nvidia_run_pacman_transaction() {
       if ! nvidia_restore_preset_images; then
         nvidia_fail "pacman did not complete cleanly and Gooarchy could not restore every pre-transaction image. The preserved copies remain in their .gooarchy-nvidia-preserve directories; restore them before booting another kernel."
       fi
-    elif ! nvidia_discard_preset_image_backups; then
-      nvidia_fail "the NVIDIA package transaction completed, but temporary image-preservation copies could not be removed. Inspect the .gooarchy-nvidia-preserve directories."
+    else
+      for image in "${NV_IMAGE_BACKUP_IMAGES[@]}"; do
+        if ! nvidia_image_listable "$image"; then
+          invalid_images+=("$image: absent or unlistable")
+        elif ! nvidia_image_module_state "$image" "$NV_DRIVER_MODULE_VERSION"; then
+          invalid_images+=("$image: ${NV_IMAGE_ERROR:-inconsistent NVIDIA modules or firmware}")
+        fi
+      done
+      if ((${#invalid_images[@]})); then
+        if ! nvidia_restore_preset_images; then
+          nvidia_fail "the NVIDIA package transaction completed, but its hooks left one or more initramfs images invalid and Gooarchy could not restore every pre-transaction image. The preserved copies remain in their .gooarchy-nvidia-preserve directories; restore them before booting another kernel."
+        fi
+        for image in "${invalid_images[@]}"; do
+          nvidia_report "pacman's post-transaction hook left initramfs image $image; Gooarchy restored its pre-transaction image where one existed. Repair the hook output before booting this kernel, then rerun."
+        done
+        nvidia_fail "the NVIDIA package transaction completed, but one or more initramfs images were absent, unlistable, or inconsistent with the driver and firmware; Gooarchy restored their pre-transaction state where available. Repair the image state before booting another kernel, then rerun."
+      fi
+      nvidia_discard_preset_image_backups || nvidia_fail "the NVIDIA package transaction completed, but temporary image-preservation copies could not be removed. Inspect the .gooarchy-nvidia-preserve directories."
     fi
   fi
   if ((${#NV_PACKAGE_HOOK_FAILURES[@]})); then
@@ -1897,7 +1920,6 @@ nvidia_install() {
         fi
         nvidia_fail "the NVIDIA package transaction failed after pacman had begun changing packages. The installed state is left as pacman reported; inspect the install log and rerun before booting another kernel. To undo the prebuilt replacement, run sudo pacman -S ${replacement_packages[*]}."
       fi
-      nvidia_report "replaced ${replacement_packages[*]} with nvidia-open-dkms (the same NVIDIA driver, built for every installed kernel). To undo, run sudo pacman -S ${replacement_packages[*]}."
     else
       pacman_args+=(--noconfirm)
       if ! nvidia_run_pacman_transaction "${pacman_args[@]}" "${all_targets[@]}"; then
