@@ -345,13 +345,14 @@ prepare_guest() {
            sudo tee /etc/sudoers.d/90-vm-test-proxy >/dev/null && sudo chmod 440 /etc/sudoers.d/90-vm-test-proxy'
   fi
   # Test-only: pacman's package cache lives on the host (shared over 9p), so reruns don't download
-  # everything again; slow links get no download timeout.
+  # everything again; slow links get no download timeout. Pacman's unprivileged download user cannot
+  # write the 9p mount (mapped-xattr), so the download sandbox is off in this disposable guest.
   guest 'sudo mkdir -p /var/cache/pacman/vm-test &&
          echo "gooarchy-pkgcache /var/cache/pacman/vm-test 9p trans=virtio,version=9p2000.L,msize=1048576,nofail 0 0" |
            sudo tee -a /etc/fstab >/dev/null && sudo systemctl daemon-reload && sudo mount /var/cache/pacman/vm-test &&
          sudo sed -i -e "s|^#\\?CacheDir.*|CacheDir = /var/cache/pacman/vm-test/|" \
-                     -e "s|^#\\?ParallelDownloads.*|ParallelDownloads = 3\\nDisableDownloadTimeout|" /etc/pacman.conf'
-  guest 'grep -E "^(CacheDir|ParallelDownloads|DisableDownloadTimeout)" /etc/pacman.conf' >&2
+                     -e "s|^#\\?ParallelDownloads.*|ParallelDownloads = 3\\nDisableDownloadTimeout\\nDisableSandbox|" /etc/pacman.conf'
+  guest 'grep -E "^(CacheDir|ParallelDownloads|DisableDownloadTimeout|DisableSandbox)" /etc/pacman.conf' >&2
   # The cloud image is a minimal install; make sure its package databases are current before the
   # installer runs, as a freshly installed system's would be.
   guest "sudo $(guest_proxy_env) pacman -Sy --noconfirm >/dev/null"
