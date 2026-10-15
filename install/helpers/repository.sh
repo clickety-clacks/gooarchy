@@ -34,6 +34,19 @@ sync_package_field() {
     }'
 }
 
+# Gooarchy's signed archive is inspected before the later Strata AUR step builds
+# strata-bin. Keep its hard dependency, but satisfy that one unversioned name
+# only while pacman resolves or downloads the bootstrap archive. The `=0` value
+# is a resolver placeholder; the actual package is built and installed later.
+repository_gooarchy_bootstrap_filename() {
+  pacman -Sp --nodeps --assume-installed strata-bin=0 --print-format '%f' gooarchy/gooarchy
+}
+
+download_repository_gooarchy_bootstrap() {
+  local cache=$1
+  sudo pacman -Sw --nodeps --assume-installed strata-bin=0 --noconfirm --cachedir "$cache" gooarchy/gooarchy
+}
+
 download_repository_packages() {
   local cache=$1 filename_output filename
   shift
