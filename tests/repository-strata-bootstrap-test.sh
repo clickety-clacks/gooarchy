@@ -79,4 +79,4 @@ if calls != expected:
 print("strata-bin bootstrap assumption passed to both package-resolution and download calls")
 PY
 
-echo "Gooarchy retains the hard strata-bin dependency and resolves the signed bootstrap archive before the later AUR build."
+echo "Gooarchy retains the strata-bin hard dependency; both bootstrap pacman calls assume only strata-bin=0."
