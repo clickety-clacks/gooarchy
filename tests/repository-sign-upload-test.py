@@ -75,6 +75,10 @@ class SignAndUploadTests(unittest.TestCase):
         self.key_home = self.root / "key-home"
         self.key_home.mkdir(mode=0o700)
         self.secret_key = self.root / "test-secret.asc"
+        self.release_notes = self.root / "release-notes.md"
+        self.release_notes.write_text(
+            "Synthetic package repository release notes.\n", encoding="utf-8"
+        )
         self.base_env = os.environ.copy()
         self.base_env.update({
             "GOOARCHY_TEST_RELEASE_STATE": str(self.state),
@@ -167,11 +171,13 @@ import argparse, hashlib, json, os, shutil, sys
 parser = argparse.ArgumentParser()
 sub = parser.add_subparsers(dest='command', required=True)
 publish = sub.add_parser('publish')
-for name in ('manifest', 'signatures', 'assets-dir', 'manifest-sha256', 'release-tag', 'source-commit', 'source-tree', 'signer-role'):
+for name in ('manifest', 'signatures', 'assets-dir', 'manifest-sha256', 'release-tag', 'source-commit', 'source-tree', 'signer-role', 'release-notes'):
     publish.add_argument('--' + name, required=True)
 args = parser.parse_args()
 token = sys.stdin.buffer.read().decode('ascii').strip()
 if token != 'synthetic-release-token': raise SystemExit('mock vault token mismatch')
+with open(args.release_notes, encoding='utf-8') as stream:
+    if not stream.read().strip(): raise SystemExit('release notes are empty')
 manifest_path = args.manifest
 with open(manifest_path, encoding='utf-8') as stream: manifest = json.load(stream)
 digest = hashlib.sha256(open(manifest_path, 'rb').read()).hexdigest()
@@ -279,6 +285,7 @@ with open(state_path, 'w', encoding='utf-8') as stream: json.dump(state, stream)
             str(self.checkout / "packaging/repository/upload.sh"),
             "--uploader-role", "primary",
             "--signed-bundle", str(signed),
+            "--release-notes", str(self.release_notes),
             "--manifest-sha256", self.manifest_hash,
         ], env=env, check=False)
 

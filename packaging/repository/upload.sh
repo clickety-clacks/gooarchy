@@ -15,16 +15,19 @@ usage() {
   cat >&2 <<'USAGE'
 Usage: packaging/repository/upload.sh --uploader-role primary \
        --signed-bundle <signed-transfer-directory> \
+       --release-notes <approved-release-notes-file> \
        --manifest-sha256 <64-hex-digits>
 
 Verifies the signed transfer, uploads a complete GitHub Release draft, reads
-every asset back byte-for-byte, and makes it latest only as the final step.
+every asset back byte-for-byte, forwards the supplied release notes unchanged,
+and makes it latest only as the final step.
 Signing authority alone does not authorize this separate upload operation.
 USAGE
   exit 2
 }
 
 signed_bundle=
+release_notes_file=
 expected_manifest_sha256=
 uploader_role=
 while (($#)); do
@@ -32,6 +35,11 @@ while (($#)); do
     --signed-bundle)
       (($# >= 2)) || usage
       signed_bundle=$2
+      shift 2
+      ;;
+    --release-notes)
+      (($# >= 2)) || usage
+      release_notes_file=$2
       shift 2
       ;;
     --manifest-sha256)
@@ -51,8 +59,9 @@ while (($#)); do
   esac
 done
 [[ $uploader_role == primary ]] || usage
-[[ -n $signed_bundle && $expected_manifest_sha256 =~ ^[0-9a-f]{64}$ ]] || usage
+[[ -n $signed_bundle && -n $release_notes_file && $expected_manifest_sha256 =~ ^[0-9a-f]{64}$ ]] || usage
 [[ -d $signed_bundle && ! -L $signed_bundle ]] || die "signed transfer must be a regular directory."
+[[ -f $release_notes_file && -s $release_notes_file ]] || die "release notes must be a non-empty file."
 
 checkout_branch=$(git -C "$repo_root" branch --show-current)
 [[ $checkout_branch == main ]] || die "upload from Gooarchy main, not $checkout_branch."
@@ -219,5 +228,6 @@ command -v op >/dev/null 2>&1 || die "the approved vault CLI is unavailable for 
 op read "$upload_token_ref" | python3 "$script_dir/release-api.py" publish \
   --manifest "$manifest_file" --signatures "$snapshot/SIGNATURES.json" --assets-dir "$asset_dir" \
   --manifest-sha256 "$expected_manifest_sha256" --release-tag "$release_tag" \
-  --source-commit "$source_commit" --source-tree "$source_tree" --signer-role "$signer_role" ||
+  --source-commit "$source_commit" --source-tree "$source_tree" --signer-role "$signer_role" \
+  --release-notes "$release_notes_file" ||
   die "release upload did not complete its exact-content and latest-release checks."

@@ -119,8 +119,13 @@ file:
 GOOARCHY_RELEASE_UPLOAD_TOKEN_REF='op://<approved-vault>/<repo-scoped-upload-token-item>/credential' \
 packaging/repository/upload.sh --uploader-role primary \
   --signed-bundle /path/to/new-signed-transfer \
+  --release-notes /path/to/approved-release-notes.md \
   --manifest-sha256 <64-hex-manifest-sha256>
 ```
+
+The required UTF-8 release-notes file becomes the public release description exactly as supplied.
+Write it in product terms, report observed failures plainly, and identify behavior that remains
+unverified. Do not include private environment details or credentials.
 
 The uploader verifies the configured public fingerprint, signature receipt, each detached package
 and database signature, the exact source identity, and unchanged current latest release before it
@@ -148,7 +153,8 @@ files exercise structural binding only; they are not cryptographic signatures.
 `tests/repository-publish-test.sh` exercises the transfer, primary and backup signing, role separation,
 and upload behavior with synthetic package/database records, a throwaway OpenPGP key, and a local
 Releases-shaped fixture. `tests/repository-release-api-test.py` exercises the production release
-promotion policy against an in-process fake API without network access or credentials. The tests
+promotion policy and exact release-notes forwarding against an in-process fake API without network
+access or credentials. The tests
 cover complete initial contents, manifest and payload hashes,
 source/database identity, retained package bytes, version advancement, detached signatures for every
 package and the database, and refusal to advance latest after an incomplete upload or failed

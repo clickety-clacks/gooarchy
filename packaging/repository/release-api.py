@@ -72,6 +72,16 @@ def read_upload_token(stream) -> str:
     return token
 
 
+def read_release_notes(path: Path) -> str:
+    try:
+        notes = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ReleaseError("release notes could not be read as UTF-8.") from error
+    if not notes.strip():
+        raise ReleaseError("release notes must not be empty.")
+    return notes
+
+
 def prepare_assets(
     manifest_path: Path,
     signatures_path: Path,
@@ -458,6 +468,7 @@ def publish_release(
     source_commit: str,
     source_tree: str,
     signer_role: str,
+    release_notes: str,
 ) -> None:
     if not TAG_RE.fullmatch(release_tag) or ".." in release_tag:
         raise ReleaseError("release tag is invalid.")
@@ -465,6 +476,8 @@ def publish_release(
         raise ReleaseError("release source identity is invalid.")
     if signer_role not in {"primary", "backup"}:
         raise ReleaseError("signature receipt has an invalid signer role.")
+    if not release_notes.strip():
+        raise ReleaseError("release notes must not be empty.")
     manifest, assets = prepare_assets(
         manifest_path, signatures_path, asset_dir, manifest_sha256, signer_role
     )
@@ -482,11 +495,7 @@ def publish_release(
     if api.tag_exists(release_tag):
         raise ReleaseError("the generated release tag already exists; refusing to overwrite it.")
     title = f"Gooarchy package repository {release_tag}"
-    notes = (
-        f"Complete repository snapshot built from Gooarchy {source_commit} (tree {source_tree}).\n"
-        f"Build manifest SHA-256: {manifest_sha256}. Signer role: {signer_role}."
-    )
-    draft = api.create_draft(release_tag, source_commit, title, notes)
+    draft = api.create_draft(release_tag, source_commit, title, release_notes)
     release_id = draft.get("id")
     upload_url = draft.get("upload_url")
     if (
@@ -577,11 +586,13 @@ def main(argv: list[str] | None = None) -> int:
     publish_parser.add_argument("--source-commit", required=True)
     publish_parser.add_argument("--source-tree", required=True)
     publish_parser.add_argument("--signer-role", choices=("primary", "backup"), required=True)
+    publish_parser.add_argument("--release-notes", type=Path, required=True)
     arguments = parser.parse_args(argv)
     if sys.stdin.isatty():
         print("release upload refused: provide the approved vault token on standard input.", file=sys.stderr)
         return 2
     try:
+        release_notes = read_release_notes(arguments.release_notes)
         token = read_upload_token(sys.stdin.buffer)
         publish_release(
             GitHubReleaseAPI(token),
@@ -593,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
             source_commit=arguments.source_commit,
             source_tree=arguments.source_tree,
             signer_role=arguments.signer_role,
+            release_notes=release_notes,
         )
     except ReleaseError as error:
         print(f"release upload refused: {error}", file=sys.stderr)

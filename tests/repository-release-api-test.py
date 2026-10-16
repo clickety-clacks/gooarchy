@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
-import io
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -36,6 +37,7 @@ class FakeReleaseAPI:
         self.omit_asset = False
         self.corrupt_asset: str | None = None
         self.latest_change_during_upload: str | None = None
+        self.release_notes: str | None = None
 
     def current_latest(self) -> str:
         return self.latest
@@ -46,6 +48,7 @@ class FakeReleaseAPI:
     def create_draft(self, tag: str, source_commit: str, title: str, body: str) -> dict:
         self.tag = tag
         self.draft = True
+        self.release_notes = body
         return {
             "id": 17,
             "upload_url": self.upload_url,
@@ -164,7 +167,47 @@ class ReleaseAPITests(unittest.TestCase):
             source_commit="a" * 40,
             source_tree="b" * 40,
             signer_role="primary",
+            release_notes="Synthetic release notes.",
         )
+
+    def test_publish_forwards_release_notes_file_without_reformatting(self) -> None:
+        notes = (
+            "Installation validation stopped before first boot because virtual display support was unavailable.\r\n\r\n"
+            "The separate hardware check stopped before login. Installed desktop and device behavior remain unverified.\r\n"
+        )
+        notes_path = self.root / "release-notes.md"
+        notes_path.write_bytes(notes.encode("utf-8"))
+        api = FakeReleaseAPI()
+
+        class SyntheticStdin:
+            def __init__(self) -> None:
+                self.buffer = io.BytesIO(b"synthetic-token")
+
+            def isatty(self) -> bool:
+                return False
+
+        arguments = [
+            "publish",
+            "--manifest", str(self.manifest_path),
+            "--signatures", str(self.signatures_path),
+            "--assets-dir", str(self.assets),
+            "--manifest-sha256", self.manifest_hash,
+            "--release-tag", "gooarchy-repo-test",
+            "--source-commit", "a" * 40,
+            "--source-tree", "b" * 40,
+            "--signer-role", "primary",
+            "--release-notes", str(notes_path),
+        ]
+        with (
+            patch.object(release_api.sys, "stdin", SyntheticStdin()),
+            patch.object(release_api, "GitHubReleaseAPI", return_value=api),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = release_api.main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(api.release_notes, notes)
+        self.assertEqual(api.promotions, 1)
 
     def test_latest_moves_only_after_exact_assets_are_read_back(self) -> None:
         api = FakeReleaseAPI()
