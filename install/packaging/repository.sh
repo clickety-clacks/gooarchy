@@ -172,10 +172,10 @@ mkdir -p "$GOOARCHY_BUILD"
 repo_cache=$(mktemp -d "$GOOARCHY_BUILD/repository-package.XXXXXX")
 chmod 755 "$repo_cache"
 trap 'sudo rm -rf -- "$repo_cache"' EXIT
-repo_filename=$(pacman -Sp --nodeps --print-format '%f' gooarchy/gooarchy | sed -n '1p')
+repo_filename=$(repository_gooarchy_bootstrap_filename | sed -n '1p')
 [[ -n $repo_filename && $repo_filename != */* ]] ||
   fail_repository "pacman could not resolve the repository's gooarchy package at $repository_url."
-if ! sudo pacman -Sw --nodeps --noconfirm --cachedir "$repo_cache" gooarchy/gooarchy; then
+if ! download_repository_gooarchy_bootstrap "$repo_cache"; then
   fail_repository "the gooarchy package could not be downloaded from $repository_url; no package was installed or built."
 fi
 repo_archive=$repo_cache/$repo_filename
