@@ -38,7 +38,7 @@ What you get:
 | Terminal | Ghostty (Super+Enter) |
 | Browser | Chromium (Super+Shift+B), with "Use system title bar and borders" on |
 | Files | Strata (Super+Shift+F), the folder handler, from its AUR package |
-| Theme | Watercolor Dream, light to start with; `gooarchy look list`, `gooarchy look set THEME`, or `gooarchy look pick` chooses a catalogue theme, while `gooarchy-theme dark` switches Scottland's halos, Ghostty, GTK apps and the wallpaper (Strata keeps its own theme for now). Scottland's Sunlight schedule is on by default: once it knows the location (GeoClue, saved coordinates, or an IP lookup to a public service) it switches light/dark with the sun every few seconds, also over a mode you picked. Turn it off in Scottland Settings (Super+comma) > Sunlight to keep one mode |
+| Theme and look | Watercolor Dream, light to start with; `gooarchy look` chooses the catalogue theme, wallpaper and installed monospace font, while `gooarchy-theme dark` switches Scottland's halos, Ghostty, GTK apps and wallpaper (Strata keeps its own theme for now). Scottland's Sunlight schedule is on by default: once it knows the location (GeoClue, saved coordinates, or an IP lookup to a public service) it switches light/dark with the sun every few seconds, also over a mode you picked. Turn it off in Scottland Settings (Super+comma) > Sunlight to keep one mode |
 | Audio | PipeWire with WirePlumber; the volume keys work, with no on-screen indicator |
 | Defaults | tmux titles read "session on host", mosh adds no title prefix, touchpad tap and tap-and-drag on, Print saves into your Pictures folder, Claude Code and Codex set to ring the terminal bell (Scottland shows a bell as attention) |
 

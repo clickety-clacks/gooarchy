@@ -1,6 +1,5 @@
-//! The Gooarchy theme selection tool. Theme variant resolution and live application stay in the
-//! flavorings lookup and refresh helpers; this command only lists installed theme names and writes
-//! the selection record.
+//! Gooarchy's look tool. Theme and wallpaper resolution/application stay in flavorings helpers;
+//! this command owns user interaction and delegates each operation to its existing owner.
 
 use common::Failure;
 use std::collections::BTreeSet;
@@ -16,11 +15,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const THEME_DIRS: &str = "/usr/share/gooarchy-flavorings/themes";
 const LOOKUP: &str = "/usr/lib/gooarchy-flavorings/gooarchy-theme-lookup";
 const REFRESH: &str = "/usr/lib/gooarchy-flavorings/gooarchy-theme-refresh";
-const HELP: &str = "Usage: gooarchy look <current|list|set THEME|pick>\n\n\
+const WALLPAPER: &str = "/usr/lib/gooarchy-flavorings/gooarchy-wallpaper";
+const INTEGRATIONS: &str = "/usr/lib/gooarchy-flavorings/gooarchy-theme-integrations";
+const HELP: &str = "Usage: gooarchy look <current|list|set THEME|pick|wallpaper ...|font ...>\n\n\
 current  Show the effective selected theme and mode\n\
 list     List installed catalogue themes\n\
 set      Select an installed theme and refresh the desktop\n\
-pick     Choose an installed theme from a numbered terminal list\n";
+pick     Choose an installed theme from a numbered terminal list\n\
+wallpaper current|list|set NAME|next|pick\n\
+         Show, choose, advance, or pick this variant's wallpaper\n\
+font current|list|set FAMILY|pick\n\
+         Show or choose an installed compatible monospace family\n";
 
 #[derive(Clone, Debug)]
 struct Paths {
@@ -28,6 +33,8 @@ struct Paths {
     selection: PathBuf,
     lookup: PathBuf,
     refresh: PathBuf,
+    wallpaper: PathBuf,
+    integrations: PathBuf,
 }
 
 impl Paths {
@@ -44,6 +51,8 @@ impl Paths {
             selection: config_home.join("gooarchy/theme"),
             lookup: PathBuf::from(LOOKUP),
             refresh: PathBuf::from(REFRESH),
+            wallpaper: PathBuf::from(WALLPAPER),
+            integrations: PathBuf::from(INTEGRATIONS),
         })
     }
 }
@@ -93,8 +102,161 @@ fn dispatch(
         [command] if arg_text(Some(command)).is_some_and(|arg| arg == "pick") => {
             pick(paths, input, output, error)
         }
-        _ => Err(usage("expected current, list, set THEME, or pick")),
+        [category, action]
+            if arg_text(Some(category)).is_some_and(|arg| arg == "wallpaper")
+                && arg_text(Some(action)).is_some_and(|arg| {
+                    matches!(arg, "current" | "list" | "next")
+                }) =>
+        {
+            run_helper(&paths.wallpaper, &[action.clone()], output, error)
+        }
+        [category, action, name]
+            if arg_text(Some(category)).is_some_and(|arg| arg == "wallpaper")
+                && arg_text(Some(action)).is_some_and(|arg| arg == "set") =>
+        {
+            let name = arg_text(Some(name))
+                .ok_or_else(|| usage("wallpaper names must be UTF-8"))?;
+            run_helper(
+                &paths.wallpaper,
+                &[OsString::from("set"), OsString::from(name)],
+                output,
+                error,
+            )
+        }
+        [category, action]
+            if arg_text(Some(category)).is_some_and(|arg| arg == "font")
+                && arg_text(Some(action)).is_some_and(|arg| matches!(arg, "current" | "list")) =>
+        {
+            run_helper(
+                &paths.integrations,
+                &[OsString::from("font"), action.clone()],
+                output,
+                error,
+            )
+        }
+        [category, action, family]
+            if arg_text(Some(category)).is_some_and(|arg| arg == "font")
+                && arg_text(Some(action)).is_some_and(|arg| arg == "set") =>
+        {
+            let family = arg_text(Some(family))
+                .ok_or_else(|| usage("font family names must be UTF-8"))?;
+            run_helper(
+                &paths.integrations,
+                &[
+                    OsString::from("font"),
+                    OsString::from("set"),
+                    OsString::from(family),
+                ],
+                output,
+                error,
+            )
+        }
+        [category, action]
+            if arg_text(Some(category)).is_some_and(|arg| matches!(arg, "wallpaper" | "font"))
+                && arg_text(Some(action)).is_some_and(|arg| arg == "pick") =>
+        {
+            if arg_text(Some(category)) == Some("wallpaper") {
+                pick_helper(
+                    &paths.wallpaper,
+                    &[OsString::from("list")],
+                    &[OsString::from("set")],
+                    "Choose a wallpaper number (Enter or 0 cancels): ",
+                    input,
+                    output,
+                    error,
+                )
+            } else {
+                pick_helper(
+                    &paths.integrations,
+                    &[OsString::from("font"), OsString::from("list")],
+                    &[OsString::from("font"), OsString::from("set")],
+                    "Choose a font number (Enter or 0 cancels): ",
+                    input,
+                    output,
+                    error,
+                )
+            }
+        }
+        _ => Err(usage(
+            "expected a theme command, wallpaper current/list/set/next/pick, or font current/list/set/pick",
+        )),
     }
+}
+
+fn run_helper(
+    executable: &Path,
+    args: &[OsString],
+    output: &mut impl Write,
+    error: &mut impl Write,
+) -> Result<(), Failure> {
+    let result = Command::new(executable)
+        .args(args)
+        .output()
+        .map_err(|error| Failure::new(format!("cannot run {}: {error}", executable.display())))?;
+    if !result.stdout.is_empty() {
+        output.write_all(&result.stdout)?;
+    }
+    if !result.stderr.is_empty() {
+        error.write_all(&result.stderr)?;
+    }
+    if !result.status.success() {
+        return Err(Failure::new(format!(
+            "{} failed with {}",
+            executable.display(),
+            exit_status(&result.status)
+        )));
+    }
+    Ok(())
+}
+
+fn pick_helper(
+    executable: &Path,
+    list_args: &[OsString],
+    set_prefix: &[OsString],
+    prompt: &str,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    error: &mut impl Write,
+) -> Result<(), Failure> {
+    let result = Command::new(executable)
+        .args(list_args)
+        .output()
+        .map_err(|error| Failure::new(format!("cannot run {}: {error}", executable.display())))?;
+    if !result.stderr.is_empty() {
+        error.write_all(&result.stderr)?;
+    }
+    if !result.status.success() {
+        return Err(Failure::new(format!(
+            "{} failed with {}",
+            executable.display(),
+            exit_status(&result.status)
+        )));
+    }
+    let choices: Vec<String> = String::from_utf8_lossy(&result.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+    for (index, choice) in choices.iter().enumerate() {
+        writeln!(output, "{}. {choice}", index + 1)?;
+    }
+    write!(output, "{prompt}")?;
+    output.flush()?;
+    let mut answer = String::new();
+    input.read_line(&mut answer)?;
+    let answer = answer.trim();
+    if answer.is_empty() || answer == "0" {
+        return Ok(());
+    }
+    let index = answer
+        .parse::<usize>()
+        .map_err(|_| usage("choose a listed number, or press Enter to cancel"))?;
+    let choice = choices
+        .get(index.checked_sub(1).ok_or_else(|| usage("choice number must be positive"))?)
+        .ok_or_else(|| usage("choice number is not in the list"))?;
+    let mut args = set_prefix.to_vec();
+    args.push(OsString::from(choice.as_str()));
+    run_helper(executable, &args, output, error)
 }
 
 fn arg_text(arg: Option<&OsString>) -> Option<&str> {
@@ -360,6 +522,8 @@ mod tests {
                 selection: self.0.join("config/gooarchy/theme"),
                 lookup: self.0.join("lookup"),
                 refresh: self.0.join("refresh"),
+                wallpaper: self.0.join("wallpaper"),
+                integrations: self.0.join("integrations"),
             }
         }
     }
@@ -558,5 +722,122 @@ mod tests {
 
         assert_eq!(fs::read(&paths.selection).unwrap(), b"plain\n".to_vec());
         assert_eq!(fs::read_to_string(calls).unwrap(), "plain\n");
+    }
+
+    #[test]
+    fn wallpaper_picker_lists_then_delegates_the_selected_filename() {
+        let scratch = Scratch::new();
+        let paths = scratch.paths();
+        let calls = scratch.0.join("wallpaper.calls");
+        scratch.executable(
+            "wallpaper",
+            &format!(
+                "printf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = list ]; then printf 'a.webp\\nb.png\\n'; fi",
+                calls.display()
+            ),
+        );
+        let mut input = io::Cursor::new(b"2\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        dispatch(
+            vec![OsString::from("wallpaper"), OsString::from("pick")],
+            &paths,
+            &mut input,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(calls).unwrap(), "list\nset b.png\n");
+        assert!(String::from_utf8(stdout).unwrap().contains("2. b.png"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn font_family_is_forwarded_as_one_argument_to_the_existing_integration_owner() {
+        let scratch = Scratch::new();
+        let paths = scratch.paths();
+        let calls = scratch.0.join("font.calls");
+        scratch.executable(
+            "integrations",
+            &format!("for arg in \"$@\"; do printf '<%s>\\n' \"$arg\" >> '{}'; done", calls.display()),
+        );
+        let mut input = io::Cursor::new(Vec::<u8>::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        dispatch(
+            vec![
+                OsString::from("font"),
+                OsString::from("set"),
+                OsString::from("Fira Code"),
+            ],
+            &paths,
+            &mut input,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(calls).unwrap(), "<font>\n<set>\n<Fira Code>\n");
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn wallpaper_picker_cancellation_does_not_call_set() {
+        let scratch = Scratch::new();
+        let paths = scratch.paths();
+        let calls = scratch.0.join("wallpaper.calls");
+        scratch.executable(
+            "wallpaper",
+            &format!(
+                "printf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = list ]; then printf 'a.webp\\n'; fi",
+                calls.display()
+            ),
+        );
+        let mut input = io::Cursor::new(b"0\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        dispatch(
+            vec![OsString::from("wallpaper"), OsString::from("pick")],
+            &paths,
+            &mut input,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(calls).unwrap(), "list\n");
+    }
+
+    #[test]
+    fn font_picker_uses_the_font_list_and_set_actions() {
+        let scratch = Scratch::new();
+        let paths = scratch.paths();
+        let calls = scratch.0.join("font.calls");
+        scratch.executable(
+            "integrations",
+            &format!(
+                "printf '%s\\n' \"$*\" >> '{}'\nif [ \"$1 $2\" = 'font list' ]; then printf 'Fira Code\\n'; fi",
+                calls.display()
+            ),
+        );
+        let mut input = io::Cursor::new(b"1\n".to_vec());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        dispatch(
+            vec![OsString::from("font"), OsString::from("pick")],
+            &paths,
+            &mut input,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(calls).unwrap(), "font list\nfont set Fira Code\n");
+        assert!(String::from_utf8(stdout).unwrap().contains("1. Fira Code"));
     }
 }
