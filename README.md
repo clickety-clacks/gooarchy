@@ -60,10 +60,11 @@ For behavior checks on an installed candidate, use the [end-to-end runbooks](doc
 unattended, reboots into Scottland and checks the desktop, saving screenshots, logs and a manifest
 of the run. Run it on a spare or test machine, not one you're using.
 
-You need an x86_64 Linux machine with KVM (`/dev/kvm`), QEMU with its virtio-gpu modules, python3,
-OpenSSH (`ssh`, `ssh-keygen`), curl, git and tar. The default graphics (virgl) also need a usable GPU
-render node (`/dev/dri/renderD*`); without one, set `GOOARCHY_VM_GPU=software`. On an Arch-based
-machine without QEMU or root, `tests/vm/fetch-qemu.sh` unpacks a private copy first.
+You need an x86_64 Linux machine with KVM (`/dev/kvm`), QEMU, python3, OpenSSH (`ssh`, `ssh-keygen`),
+curl, git and tar. The default graphics (virgl) need QEMU's virtio-gpu support and a usable GPU render
+node (`/dev/dri/renderD*`). Without those, set `GOOARCHY_VM_GPU=software`; it uses standard VGA with
+the guest's software renderer and can use the supported `none` display backend or loopback VNC. On an
+Arch-based machine without QEMU or root, `tests/vm/fetch-qemu.sh` unpacks a private copy first.
 
 ```sh
 git clone https://github.com/clickety-clacks/gooarchy.git
