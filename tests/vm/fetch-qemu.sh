@@ -1,7 +1,7 @@
 #!/bin/bash
 # Put a private copy of QEMU (x86_64 system emulator, virgl display) under the VM test directory,
 # for an Arch-based test machine where QEMU isn't installed and root isn't available. Downloads the
-# Arch packages QEMU needs beyond what the machine already has, unpacks them into
+# Arch packages QEMU needs and its BIOS data package, unpacks them into
 # $GOOARCHY_VM_DIR/qemu and writes wrappers in $GOOARCHY_VM_DIR/qemu/bin. Nothing is installed
 # system-wide. Needs pacman and fakeroot. GOOARCHY_VM_PROXY is used for downloads when set.
 set -euo pipefail
@@ -9,9 +9,10 @@ dir=${GOOARCHY_VM_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gooarchy-vm-test}
 mirror=${GOOARCHY_VM_MIRROR:-https://geo.mirror.pkgbuild.com}
 prefix=$dir/qemu
 work=$dir/qemu-download
+firmware=$prefix/usr/share/qemu/bios-256k.bin
 [[ -n ${GOOARCHY_VM_PROXY:-} ]] && export ALL_PROXY=$GOOARCHY_VM_PROXY
 
-if [[ -x $prefix/bin/qemu-system-x86_64 ]]; then
+if [[ -x $prefix/bin/qemu-system-x86_64 && -s $firmware ]]; then
   echo "QEMU already unpacked in $prefix"
   exit 0
 fi
@@ -36,11 +37,18 @@ fakeroot pacman --config "$work/pacman.conf" --dbpath "$work/db" --cachedir "$wo
   qemu-system-x86 qemu-img qemu-ui-egl-headless qemu-ui-opengl \
   qemu-hw-display-virtio-gpu qemu-hw-display-virtio-gpu-gl qemu-hw-display-virtio-gpu-pci \
   qemu-hw-display-virtio-gpu-pci-gl qemu-hw-display-virtio-vga qemu-hw-display-virtio-vga-gl \
-  virglrenderer >/dev/null
+  virglrenderer seabios >/dev/null
 
 for package in "$work"/cache/*.pkg.tar.zst; do
+  [[ -f $package ]] || continue
   tar -C "$prefix" -xf "$package" --exclude=.PKGINFO --exclude=.BUILDINFO --exclude=.MTREE --exclude=.INSTALL
 done
+
+[[ -s $firmware ]] || {
+  echo "fetch-qemu: SeaBIOS firmware missing after package staging: $firmware" >&2
+  rm -rf "$work"
+  exit 1
+}
 
 mkdir -p "$prefix/bin"
 for tool in qemu-system-x86_64 qemu-img; do
