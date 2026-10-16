@@ -1,7 +1,7 @@
 #!/bin/bash
 # Put a private copy of QEMU (x86_64 system emulator, virgl display) under the VM test directory,
 # for an Arch-based test machine where QEMU isn't installed and root isn't available. Downloads the
-# Arch packages QEMU needs and its BIOS data package, unpacks them into
+# Arch packages QEMU needs and its BIOS data packages, unpacks them into
 # $GOOARCHY_VM_DIR/qemu and writes wrappers in $GOOARCHY_VM_DIR/qemu/bin. Nothing is installed
 # system-wide. Needs pacman and fakeroot. GOOARCHY_VM_PROXY is used for downloads when set.
 set -euo pipefail
@@ -9,10 +9,19 @@ dir=${GOOARCHY_VM_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gooarchy-vm-test}
 mirror=${GOOARCHY_VM_MIRROR:-https://geo.mirror.pkgbuild.com}
 prefix=$dir/qemu
 work=$dir/qemu-download
-firmware=$prefix/usr/share/qemu/bios-256k.bin
+firmware_dir=$prefix/usr/share/qemu
+firmware_files=(bios-256k.bin kvmvapic.bin efi-virtio.rom)
 [[ -n ${GOOARCHY_VM_PROXY:-} ]] && export ALL_PROXY=$GOOARCHY_VM_PROXY
 
-if [[ -x $prefix/bin/qemu-system-x86_64 && -s $firmware ]]; then
+firmware_missing() {
+  local file missing=()
+  for file in "${firmware_files[@]}"; do
+    [[ -s $firmware_dir/$file ]] || missing+=("$file")
+  done
+  printf '%s\n' "${missing[*]}"
+}
+
+if [[ -x $prefix/bin/qemu-system-x86_64 ]] && [[ -z $(firmware_missing) ]]; then
   echo "QEMU already unpacked in $prefix"
   exit 0
 fi
@@ -20,7 +29,8 @@ fi
 command -v fakeroot >/dev/null || { echo "fetch-qemu: needs fakeroot" >&2; exit 1; }
 rm -rf "$work"
 mkdir -p "$work/db" "$work/cache" "$prefix"
-# Start from the machine's own package database, so only what's missing is downloaded.
+# Start from the machine's own package database; explicitly target the firmware packages because
+# their dependencies may already be installed and therefore absent from the download cache.
 cp -a /var/lib/pacman/local "$work/db/"
 cat >"$work/pacman.conf" <<EOF
 [options]
@@ -37,15 +47,16 @@ fakeroot pacman --config "$work/pacman.conf" --dbpath "$work/db" --cachedir "$wo
   qemu-system-x86 qemu-img qemu-ui-egl-headless qemu-ui-opengl \
   qemu-hw-display-virtio-gpu qemu-hw-display-virtio-gpu-gl qemu-hw-display-virtio-gpu-pci \
   qemu-hw-display-virtio-gpu-pci-gl qemu-hw-display-virtio-vga qemu-hw-display-virtio-vga-gl \
-  virglrenderer seabios >/dev/null
+  virglrenderer qemu-common qemu-system-x86-firmware seabios >/dev/null
 
 for package in "$work"/cache/*.pkg.tar.zst; do
   [[ -f $package ]] || continue
   tar -C "$prefix" -xf "$package" --exclude=.PKGINFO --exclude=.BUILDINFO --exclude=.MTREE --exclude=.INSTALL
 done
 
-[[ -s $firmware ]] || {
-  echo "fetch-qemu: SeaBIOS firmware missing after package staging: $firmware" >&2
+missing=$(firmware_missing)
+[[ -z $missing ]] || {
+  echo "fetch-qemu: required QEMU firmware missing after package staging: $missing" >&2
   rm -rf "$work"
   exit 1
 }
