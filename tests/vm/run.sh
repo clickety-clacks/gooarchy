@@ -50,9 +50,10 @@
 #   GOOARCHY_VM_IMAGE_SHA256  expected checksum of that image (checked on every run when set)
 #   GOOARCHY_VM_QEMU_BIN    directory holding qemu-system-x86_64 and qemu-img (default: the copy
 #                           tests/vm/fetch-qemu.sh unpacked, else PATH)
-#   GOOARCHY_VM_GPU         virgl (default: guest GL through the host GPU) or software (llvmpipe)
+#   GOOARCHY_VM_GPU         virgl (default: guest GL through the host GPU) or software (llvmpipe on
+#                           standard VGA)
 #   GOOARCHY_VM_RENDERNODE  host render node for virgl (default: the first /dev/dri/renderD*)
-#   GOOARCHY_VM_SIZE        guest screen size (default 1920x1080)
+#   GOOARCHY_VM_SIZE        requested guest screen size in virgl mode (default 1920x1080)
 #   GOOARCHY_VM_VNC         1: show the screen over VNC on 127.0.0.1:5900 (software graphics only)
 #   GOOARCHY_VM_REBUILD_REF Scottland commit for rebuild-check (default: a later commit whose
 #                           PKGBUILD has the same version as the pinned one)
@@ -71,6 +72,7 @@
 set -euo pipefail
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
+source "$here/qemu-graphics.sh"
 dir=${GOOARCHY_VM_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gooarchy-vm-test}
 image_url=${GOOARCHY_VM_IMAGE_URL:-https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2}
 gpu=${GOOARCHY_VM_GPU:-virgl}
@@ -293,7 +295,8 @@ cmd_start() {
 }
 
 start_qemu() {
-  local seed_port display
+  local seed_port
+  local -a display
   local kernel_args=()
   if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
     [[ -s $run/kernel/vmlinuz && -s $run/kernel/initramfs.img && -s $run/kernel/cmdline ]] ||
@@ -301,21 +304,8 @@ start_qemu() {
     kernel_args=(-kernel "$run/kernel/vmlinuz" -initrd "$run/kernel/initramfs.img"
                  -append "$(cat "$run/kernel/cmdline")")
   fi
+  qemu_graphics_args display "$gpu" "$size" "${GOOARCHY_VM_VNC:-}" || die "invalid VM graphics configuration"
   seed_port=$(seed)
-  local xres=${size%x*} yres=${size#*x}
-  case $gpu in
-    virgl)
-      local node=${GOOARCHY_VM_RENDERNODE:-$(ls /dev/dri/renderD* 2>/dev/null | head -1)}
-      [[ -n $node ]] || die "no render node for virgl; set GOOARCHY_VM_GPU=software"
-      display=(-device "virtio-vga-gl,xres=$xres,yres=$yres" -display "egl-headless,rendernode=$node")
-      [[ ${GOOARCHY_VM_VNC:-} == 1 ]] && die "GOOARCHY_VM_VNC needs GOOARCHY_VM_GPU=software"
-      ;;
-    software)
-      display=(-device "virtio-vga,xres=$xres,yres=$yres" -display none)
-      [[ ${GOOARCHY_VM_VNC:-} == 1 ]] && display+=(-vnc 127.0.0.1:0)
-      ;;
-    *) die "GOOARCHY_VM_GPU must be virgl or software" ;;
-  esac
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
