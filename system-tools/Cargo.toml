@@ -3,7 +3,7 @@
 # workspace builds and tests as a whole. packaging/arch/PKGBUILD builds and installs it.
 [workspace]
 resolver = "3"
-members = ["common", "gooarchy", "lock"]
+members = ["common", "gooarchy", "lock", "look"]
 
 [workspace.package]
 version = "0.0.1"
