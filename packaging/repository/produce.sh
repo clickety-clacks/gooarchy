@@ -208,23 +208,20 @@ fi
 if [[ ${recipe_for[gooarchy-flavorings]+present} &&
   ${recipe_for[gooarchy-flavorings]} != @scottland &&
   ${recipe_for[gooarchy-flavorings]} == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]]; then
-  flavorings_source_ref=$(sed -n 's/^_tag=//p' "${recipe_for[gooarchy-flavorings]}")
-  [[ $flavorings_source_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-    die "gooarchy-flavorings must be pinned to one final version tag."
-  flavorings_pkgver=$(sed -n 's/^pkgver=//p' "${recipe_for[gooarchy-flavorings]}" | sed -n '1p')
-  flavorings_pkgrel=$(sed -n 's/^pkgrel=//p' "${recipe_for[gooarchy-flavorings]}" | sed -n '1p')
-  [[ $flavorings_pkgver =~ ^[0-9][A-Za-z0-9._+~:-]*$ && $flavorings_pkgrel =~ ^[0-9]+$ ]] ||
-    die "gooarchy-flavorings recipe package version is invalid."
-  flavorings_package_version="$flavorings_pkgver-$flavorings_pkgrel"
+  flavorings_recipe_identity=$(python3 "$script_dir/repository-protocol.py" flavorings-recipe-identity \
+    --recipe "${recipe_for[gooarchy-flavorings]}") || die "gooarchy-flavorings recipe identity is invalid."
+  flavorings_source_ref=$(jq -er '.source.tag' <<<"$flavorings_recipe_identity") || die "Flavorings tag is missing."
+  flavorings_package_version=$(jq -er '.version' <<<"$flavorings_recipe_identity") || die "Flavorings package version is missing."
 fi
 flavorings_input_filename=
 flavorings_source_revision=
 if [[ -n $flavorings_package ]]; then
-  flavorings_input_manifest="$repo_root/packaging/gooarchy-flavorings/v0.1.1-input.json"
+  flavorings_input_manifest=$(python3 "$script_dir/repository-protocol.py" flavorings-input-manifest-path \
+    --recipe "$repo_root/packaging/gooarchy-flavorings/PKGBUILD") || die "could not select the pinned Flavorings package-input manifest."
   [[ -s $flavorings_input_manifest ]] || die "the reviewed Flavorings package-input manifest is missing."
   flavorings_input_record=$(python3 "$script_dir/repository-protocol.py" verify-flavorings-input \
     --archive "$flavorings_package" --manifest "$flavorings_input_manifest" \
-    --expected-tag "$flavorings_source_ref" --expected-version "$flavorings_package_version") ||
+    --recipe "$repo_root/packaging/gooarchy-flavorings/PKGBUILD") ||
     die "the prebuilt Flavorings package does not match the reviewed source input."
   flavorings_input_filename=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["filename"])' <<<"$flavorings_input_record")
   flavorings_source_revision=$(python3 -c 'import json,sys; x=json.load(sys.stdin); s=x["source"]; print("Flavorings tag:{} commit:{} tree:{}; source archive SHA256:{}; PKGBUILD SHA256:{}; imported package SHA256:{}".format(s["tag"],s["commit"],s["tree"],s["archive_sha256"],x["pkgbuild_sha256"],x["sha256"]))' \
@@ -301,8 +298,8 @@ for package_name in "${requested_packages[@]}"; do
     if [[ $package_name == gooarchy-flavorings && -n $flavorings_package ]]; then
       python3 "$script_dir/repository-protocol.py" stage-flavorings-input \
         --archive "$flavorings_package" --output "$built_dir/$flavorings_input_filename" \
-        --manifest "$repo_root/packaging/gooarchy-flavorings/v0.1.1-input.json" \
-        --expected-tag "$flavorings_source_ref" --expected-version "$flavorings_package_version" \
+        --manifest "$flavorings_input_manifest" \
+        --recipe "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" \
         >/dev/null || die "the staged prebuilt Flavorings archive does not match its reviewed source input."
       recipe_built[$recipe_file]=1
       source_revision[$package_name]=$flavorings_source_revision
@@ -323,7 +320,10 @@ for package_name in "${requested_packages[@]}"; do
       case $package_name in
         gooarchy-flavorings)
           if [[ $recipe_file == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]]; then
-            source_revision[$package_name]="Gooarchy $checkout_commit; gooarchy-flavorings tag:$flavorings_source_ref"
+            flavorings_source_commit=$(jq -er '.source.commit' <<<"$flavorings_recipe_identity")
+            flavorings_source_tree=$(jq -er '.source.tree' <<<"$flavorings_recipe_identity")
+            flavorings_source_archive_sha256=$(jq -er '.source.archive_sha256' <<<"$flavorings_recipe_identity")
+            source_revision[$package_name]="Gooarchy $checkout_commit; gooarchy-flavorings tag:$flavorings_source_ref commit:$flavorings_source_commit tree:$flavorings_source_tree source-archive-sha256:$flavorings_source_archive_sha256"
           else
             source_revision[$package_name]="Gooarchy $checkout_commit; $scottland_source_label"
           fi

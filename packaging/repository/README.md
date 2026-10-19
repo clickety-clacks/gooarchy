@@ -38,18 +38,25 @@ retains packages that were not rebuilt, and creates the next unsigned `gooarchy.
 the configured public key and fingerprint. It does not read signing credentials, make signatures,
 or upload files.
 
-For the already-built Flavorings `v0.1.1` input, pass its package archive explicitly:
+To import a built Flavorings package, pass the archive for the tag pinned by the current recipe:
 
 ```sh
 packaging/repository/produce.sh --output /path/to/new-transfer \
-  --flavorings-package /path/to/gooarchy-flavorings-0.1.1-1-any.pkg.tar.zst --all
+  --flavorings-package "$FLAVORINGS_ARCHIVE" --all
 ```
 
-That input is accepted only when it matches
-`packaging/gooarchy-flavorings/v0.1.1-input.json` and the current Flavorings recipe. The producer
-checks the package SHA-256, exact source tag/version, `.PKGINFO`, and `.BUILDINFO` packager and
-PKGBUILD hash before copying it into the build workspace. The transfer source record retains the
-tag, source commit/tree, source-archive hash, build-recipe hash, and imported package hash. If no
+Set `FLAVORINGS_ARCHIVE` to the package archive whose filename matches its package-input manifest.
+
+That input is accepted only when it matches the package-input manifest named for the selected
+source tag (for example, `packaging/gooarchy-flavorings/v0.2.0-input.json`) and the current
+Flavorings recipe. The recipe keeps the final tag as its sole source selector and records the
+expected upstream commit, tree, and source-archive SHA-256 for that tag. The package function checks
+that the tag checkout resolves to the recorded commit and tree. A future package-input manifest
+must record the built archive's SHA-256, package version and architecture, packager, PKGBUILD
+SHA-256, and matching source tag, commit, tree, and source-archive SHA-256. The producer checks
+those identities and the archive's `.PKGINFO` and `.BUILDINFO` before staging it. Create that
+manifest only from an observed package build and its metadata; the source pin alone does not
+establish package identity. The transfer source record retains the same provenance. If no
 archive is supplied, the producer builds Flavorings from the pinned recipe as usual.
 
 The output directory is a complete immutable transfer with this layout:
