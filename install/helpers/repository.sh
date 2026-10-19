@@ -39,7 +39,24 @@ sync_package_field() {
 # only while pacman resolves or downloads the bootstrap archive. The `=0` value
 # is a resolver placeholder; the actual package is built and installed later.
 repository_gooarchy_bootstrap_filename() {
-  pacman -Sp --nodeps --assume-installed strata-bin=0 --print-format '%f' gooarchy/gooarchy
+  local package_list package filename gooarchy_filename=
+  package_list=$(pacman -Sp --nodeps --assume-installed strata-bin=0 \
+    --print-format '%n %f' gooarchy/gooarchy) || return 1
+
+  while read -r package filename; do
+    [[ $package == gooarchy ]] || continue
+    if [[ -z $filename || $filename == */* || -n $gooarchy_filename ]]; then
+      echo "Pacman returned an invalid Gooarchy bootstrap package filename." >&2
+      return 1
+    fi
+    gooarchy_filename=$filename
+  done <<<"$package_list"
+
+  if [[ -z $gooarchy_filename ]]; then
+    echo "Pacman did not resolve the Gooarchy bootstrap package filename." >&2
+    return 1
+  fi
+  printf '%s\n' "$gooarchy_filename"
 }
 
 download_repository_gooarchy_bootstrap() {

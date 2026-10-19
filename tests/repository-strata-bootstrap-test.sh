@@ -9,8 +9,8 @@ trap 'rm -rf -- "$test_root"' EXIT
 mkdir -p "$test_root/cache"
 pacman_calls=$test_root/pacman-calls
 
-# Model the reviewed case: strata-bin is not installed and is the only
-# dependency absent from the signed Gooarchy repository.
+# Model the bootstrap case: xorg-xwayland is declared but not installed, so
+# its archive appears before Gooarchy in pacman's package-name/filename output.
 pacman() {
   local mode=${1:-} argument assumed= count=0
   printf '%s\0' "$@" >>"$pacman_calls"
@@ -28,7 +28,10 @@ pacman() {
     return 1
   }
   case $mode in
-    -Sp) printf '%s\n' gooarchy-1-1-any.pkg.tar.zst ;;
+    -Sp)
+      printf '%s %s\n' xorg-xwayland xorg-xwayland-24.1.6-1-x86_64.pkg.tar.zst
+      printf '%s %s\n' gooarchy gooarchy-1-1-any.pkg.tar.zst
+      ;;
     -Sw) return 0 ;;
     *) echo "unexpected pacman operation: $mode" >&2; return 1 ;;
   esac
@@ -67,7 +70,7 @@ for token in tokens:
 expected = [
     [
         "-Sp", "--nodeps", "--assume-installed", "strata-bin=0",
-        "--print-format", "%f", "gooarchy/gooarchy",
+        "--print-format", "%n %f", "gooarchy/gooarchy",
     ],
     [
         "-Sw", "--nodeps", "--assume-installed", "strata-bin=0",
@@ -79,4 +82,5 @@ if calls != expected:
 print("strata-bin bootstrap assumption passed to both package-resolution and download calls")
 PY
 
+echo "Gooarchy bootstrap selected its own archive after xorg-xwayland appeared first."
 echo "Gooarchy retains the strata-bin hard dependency; both bootstrap pacman calls assume only strata-bin=0."

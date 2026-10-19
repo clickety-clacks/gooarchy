@@ -53,7 +53,7 @@ if ((current_gooarchy_repository_copy)) &&
 fi
 
 mkdir -p "$GOOARCHY_BUILD"
-repo_cache=$(mktemp -d "$GOOARCHY_BUILD/portal-package.XXXXXX")
+repo_cache=$(mktemp -d /tmp/gooarchy-portal-package.XXXXXX)
 chmod 755 "$repo_cache"
 trap 'sudo rm -rf -- "$repo_cache"' EXIT
 download_repository_packages "$repo_cache" "gooarchy/$name=$repo_version" || {

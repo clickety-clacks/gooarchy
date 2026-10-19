@@ -7,7 +7,7 @@ source "$GOOARCHY_INSTALL/helpers/repository.sh"
 source "$GOOARCHY_INSTALL/helpers/logging.sh"
 load_repository_plan
 if ((GOOARCHY_REPLACE_SCOTTLAND)); then
-  repo_cache=$(mktemp -d "$GOOARCHY_BUILD/repository-package.XXXXXX")
+  repo_cache=$(mktemp -d /tmp/gooarchy-repository-package.XXXXXX)
   chmod 755 "$repo_cache"
   trap 'sudo rm -rf -- "$repo_cache"' EXIT
   download_repository_packages "$repo_cache" \
