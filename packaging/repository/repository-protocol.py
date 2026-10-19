@@ -131,11 +131,49 @@ def build_info(path: Path) -> dict[str, str]:
     }
 
 
-def verify_flavorings_input(
-    archive: Path, manifest_path: Path, expected_tag: str, expected_version: str
-) -> dict[str, Any]:
+def flavorings_recipe_identity(recipe_path: Path) -> dict[str, Any]:
+    text = recipe_path.read_text(encoding="utf-8")
+
+    def assignment(name: str) -> str:
+        matches = re.findall(rf"(?m)^{re.escape(name)}=([^\r\n]*)$", text)
+        if len(matches) != 1 or not matches[0]:
+            fail(f"Flavorings recipe must define exactly one {name}")
+        return matches[0]
+
+    package = assignment("pkgname")
+    tag = assignment("_tag")
+    pkgver = assignment("pkgver")
+    pkgrel = assignment("pkgrel")
+    commit = assignment("_upstream_commit")
+    tree = assignment("_upstream_tree")
+    archive_sha256 = assignment("_upstream_archive_sha256")
+    if package != "gooarchy-flavorings":
+        fail("Flavorings recipe has an unexpected package name")
+    if not VERSION_TAG_RE.fullmatch(tag) or pkgver != tag[1:] or not re.fullmatch(r"[0-9]+", pkgrel):
+        fail("Flavorings recipe tag and package version do not agree")
+    if not COMMIT_RE.fullmatch(commit) or not COMMIT_RE.fullmatch(tree):
+        fail("Flavorings recipe source commit or tree identity is invalid")
+    if not SHA256_RE.fullmatch(archive_sha256):
+        fail("Flavorings recipe source archive hash is invalid")
+    return {
+        "package": package,
+        "pkgver": pkgver,
+        "pkgrel": pkgrel,
+        "version": f"{pkgver}-{pkgrel}",
+        "source": {
+            "repository": FLAVORINGS_REPOSITORY,
+            "tag": tag,
+            "commit": commit,
+            "tree": tree,
+            "archive_sha256": archive_sha256,
+        },
+    }
+
+
+def verify_flavorings_input(archive: Path, manifest_path: Path, recipe_path: Path) -> dict[str, Any]:
     if archive.is_symlink() or not archive.is_file():
         fail("prebuilt Flavorings input must be a regular package archive")
+    expected = flavorings_recipe_identity(recipe_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     required = {"schema", "package", "version", "architecture", "filename", "sha256", "packager", "pkgbuild_sha256", "source"}
     if not isinstance(manifest, dict) or set(manifest) != required:
@@ -148,22 +186,14 @@ def verify_flavorings_input(
         fail("prebuilt Flavorings source identity has invalid fields")
     if source["repository"] != FLAVORINGS_REPOSITORY:
         fail("prebuilt Flavorings source repository is not the reviewed upstream")
-    if not isinstance(source["tag"], str) or not VERSION_TAG_RE.fullmatch(source["tag"]):
-        fail("prebuilt Flavorings source must identify one final version tag")
-    if source["tag"] != expected_tag:
-        fail("prebuilt Flavorings tag does not match the current recipe")
-    if not isinstance(source["commit"], str) or not COMMIT_RE.fullmatch(source["commit"]):
-        fail("prebuilt Flavorings source commit is invalid")
-    if not isinstance(source["tree"], str) or not COMMIT_RE.fullmatch(source["tree"]):
-        fail("prebuilt Flavorings source tree is invalid")
-    if not isinstance(source["archive_sha256"], str) or not SHA256_RE.fullmatch(source["archive_sha256"]):
-        fail("prebuilt Flavorings source archive hash is invalid")
-    if manifest["version"] != expected_version:
+    if source != expected["source"]:
+        fail("prebuilt Flavorings source identity does not match the current recipe")
+    if manifest["version"] != expected["version"]:
         fail("prebuilt Flavorings package version does not match the current recipe")
     if manifest["architecture"] != "any" or manifest["packager"] != "Gooarchy":
         fail("prebuilt Flavorings architecture or packager is not eligible")
     if not isinstance(manifest["filename"], str) or manifest["filename"] != (
-        f"gooarchy-flavorings-{expected_version}-any.pkg.tar.zst"
+        f"gooarchy-flavorings-{expected['version']}-any.pkg.tar.zst"
     ):
         fail("prebuilt Flavorings filename does not match its package identity")
     safe_asset_name(manifest["filename"])
@@ -178,25 +208,29 @@ def verify_flavorings_input(
 
     package = package_info(archive)
     build = build_info(archive)
-    expected = {
+    package_expected = {
         "name": "gooarchy-flavorings",
-        "version": expected_version,
+        "version": expected["version"],
         "arch": "any",
         "packager": "Gooarchy",
     }
-    if package != expected:
+    if package != package_expected:
         fail("prebuilt Flavorings .PKGINFO does not match the reviewed package identity")
     if build != {
-        **expected,
+        **package_expected,
         "pkgbuild_sha256": manifest["pkgbuild_sha256"],
     }:
         fail("prebuilt Flavorings .BUILDINFO does not match its reviewed build identity")
     return manifest
 
 
-def stage_flavorings_input(
-    archive: Path, output: Path, manifest_path: Path, expected_tag: str, expected_version: str
-) -> dict[str, Any]:
+def flavorings_input_manifest_path(recipe_path: Path) -> Path:
+    """Resolve the package receipt belonging to the final source tag in the recipe."""
+    identity = flavorings_recipe_identity(recipe_path)
+    return recipe_path.parent / f"{identity['source']['tag']}-input.json"
+
+
+def stage_flavorings_input(archive: Path, output: Path, manifest_path: Path, recipe_path: Path) -> dict[str, Any]:
     """Copy a prebuilt input into private staging, then validate the staged bytes."""
     if output.exists() or output.is_symlink():
         fail("staged Flavorings output already exists")
@@ -217,7 +251,7 @@ def stage_flavorings_input(
                 output_fd = -1
                 shutil.copyfileobj(source, destination)
         os.chmod(output, 0o400)
-        return verify_flavorings_input(output, manifest_path, expected_tag, expected_version)
+        return verify_flavorings_input(output, manifest_path, recipe_path)
     except BaseException:
         if created_output:
             output.unlink(missing_ok=True)
@@ -746,17 +780,19 @@ def verify_signature_manifest(
 def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
+    flavorings_recipe = commands.add_parser("flavorings-recipe-identity")
+    flavorings_recipe.add_argument("--recipe", type=Path, required=True)
     flavorings_input = commands.add_parser("verify-flavorings-input")
     flavorings_input.add_argument("--archive", type=Path, required=True)
     flavorings_input.add_argument("--manifest", type=Path, required=True)
-    flavorings_input.add_argument("--expected-tag", required=True)
-    flavorings_input.add_argument("--expected-version", required=True)
+    flavorings_input.add_argument("--recipe", type=Path, required=True)
+    flavorings_manifest_path = commands.add_parser("flavorings-input-manifest-path")
+    flavorings_manifest_path.add_argument("--recipe", type=Path, required=True)
     flavorings_stage = commands.add_parser("stage-flavorings-input")
     flavorings_stage.add_argument("--archive", type=Path, required=True)
     flavorings_stage.add_argument("--output", type=Path, required=True)
     flavorings_stage.add_argument("--manifest", type=Path, required=True)
-    flavorings_stage.add_argument("--expected-tag", required=True)
-    flavorings_stage.add_argument("--expected-version", required=True)
+    flavorings_stage.add_argument("--recipe", type=Path, required=True)
     package_metadata = commands.add_parser("package-info")
     package_metadata_source = package_metadata.add_mutually_exclusive_group(required=True)
     package_metadata_source.add_argument("--archive", type=Path)
@@ -793,9 +829,11 @@ def main() -> int:
                 sys.stdin.read(), "package metadata"
             )
             print(json.dumps(info, sort_keys=True, separators=(",", ":")))
+        elif args.command == "flavorings-recipe-identity":
+            print(json.dumps(flavorings_recipe_identity(args.recipe), sort_keys=True, separators=(",", ":")))
         elif args.command == "verify-flavorings-input":
             manifest = verify_flavorings_input(
-                args.archive, args.manifest, args.expected_tag, args.expected_version
+                args.archive, args.manifest, args.recipe
             )
             print(json.dumps({
                 "package": manifest["package"],
@@ -805,9 +843,11 @@ def main() -> int:
                 "source": manifest["source"],
                 "pkgbuild_sha256": manifest["pkgbuild_sha256"],
             }, sort_keys=True, separators=(",", ":")))
+        elif args.command == "flavorings-input-manifest-path":
+            print(flavorings_input_manifest_path(args.recipe))
         elif args.command == "stage-flavorings-input":
             manifest = stage_flavorings_input(
-                args.archive, args.output, args.manifest, args.expected_tag, args.expected_version
+                args.archive, args.output, args.manifest, args.recipe
             )
             print(json.dumps({
                 "package": manifest["package"],
