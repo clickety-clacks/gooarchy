@@ -162,7 +162,7 @@ strata_build_dir=$(mktemp -d /tmp/gooarchy-strata-dependency.XXXXXX)
 chown installer:installer "$strata_build_dir"
 sudo -u installer -H env -u XDG_CACHE_HOME git clone "$strata_aur" "$strata_build_dir"
 sudo -u installer -H git -C "$strata_build_dir" checkout --detach "$strata_ref"
-[[ $(git -C "$strata_build_dir" rev-parse HEAD) == "$strata_ref" ]]
+[[ $(sudo -u installer -H git -C "$strata_build_dir" rev-parse HEAD) == "$strata_ref" ]]
 sudo -u installer -H env -u XDG_CACHE_HOME /bin/bash -c \
   'set -Eeuo pipefail; cd "$1"; makepkg --syncdeps --noconfirm --force' _ "$strata_build_dir"
 strata_package=$(find "$strata_build_dir" -maxdepth 1 -type f -name 'strata-bin-*.pkg.tar.zst' -print -quit)
