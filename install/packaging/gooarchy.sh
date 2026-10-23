@@ -100,7 +100,7 @@ else
   done
 
   if ((${#targets[@]})); then
-    repo_cache=$(mktemp -d "$GOOARCHY_BUILD/repository-package.XXXXXX")
+    repo_cache=$(mktemp -d /tmp/gooarchy-repository-package.XXXXXX)
     chmod 755 "$repo_cache"
     trap 'sudo rm -rf -- "$repo_cache"' EXIT
     download_repository_packages "$repo_cache" "${targets[@]}"

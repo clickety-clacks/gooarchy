@@ -39,7 +39,24 @@ sync_package_field() {
 # only while pacman resolves or downloads the bootstrap archive. The `=0` value
 # is a resolver placeholder; the actual package is built and installed later.
 repository_gooarchy_bootstrap_filename() {
-  pacman -Sp --nodeps --assume-installed strata-bin=0 --print-format '%f' gooarchy/gooarchy
+  local package_list package filename gooarchy_filename=
+  package_list=$(pacman -Sp --nodeps --assume-installed strata-bin=0 \
+    --print-format '%n %f' gooarchy/gooarchy) || return 1
+
+  while read -r package filename; do
+    [[ $package == gooarchy ]] || continue
+    if [[ -z $filename || $filename == */* || -n $gooarchy_filename ]]; then
+      echo "Pacman returned an invalid Gooarchy bootstrap package filename." >&2
+      return 1
+    fi
+    gooarchy_filename=$filename
+  done <<<"$package_list"
+
+  if [[ -z $gooarchy_filename ]]; then
+    echo "Pacman did not resolve the Gooarchy bootstrap package filename." >&2
+    return 1
+  fi
+  printf '%s\n' "$gooarchy_filename"
 }
 
 download_repository_gooarchy_bootstrap() {
@@ -48,25 +65,51 @@ download_repository_gooarchy_bootstrap() {
 }
 
 download_repository_packages() {
-  local cache=$1 filename_output filename
+  local cache=$1 filename_output package filename target target_package index
   shift
-  local -a filenames=()
+  local -a package_names=() filenames=()
   REPOSITORY_PACKAGE_ARCHIVES=()
-  filename_output=$(pacman -Sp --nodeps --print-format '%f' "$@") || {
+
+  for target in "$@"; do
+    target_package=${target##*/}
+    target_package=${target_package%%=*}
+    if [[ -z $target_package ]]; then
+      echo "Gooarchy's repository package target has no package name: $target" >&2
+      return 1
+    fi
+    for package in "${package_names[@]}"; do
+      if [[ $package == "$target_package" ]]; then
+        echo "Gooarchy's repository package target is duplicated: $target_package" >&2
+        return 1
+      fi
+    done
+    package_names+=("$target_package")
+    filenames+=("")
+  done
+
+  filename_output=$(pacman -Sp --nodeps --print-format '%n %f' "$@") || {
     echo "Gooarchy's repository packages could not be resolved: $*" >&2
     return 1
   }
-  mapfile -t filenames <<<"$filename_output"
-  if ((${#filenames[@]} != $#)); then
-    echo "Gooarchy's repository returned an unexpected package list for: $*" >&2
-    return 1
-  fi
-  for filename in "${filenames[@]}"; do
-    if [[ -z $filename || $filename == */* ]]; then
-      echo "Pacman returned an invalid repository package filename for: $*" >&2
+  while read -r package filename target_package; do
+    for index in "${!package_names[@]}"; do
+      [[ $package == "${package_names[index]}" ]] || continue
+      if [[ -z $filename || -n $target_package || $filename == */* ||
+        -n ${filenames[index]} ]]; then
+        echo "Pacman returned an invalid or duplicate repository package filename for $package." >&2
+        return 1
+      fi
+      filenames[index]=$filename
+    done
+  done <<<"$filename_output"
+
+  for index in "${!package_names[@]}"; do
+    if [[ -z ${filenames[index]} ]]; then
+      echo "Pacman did not resolve Gooarchy repository package ${package_names[index]}." >&2
       return 1
     fi
   done
+
   sudo pacman -Sw --nodeps --noconfirm --cachedir "$cache" "$@" || return 1
   for filename in "${filenames[@]}"; do
     if [[ ! -s $cache/$filename ]]; then

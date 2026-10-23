@@ -169,10 +169,10 @@ if ((scottland_override == 0)) && [[ $repo_wayfire_version != "$arch_wayfire_ver
 fi
 
 mkdir -p "$GOOARCHY_BUILD"
-repo_cache=$(mktemp -d "$GOOARCHY_BUILD/repository-package.XXXXXX")
+repo_cache=$(mktemp -d /tmp/gooarchy-repository-package.XXXXXX)
 chmod 755 "$repo_cache"
 trap 'sudo rm -rf -- "$repo_cache"' EXIT
-repo_filename=$(repository_gooarchy_bootstrap_filename | sed -n '1p')
+repo_filename=$(repository_gooarchy_bootstrap_filename)
 [[ -n $repo_filename && $repo_filename != */* ]] ||
   fail_repository "pacman could not resolve the repository's gooarchy package at $repository_url."
 if ! download_repository_gooarchy_bootstrap "$repo_cache"; then

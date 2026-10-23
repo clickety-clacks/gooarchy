@@ -86,7 +86,7 @@ case $1 in
     version=${name#*=}
     name=${name%%=*}
     [[ $version == "$repo_version" ]] || exit 3
-    printf '%s-%s-x86_64.pkg.tar.zst\n' "$name" "$version"
+    printf '%s %s-%s-x86_64.pkg.tar.zst\n' "$name" "$name" "$version"
     ;;
   -Sw)
     cache=
