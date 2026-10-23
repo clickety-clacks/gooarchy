@@ -86,6 +86,8 @@ install -d -o root -g root -m 0755 /etc/sudoers.d
 printf 'installer ALL=(ALL:ALL) NOPASSWD: ALL\n' >/etc/sudoers.d/installer
 chmod 0440 /etc/sudoers.d/installer
 visudo --check --file=/etc/sudoers.d/installer
+sudo -u installer -H git config --global --add safe.directory "$product"
+echo 'The installer user can read Git identity for the pinned product checkout.'
 
 installer_home_mode=$(sudo -u installer -H env -u XDG_CACHE_HOME /bin/bash -c \
   'printf "uid=%s home=%s home_mode=%s\n" "$(id -u)" "$HOME" "$(stat -c %a "$HOME")"')
