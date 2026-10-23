@@ -1,0 +1,82 @@
+name: arch-repository-acceptance
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+jobs:
+  repository-step:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: docker.io/library/archlinux@sha256:dfb01267da058e5d08ffdc543bf484c9b404655b0bac1d0201d972bf950cdfd0
+      options: --user 0:0
+    env:
+      ARCH_CONTAINER_IMAGE: docker.io/library/archlinux@sha256:dfb01267da058e5d08ffdc543bf484c9b404655b0bac1d0201d972bf950cdfd0
+    steps:
+      - name: Record the hosted Arch container and prepare checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/evidence"
+          {
+            printf 'runner_label=ubuntu-latest\n'
+            printf 'runner_os=%s\n' "$RUNNER_OS"
+            printf 'github_repository=%s\n' "$GITHUB_REPOSITORY"
+            printf 'github_run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'github_run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'github_ref=%s\n' "$GITHUB_REF"
+            printf 'github_sha=%s\n' "$GITHUB_SHA"
+            printf 'container_image=%s\n' "$ARCH_CONTAINER_IMAGE"
+            printf 'container_arch=%s\n' "$(uname -m)"
+            cat /etc/os-release
+          } | tee "$GITHUB_WORKSPACE/evidence/runtime.txt"
+          pacman-key --init 2>&1 | tee "$GITHUB_WORKSPACE/evidence/checkout-bootstrap.log"
+          pacman -Syu --noconfirm --needed git 2>&1 | tee -a "$GITHUB_WORKSPACE/evidence/checkout-bootstrap.log"
+
+      - name: Checkout the pull request harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+
+      - name: Checkout integrated source under test
+        uses: actions/checkout@v4
+        with:
+          repository: clickety-clacks/gooarchy
+          ref: e33e6843aca5202f4014ca807c05b644211f2764
+          path: product
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Exercise the repository step in stock Arch
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/harness/tests/acceptance/arch-repository-step.sh" \
+            "$GITHUB_WORKSPACE/product" "$GITHUB_WORKSPACE/evidence"
+
+      - name: Hash captured evidence
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d "$GITHUB_WORKSPACE/evidence" ]]; then
+            cd "$GITHUB_WORKSPACE"
+            find evidence -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 -r sha256sum > evidence/SHA256SUMS
+          fi
+
+      - name: Upload acceptance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-repository-acceptance
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
