@@ -2,6 +2,7 @@ name: arch-repository-acceptance
 
 on:
   pull_request:
+    types: [reopened]
 
 permissions:
   contents: read
