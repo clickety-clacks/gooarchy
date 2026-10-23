@@ -10,6 +10,11 @@ exec > >(tee -a "$evidence/acceptance.log") 2>&1
 finish() {
   local status=$?
   printf '%s\n' "$status" >"$evidence/exit-code"
+  if [[ -n ${telemetry_output:-} && -f $telemetry_output ]]; then
+    local hop_count
+    hop_count=$(grep -c '"event":"http_hop"' "$telemetry_output" || true)
+    printf 'PACMAN_HTTP_HOPS=%s\n' "$hop_count"
+  fi
   printf 'ACCEPTANCE_EXIT=%s\n' "$status"
 }
 trap finish EXIT
@@ -81,6 +86,33 @@ pacman -Syu --noconfirm --needed sudo base-devel git
 printf 'Installed pacman and Arch keyring versions:\n'
 pacman -Q pacman archlinux-keyring
 printf 'Global package signature policy: %s\n' "$(pacman-conf SigLevel)"
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly telemetry_source="$script_dir/pacman-transfer-telemetry.c"
+readonly telemetry_output="$evidence/pacman-transfer-telemetry.jsonl"
+readonly telemetry_library="$evidence/pacman-transfer-telemetry.so"
+readonly real_pacman=/usr/local/libexec/gooarchy-acceptance-pacman
+cp -- "${BASH_SOURCE[0]}" "$evidence/arch-repository-step.sh"
+cp -- "$telemetry_source" "$evidence/pacman-transfer-telemetry.c"
+printf 'Telemetry compiler: %s\n' "$(cc --version | sed -n '1p')"
+cc -std=c11 -Wall -Wextra -Werror -fPIC -shared \
+  "$telemetry_source" -o "$telemetry_library" -lcurl -ldl -pthread
+printf 'Telemetry library SHA-256: %s\n' "$(sha256sum "$telemetry_library" | awk '{print $1}')"
+install -d -o root -g root -m 0755 /usr/local/libexec
+if [[ -e $real_pacman ]]; then
+  echo 'The task-local pacman telemetry path already exists.' >&2
+  exit 1
+fi
+sha256sum /usr/bin/pacman >"$evidence/pacman-binary.sha256"
+install -o root -g root -m 0755 /usr/bin/pacman "$real_pacman"
+{
+  printf '#!/usr/bin/bash\n'
+  printf 'export GOOARCHY_TRANSFER_TELEMETRY=%q\n' "$telemetry_output"
+  printf 'export LD_PRELOAD=%q\n' "$telemetry_library"
+  printf 'exec %q "$@"\n' "$real_pacman"
+} >/usr/bin/pacman
+chmod 0755 /usr/bin/pacman
+printf 'Pacman transfer telemetry enabled without changing pacman arguments or settings.\n'
 
 install -d -o root -g root -m 0755 /etc/sudoers.d
 printf 'installer ALL=(ALL:ALL) NOPASSWD: ALL\n' >/etc/sudoers.d/installer
