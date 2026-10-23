@@ -136,10 +136,15 @@ if pacman -Qq | grep -Fxq strata-bin; then
   exit 1
 fi
 
-printf 'Direct resolver output while strata-bin is absent:\n'
-direct_resolution=$(pacman -Sp --nodeps --print-format '%n %f' gooarchy/gooarchy)
-printf '%s\n' "$direct_resolution"
-expected_bootstrap=$(awk '$1 == "gooarchy" {print $2; count++} END {if (count != 1) exit 1}' <<<"$direct_resolution")
+gooarchy_repo_info=$(pacman -Si gooarchy/gooarchy)
+gooarchy_repo_name=$(awk -F: '$1 ~ /^[[:space:]]*Name[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$gooarchy_repo_info")
+gooarchy_repo_version=$(awk -F: '$1 ~ /^[[:space:]]*Version[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$gooarchy_repo_info")
+gooarchy_repo_arch=$(awk -F: '$1 ~ /^[[:space:]]*Architecture[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$gooarchy_repo_info")
+[[ $gooarchy_repo_name == gooarchy && -n $gooarchy_repo_version && -n $gooarchy_repo_arch ]]
+expected_bootstrap="${gooarchy_repo_name}-${gooarchy_repo_version}-${gooarchy_repo_arch}.pkg.tar.zst"
+printf 'Gooarchy repository package identity: name=%s version=%s architecture=%s\n' \
+  "$gooarchy_repo_name" "$gooarchy_repo_version" "$gooarchy_repo_arch"
+printf 'Expected Gooarchy bootstrap archive: %s\n' "$expected_bootstrap"
 actual_bootstrap=$(sudo -u installer -H env -u XDG_CACHE_HOME GOOARCHY_PATH="$product" \
   /bin/bash -c 'set -Eeuo pipefail; source "$GOOARCHY_PATH/install/helpers/repository.sh"; repository_gooarchy_bootstrap_filename')
 printf 'Installer bootstrap helper selected: %s\n' "$actual_bootstrap"
