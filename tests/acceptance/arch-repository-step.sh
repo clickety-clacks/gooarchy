@@ -106,7 +106,7 @@ printf 'Partial repository attempt exit: %s\n' "$first_attempt_exit"
 section_count=$(awk '/^\[gooarchy\][[:space:]]*(#.*)?$/ {count++} END {print count + 0}' /etc/pacman.conf)
 printf 'Managed repository sections after partial setup: %s\n' "$section_count"
 [[ $section_count == 1 ]]
-[[ ! -e $installer_home/.local/state/gooarchy/last-step ]]
+[[ $(cat "$installer_home/.local/state/gooarchy/last-step") == preflight/guard.sh ]]
 
 set +e
 sudo -u installer -H env -u XDG_CACHE_HOME GOOARCHY_TEST_FAIL_AT=packaging/base.sh \
