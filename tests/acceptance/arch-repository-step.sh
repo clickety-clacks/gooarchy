@@ -165,28 +165,20 @@ sudo -u installer -H git -C "$strata_build_dir" checkout --detach "$strata_ref"
 [[ $(sudo -u installer -H git -C "$strata_build_dir" rev-parse HEAD) == "$strata_ref" ]]
 sudo -u installer -H env -u XDG_CACHE_HOME /bin/bash -c \
   'set -Eeuo pipefail; cd "$1"; makepkg --syncdeps --noconfirm --force' _ "$strata_build_dir"
-strata_package=$(find "$strata_build_dir" -maxdepth 1 -type f -name 'strata-bin-*.pkg.tar.zst' -print -quit)
+strata_package=
+strata_package_name=
+while IFS= read -r candidate; do
+  candidate_package_name=$(pacman -Qp --print-format '%n' "$candidate")
+  [[ $candidate_package_name == strata-bin ]] || continue
+  if [[ -n $strata_package ]]; then
+    echo 'The dependency build produced more than one strata-bin package archive.' >&2
+    exit 1
+  fi
+  strata_package=$candidate
+  strata_package_name=$candidate_package_name
+done < <(find "$strata_build_dir" -maxdepth 1 -type f -name 'strata-bin-*.pkg.tar.zst' -print)
 [[ -n $strata_package ]]
-
-# Keep pacman's package-signature policy enabled for this locally built dependency
-# fixture as well as for the Gooarchy packages under test.
-dependency_signing_home=$(mktemp -d /tmp/gooarchy-dependency-signing.XXXXXX)
-chmod 0700 "$dependency_signing_home"
-gpg --homedir "$dependency_signing_home" --batch --passphrase '' \
-  --quick-gen-key 'Gooarchy test dependency <dependency-signing@invalid.example>' rsa3072 sign 0
-dependency_signing_fingerprint=$(gpg --homedir "$dependency_signing_home" --batch \
-  --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
-[[ $dependency_signing_fingerprint =~ ^[[:xdigit:]]{40}$ ]]
-gpg --homedir "$dependency_signing_home" --batch --yes --pinentry-mode loopback \
-  --passphrase '' --local-user "$dependency_signing_fingerprint" --detach-sign \
-  --output "$strata_package.sig" "$strata_package"
-gpg --homedir "$dependency_signing_home" --batch --verify "$strata_package.sig" "$strata_package"
-dependency_public_key=$(mktemp /tmp/gooarchy-dependency-signing.XXXXXX.asc)
-gpg --homedir "$dependency_signing_home" --batch --armor --export \
-  "$dependency_signing_fingerprint" >"$dependency_public_key"
-pacman-key --add "$dependency_public_key"
-pacman-key --lsign-key "$dependency_signing_fingerprint"
-printf 'Locally built strata-bin fixture signature fingerprint: %s\n' "$dependency_signing_fingerprint"
+printf 'Selected dependency fixture: package=%s archive=%s\n' "$strata_package_name" "$strata_package"
 sudo pacman -U --noconfirm "$strata_package"
 pacman -Q strata-bin
 echo 'The dependency package is installed only to satisfy pacman for the following Gooarchy package transaction; its executable is not run.'
