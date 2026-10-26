@@ -232,18 +232,7 @@ seed_running() {
 }
 
 stop_seed() {
-  if seed_running; then
-    local pid deadline
-    pid=$(cat "$run/seed-http.pid")
-    kill "$pid" 2>/dev/null || true
-    deadline=$((SECONDS + 5))
-    while seed_running && (( SECONDS < deadline )); do sleep 1; done
-    if seed_running; then
-      kill -9 "$pid" 2>/dev/null || true
-      deadline=$((SECONDS + 5))
-      while seed_running && (( SECONDS < deadline )); do sleep 1; done
-    fi
-  fi
+  seed_running && kill "$(cat "$run/seed-http.pid")" 2>/dev/null || true
   rm -f "$run/seed-http.pid"
 }
 
@@ -1069,10 +1058,21 @@ cleanup_failed_invocation() {
   fi
   exit "$status"
 }
-trap cleanup_failed_invocation EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+
+cleanup_interrupted_invocation() {
+  local status=$1
+  trap - HUP INT TERM EXIT
+  cmd_stop || true
+  exit "$status"
+}
+
+trap 'cleanup_interrupted_invocation 129' HUP
+trap 'cleanup_interrupted_invocation 130' INT
+trap 'cleanup_interrupted_invocation 143' TERM
+
+case ${1:-all} in
+  boot|start) trap cleanup_failed_invocation EXIT ;;
+esac
 
 case ${1:-all} in
   boot) cmd_boot ;;
