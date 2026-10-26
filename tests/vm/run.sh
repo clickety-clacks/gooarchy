@@ -201,7 +201,7 @@ ssh_authorized_keys:
 EOF
   local seed_port
   seed_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-  setsid python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
+  python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
     >"$run/seed-http.log" 2>&1 </dev/null &
   echo $! >"$run/seed-http.pid"
   echo "$seed_port"
@@ -213,7 +213,7 @@ ensure_seed() {
   seed_running && return 0
   local seed_port
   seed_port=$(tr '\0' '\n' <"/proc/$(cat "$run/qemu.pid")/cmdline" | sed -n 's|.*10\.0\.2\.2:\([0-9]*\)/.*|\1|p')
-  setsid python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
+  python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
     >"$run/seed-http.log" 2>&1 </dev/null &
   echo $! >"$run/seed-http.pid"
 }
@@ -309,7 +309,8 @@ start_qemu() {
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
-  setsid "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
+  # Keep QEMU in this process group so a test runner can clean it up with the wrapper.
+  "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
     "${kernel_args[@]}" \
     -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
@@ -1045,6 +1046,33 @@ cmd_stop() {
   fi
   rm -f "$run/qemu.pid"
 }
+
+# A successful boot/start invocation deliberately leaves the guest running for later wrapper
+# commands. Failed or interrupted invocations stop it; pool callers also own all descendants in
+# this process group and can reap them when their job exits.
+cleanup_failed_invocation() {
+  local status=$?
+  trap - EXIT
+  if (( status != 0 )); then
+    cmd_stop || true
+  fi
+  exit "$status"
+}
+
+cleanup_interrupted_invocation() {
+  local status=$1
+  trap - HUP INT TERM EXIT
+  cmd_stop || true
+  exit "$status"
+}
+
+trap 'cleanup_interrupted_invocation 129' HUP
+trap 'cleanup_interrupted_invocation 130' INT
+trap 'cleanup_interrupted_invocation 143' TERM
+
+case ${1:-all} in
+  boot|start) trap cleanup_failed_invocation EXIT ;;
+esac
 
 case ${1:-all} in
   boot) cmd_boot ;;
