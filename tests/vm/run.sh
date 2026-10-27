@@ -35,7 +35,7 @@
 #
 # Looking at the desktop: GOOARCHY_VM_GPU=software GOOARCHY_VM_VNC=1 tests/vm/run.sh start, then
 # point a VNC viewer at 127.0.0.1:5900 on this machine (e.g. through ssh -L 5900:127.0.0.1:5900).
-# The seed server and the guest's network stay as the test uses them.
+# Seed delivery and the guest's network stay within this VM test harness.
 #
 # Configuration (environment):
 #   GOOARCHY_VM_KERNEL      1: install the opt-in kernel and direct-boot it in this test VM for
@@ -187,8 +187,8 @@ fetch_image() {
 }
 
 seed() {
-  # cloud-init NoCloud seed, served over HTTP from the host: the image's default user (arch, with
-  # passwordless sudo) gets this run's SSH key. Nothing else is configured here.
+  # cloud-init NoCloud seed: the image's default user (arch, with passwordless sudo) gets this
+  # run's SSH key. QEMU serves these files to the guest over guestfwd; no host socket is used.
   [[ -f $run/id_ed25519 ]] || ssh-keygen -q -t ed25519 -N '' -C gooarchy-vm-test -f "$run/id_ed25519"
   mkdir -p "$run/seed"
   # One instance id per disk: a new one makes cloud-init set the machine up again.
@@ -199,26 +199,15 @@ seed() {
 ssh_authorized_keys:
   - $(cat "$run/id_ed25519.pub")
 EOF
-  local seed_port
-  seed_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-  python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
-    >"$run/seed-http.log" 2>&1 </dev/null &
-  echo $! >"$run/seed-http.pid"
-  echo "$seed_port"
 }
 
 ensure_seed() {
-  # cloud-init asks for its seed at every boot; without it, it re-initializes the instance (new
-  # host keys, no SSH key). Keep serving it on the port the guest was booted with.
-  seed_running && return 0
-  local seed_port
-  seed_port=$(tr '\0' '\n' <"/proc/$(cat "$run/qemu.pid")/cmdline" | sed -n 's|.*10\.0\.2\.100:\([0-9]*\)/.*|\1|p')
-  python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
-    >"$run/seed-http.log" 2>&1 </dev/null &
-  echo $! >"$run/seed-http.pid"
+  # cloud-init asks for its seed at every boot; preserve this disk's instance id and SSH key.
+  seed
 }
 
 seed_running() {
+  # Stop an HTTP seed server that may remain from an earlier wrapper version.
   local pid
   local -a args
   [[ -f $run/seed-http.pid ]] || return 1
@@ -295,7 +284,7 @@ cmd_start() {
 }
 
 start_qemu() {
-  local seed_port seed_bridge_command
+  local seed_port=80 seed_response_command
   local -a display
   local kernel_args=()
   if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
@@ -305,17 +294,17 @@ start_qemu() {
                  -append "$(cat "$run/kernel/cmdline")")
   fi
   qemu_graphics_args display "$gpu" "$size" "${GOOARCHY_VM_VNC:-}" || die "invalid VM graphics configuration"
-  seed_port=$(seed)
-  printf -v seed_bridge_command 'python3 %q %q' "$here/seed-http-bridge.py" "$seed_port"
+  seed
+  printf -v seed_response_command 'python3 %q %q' "$here/seed-http-response.py" "$run/seed"
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
   # Keep QEMU in this process group so a test runner can clean it up with the wrapper.
-  # guestfwd connects NoCloud requests to the loopback seed server without host-address access.
+  # guestfwd serves NoCloud files directly from the QEMU child process without a host socket.
   "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
     "${kernel_args[@]}" \
     -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
-    -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22,guestfwd=tcp:10.0.2.100:$seed_port-cmd:$seed_bridge_command" \
+    -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22,guestfwd=tcp:10.0.2.100:$seed_port-cmd:$seed_response_command" \
     -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.100:$seed_port/" \
     "${display[@]}" -audiodev none,id=noaudio -device intel-hda -device hda-duplex,audiodev=noaudio \
     -device virtio-tablet-pci -device virtio-keyboard-pci \
