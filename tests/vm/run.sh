@@ -481,7 +481,7 @@ start_qemu() {
   "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
     "${kernel_args[@]}" \
     -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
-    -blockdev "driver=vvfat,node-name=$seed_node,dir=$run/seed,label=CIDATA,rw=off" \
+    -blockdev "driver=vvfat,node-name=$seed_node,dir=$run/seed,label=CIDATA,rw=off,read-only=on" \
     -device "virtio-blk-pci,drive=$seed_node" \
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
     -smbios "type=1,serial=ds=nocloud" \
