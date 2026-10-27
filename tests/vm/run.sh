@@ -354,8 +354,8 @@ bootcmd:
       fi
       if mountpoint -q /run/gooarchy-vm-rpc; then
         nohup /bin/bash -c '
-          until arch_home="$(getent passwd arch | cut -d: -f6)" &&
-                [ -n "$arch_home" ] && [ -d "$arch_home" ]; do sleep 1; done
+          until arch_home="\$(getent passwd arch | cut -d: -f6)" &&
+                [ -n "\$arch_home" ] && [ -d "\$arch_home" ]; do sleep 1; done
           exec runuser --login --user arch -- /usr/bin/python3 \
             /run/gooarchy-vm-rpc/guest-command-agent.py /run/gooarchy-vm-rpc
         ' \
