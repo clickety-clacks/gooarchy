@@ -9,7 +9,7 @@
 #
 #   tests/vm/run.sh [all]   everything below in order, on a fresh disk (the default); exits 1 if
 #                           any check failed. Results: GOOARCHY_VM_DIR/artifacts/<time>/
-#   tests/vm/run.sh boot    fresh disk from the cloud image, boot, wait for SSH
+#   tests/vm/run.sh boot    fresh disk from the cloud image, boot, wait for a guest command channel
 #   tests/vm/run.sh install copy this checkout in; ./install.sh made to fail at one step first, then
 #                           run again (it must recover); with --autologin
 #   tests/vm/run.sh rebuild-check   rebuild Scottland at another commit with the same upstream
@@ -157,7 +157,140 @@ installer_flags() {
 
 ssh_opts=(-i "$run/id_ed25519" -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
           -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=15)
-guest() { ssh "${ssh_opts[@]}" arch@127.0.0.1 "$@"; }
+guest_transport=ssh
+rpc_root=$run/guest-rpc
+ssh_refused=0
+[[ -f $rpc_root/ssh-route-unavailable ]] && guest_transport=rpc
+
+ssh_route_unavailable() {
+  grep -Eq 'connect to host 127\.0\.0\.1 port [0-9]+: (Operation not permitted|Permission denied|Network is unreachable|No route to host|Connection timed out)' "$1"
+}
+
+ssh_connection_refused() {
+  grep -Eq 'connect to host 127\.0\.0\.1 port [0-9]+: Connection refused' "$1"
+}
+
+use_rpc_transport() {
+  guest_transport=rpc
+  if ! (umask 022; : >"$rpc_root/ssh-route-unavailable"); then
+    log "could not persist the shared guest command channel preference"
+  fi
+}
+
+rpc_guest_request() {
+  local asynchronous=$1
+  shift
+  local stdin_path=$1
+  shift
+  local command=$* id request response status
+
+  [[ -f $rpc_root/ready ]] || return 255
+  id="${BASHPID:-$$}-$RANDOM-$RANDOM"
+  request=$rpc_root/requests/$id
+  response=$rpc_root/responses/$id
+  mkdir -m 0777 "$request" "$response"
+  printf '%s' "$command" >"$request/command"
+  chmod 0666 "$request/command"
+  if [[ -n $stdin_path ]]; then
+    cp -- "$stdin_path" "$request/stdin"
+    chmod 0666 "$request/stdin"
+  fi
+  if [[ $asynchronous == 1 ]]; then
+    (umask 000; : >"$request/async")
+  fi
+  (umask 000; : >"$request/ready")
+
+  while [[ ! -f $response/status ]]; do
+    if ! running; then
+      rm -rf -- "$request" "$response"
+      return 255
+    fi
+    sleep 0.2
+  done
+
+  cat "$response/stdout"
+  cat "$response/stderr" >&2
+  status=$(<"$response/status")
+  [[ $status =~ ^[0-9]+$ ]] || status=255
+  rm -rf -- "$request" "$response"
+  return "$status"
+}
+
+rpc_guest() { rpc_guest_request 0 "$@"; }
+rpc_guest_async() { rpc_guest_request 1 '' "$@"; }
+
+guest() {
+  local error_file status
+  local -a tty_opts=()
+  if [[ ${1:-} == -t || ${1:-} == -tt ]]; then
+    tty_opts=(-t)
+    shift
+  fi
+  if [[ $guest_transport == rpc ]]; then
+    if (($# == 0)) && ((${#tty_opts[@]})); then
+      log "an interactive shell is unavailable through the shared guest command channel"
+      return 2
+    fi
+    rpc_guest '' "$@"
+    return $?
+  fi
+
+  error_file=$(mktemp "$run/guest-ssh-error.XXXXXX")
+  if ssh "${ssh_opts[@]}" "${tty_opts[@]}" arch@127.0.0.1 "$@" 2>"$error_file"; then
+    cat "$error_file" >&2
+    rm -f -- "$error_file"
+    ssh_refused=0
+    return 0
+  else
+    status=$?
+  fi
+  if ssh_route_unavailable "$error_file"; then
+    use_rpc_transport
+    log "SSH forwarding is unavailable; using the shared guest command channel"
+    rm -f -- "$error_file"
+    if (($# == 0)) && ((${#tty_opts[@]})); then
+      log "an interactive shell is unavailable through the shared guest command channel"
+      return 2
+    fi
+    rpc_guest '' "$@"
+    return $?
+  fi
+  if ssh_connection_refused "$error_file"; then ssh_refused=1; else ssh_refused=0; fi
+  cat "$error_file" >&2
+  rm -f -- "$error_file"
+  return "$status"
+}
+
+guest_stdin() {
+  local input_file error_file status
+  input_file=$(mktemp "$run/guest-stdin.XXXXXX")
+  cat >"$input_file"
+  if [[ $guest_transport == rpc ]]; then
+    if rpc_guest "$input_file" "$@"; then status=0; else status=$?; fi
+    rm -f -- "$input_file"
+    return "$status"
+  fi
+
+  error_file=$(mktemp "$run/guest-ssh-error.XXXXXX")
+  if ssh "${ssh_opts[@]}" arch@127.0.0.1 "$@" <"$input_file" 2>"$error_file"; then
+    cat "$error_file" >&2
+    rm -f -- "$input_file" "$error_file"
+    ssh_refused=0
+    return 0
+  else
+    status=$?
+  fi
+  if ssh_route_unavailable "$error_file"; then
+    use_rpc_transport
+    log "SSH forwarding is unavailable; using the shared guest command channel"
+    if rpc_guest "$input_file" "$@"; then status=0; else status=$?; fi
+  else
+    if ssh_connection_refused "$error_file"; then ssh_refused=1; else ssh_refused=0; fi
+    cat "$error_file" >&2
+  fi
+  rm -f -- "$input_file" "$error_file"
+  return "$status"
+}
 
 guest_proxy_env() {
   [[ -n $proxy ]] || return 0
@@ -196,6 +329,19 @@ seed() {
     printf 'instance-id: gooarchy-vm-%s\nlocal-hostname: gooarchy-vm\n' "$(date +%s)" >"$run/seed/meta-data"
   cat >"$run/seed/user-data" <<EOF
 #cloud-config
+bootcmd:
+  - |
+      mkdir -p /run/gooarchy-vm-rpc
+      if ! mountpoint -q /run/gooarchy-vm-rpc; then
+        mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 gooarchy-vm-rpc /run/gooarchy-vm-rpc
+      fi
+      if mountpoint -q /run/gooarchy-vm-rpc; then
+        nohup runuser --login --user arch -- /usr/bin/python3 \
+          /run/gooarchy-vm-rpc/guest-command-agent.py /run/gooarchy-vm-rpc \
+          >/run/gooarchy-vm-rpc-agent.log 2>&1 </dev/null &
+      else
+        echo 'guest command channel is unavailable' >&2
+      fi
 ssh_authorized_keys:
   - $(cat "$run/id_ed25519.pub")
 EOF
@@ -240,11 +386,19 @@ running() {
   return 1
 }
 
-wait_ssh() {
-  local deadline=$((SECONDS + ${1:-300}))
+wait_guest_channel() {
+  local deadline=$((SECONDS + ${1:-300})) transport_noted=0 started=$SECONDS
   until guest true 2>/dev/null; do
+    if [[ $guest_transport == ssh && $ssh_refused == 1 && -f $rpc_root/ready ]] &&
+      (( SECONDS - started >= 30 )); then
+      use_rpc_transport
+    fi
+    if [[ $guest_transport == rpc && $transport_noted == 0 ]]; then
+      log "SSH forwarding is unavailable; waiting on the shared guest command channel"
+      transport_noted=1
+    fi
     running || die "QEMU exited; see $run/qemu.log"
-    (( SECONDS < deadline )) || die "no SSH from the guest"
+    (( SECONDS < deadline )) || die "the guest command channel did not become ready"
     sleep 5
   done
 }
@@ -296,6 +450,9 @@ start_qemu() {
   qemu_graphics_args display "$gpu" "$size" "${GOOARCHY_VM_VNC:-}" || die "invalid VM graphics configuration"
   seed
   printf -v seed_response_command 'python3 %q %q' "$here/seed-http-response.py" "$run/seed"
+  mkdir -p "$rpc_root/requests" "$rpc_root/responses"
+  chmod 0777 "$rpc_root" "$rpc_root/requests" "$rpc_root/responses"
+  rm -f "$rpc_root/ready"
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
@@ -309,11 +466,12 @@ start_qemu() {
     "${display[@]}" -audiodev none,id=noaudio -device intel-hda -device hda-duplex,audiodev=noaudio \
     -device virtio-tablet-pci -device virtio-keyboard-pci \
     -virtfs "local,path=$dir/pkgcache,mount_tag=gooarchy-pkgcache,security_model=mapped-xattr,id=pkgcache" \
+    -virtfs "local,path=$rpc_root,mount_tag=gooarchy-vm-rpc,security_model=mapped-xattr,id=vmrpc" \
     -serial "file:$run/serial.log" -qmp "unix:$run/qmp.sock,server,nowait" -pidfile "$run/qemu.pid" \
     >"$run/qemu.log" 2>&1 </dev/null &
   sleep 2
   running || die "QEMU didn't start: $(cat "$run/qemu.log")"
-  wait_ssh 300
+  wait_guest_channel 300
 }
 
 prepare_guest() {
@@ -343,7 +501,7 @@ prepare_guest() {
 copy_checkout() {
   log "copying the checkout (tracked and untracked files, and its history) into the guest"
   (cd "$repo" && { git ls-files -co --exclude-standard -z; printf '.git\0'; } | tar --null -T - -cf -) |
-    guest 'rm -rf ~/gooarchy && mkdir ~/gooarchy && tar -C ~/gooarchy -xf -'
+    guest_stdin 'rm -rf ~/gooarchy && mkdir ~/gooarchy && tar -C ~/gooarchy -xf -'
 }
 
 cmd_install() {
@@ -461,7 +619,7 @@ grub_snapshot() {
 kernel_headers_check() {
   # The installed headers build an external module whose version magic is the candidate's.
   local result ok=0
-  result=$(guest 'bash -s' 2>&1 <<'EOF'
+  result=$(guest_stdin 'bash -s' 2>&1 <<'EOF'
 set -euo pipefail
 version=$(pacman -Qlq linux-gooarchy | sed -n 's|/usr/lib/modules/\([^/]*\)/pkgbase|\1|p')
 dir=$(mktemp -d /tmp/gooarchy-header-probe.XXXXXX)
@@ -767,7 +925,11 @@ cmd_reboot() {
   fi
   ensure_seed
   local before; before=$(guest 'cat /proc/sys/kernel/random/boot_id')
-  guest 'sudo systemctl reboot' || true
+  if [[ $guest_transport == rpc ]]; then
+    rpc_guest_async 'sudo systemctl reboot' || true
+  else
+    guest 'sudo systemctl reboot' || true
+  fi
   local deadline=$((SECONDS + 300))
   until [[ $(guest 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) =~ ^[0-9a-f-]+$ &&
            $(guest 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) != "$before" ]]; do
@@ -790,7 +952,7 @@ cmd_check() {
   fi
   screendump "$relative/vm-display-before-check.png"
   guest 'rm -rf /tmp/gooarchy-check && mkdir -p /tmp/gooarchy-check'
-  guest 'cat >/tmp/gooarchy-check/guest-check.py' <"$here/guest-check.py"
+  guest_stdin 'cat >/tmp/gooarchy-check/guest-check.py' <"$here/guest-check.py"
   log "checking the session in the guest"
   local status=0
   guest "timeout 1500 python3 /tmp/gooarchy-check/guest-check.py /tmp/gooarchy-check/out --gpu $gpu" 2>&1 |
@@ -956,7 +1118,7 @@ cmd_nvidia_r15_row() {
     fi
     printf 'schema\t1\nrow\t%s\nstamp\t%s\nkernel\t%s\nboot-id\t%s\ndesktop\tpass\nnvidia-device\tno-device\n' \
       "$row" "$stamp" "$kernel" "$boot_id" |
-      guest "umask 077; cat >$evidence" || die "could not persist R15 boot evidence for $kernel"
+      guest_stdin "umask 077; cat >$evidence" || die "could not persist R15 boot evidence for $kernel"
     hcheck "R15 $row boots $kernel to the desktop" 1 "boot-id $boot_id; nvidia-device no-device"
   done
   cmd_nvidia_matrix r15-release "$row"
@@ -976,7 +1138,7 @@ cmd_nvidia_reference() {
 cmd_login_check() {
   running || die "the guest isn't running"
   local out; out=$(artifacts)
-  timeout 900 python3 "$here/login-check.py" "$run/qmp.sock" "$out" -- ssh "${ssh_opts[@]}" arch@127.0.0.1 2>&1 |
+  timeout 900 python3 "$here/login-check.py" "$run/qmp.sock" "$out" -- "$here/run.sh" ssh 2>&1 |
     tee "$out/login-check.log" >&2
 }
 
@@ -1083,7 +1245,10 @@ case ${1:-all} in
   nvidia-install) cmd_nvidia_install ;;
   nvidia-r15-row) shift; cmd_nvidia_r15_row "$@" ;;
   nvidia-reference) trap cmd_stop EXIT; cmd_nvidia_reference ;;
-  ssh) shift; guest -t "$@" ;;
+  ssh)
+    shift
+    if (($#)); then guest "$@"; else guest -t; fi
+    ;;
   stop) cmd_stop ;;
   all)
     rm -f "$run/artifacts"
