@@ -258,6 +258,19 @@ guest() {
   fi
   if [[ $guest_transport == rpc ]]; then
     if (($# == 0)) && ((${#tty_opts[@]})); then
+      clear_last_ssh_error
+      error_dir=$(mktemp -d "$run/guest-ssh-error.XXXXXX")
+      error_file=$error_dir/stderr
+      if ssh_with_error_capture "$error_file" "${tty_opts[@]}" arch@127.0.0.1; then
+        rm -rf -- "$error_dir"
+        guest_transport=ssh
+        if ! rm -f -- "$rpc_root/ssh-route-unavailable"; then
+          log "WARNING: could not clear the saved SSH route preference"
+        fi
+        return 0
+      fi
+      save_last_ssh_error "$error_file"
+      rm -rf -- "$error_dir"
       log "an interactive shell is unavailable through the shared guest command channel"
       return 2
     fi
