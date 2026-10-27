@@ -212,7 +212,7 @@ ensure_seed() {
   # host keys, no SSH key). Keep serving it on the port the guest was booted with.
   seed_running && return 0
   local seed_port
-  seed_port=$(tr '\0' '\n' <"/proc/$(cat "$run/qemu.pid")/cmdline" | sed -n 's|.*10\.0\.2\.2:\([0-9]*\)/.*|\1|p')
+  seed_port=$(tr '\0' '\n' <"/proc/$(cat "$run/qemu.pid")/cmdline" | sed -n 's|.*10\.0\.2\.100:\([0-9]*\)/.*|\1|p')
   python3 -m http.server --bind 127.0.0.1 --directory "$run/seed" "$seed_port" \
     >"$run/seed-http.log" 2>&1 </dev/null &
   echo $! >"$run/seed-http.pid"
@@ -295,7 +295,7 @@ cmd_start() {
 }
 
 start_qemu() {
-  local seed_port
+  local seed_port seed_bridge_command
   local -a display
   local kernel_args=()
   if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
@@ -306,15 +306,17 @@ start_qemu() {
   fi
   qemu_graphics_args display "$gpu" "$size" "${GOOARCHY_VM_VNC:-}" || die "invalid VM graphics configuration"
   seed_port=$(seed)
+  printf -v seed_bridge_command 'python3 %q %q' "$here/seed-http-bridge.py" "$seed_port"
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
   # Keep QEMU in this process group so a test runner can clean it up with the wrapper.
+  # guestfwd connects NoCloud requests to the loopback seed server without host-address access.
   "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
     "${kernel_args[@]}" \
     -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
-    -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
-    -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.2:$seed_port/" \
+    -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22,guestfwd=tcp:10.0.2.100:$seed_port-cmd:$seed_bridge_command" \
+    -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.100:$seed_port/" \
     "${display[@]}" -audiodev none,id=noaudio -device intel-hda -device hda-duplex,audiodev=noaudio \
     -device virtio-tablet-pci -device virtio-keyboard-pci \
     -virtfs "local,path=$dir/pkgcache,mount_tag=gooarchy-pkgcache,security_model=mapped-xattr,id=pkgcache" \
