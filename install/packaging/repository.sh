@@ -188,11 +188,14 @@ sudo rm -rf -- "$repo_cache"
 trap - EXIT
 
 checkout_commit=$(git -C "$GOOARCHY_PATH" rev-parse HEAD 2>/dev/null || true)
-[[ $checkout_commit =~ ^[[:xdigit:]]{40}$ ]] || fail_repository "the installer checkout has no readable Git commit."
+if [[ ! $checkout_commit =~ ^[[:xdigit:]]{40}$ ]]; then
+  report "Warning: the installer checkout's Git commit is unreadable; treating it as different from published source commit $repo_source_commit."
+  checkout_commit=unknown
+fi
 checkout_dirty=0
 [[ -n $(git -C "$GOOARCHY_PATH" status --porcelain 2>/dev/null) ]] && checkout_dirty=1
 local_gooarchy=0
-if ((checkout_dirty)) || [[ $checkout_commit != "$repo_source_commit" ]]; then
+if ((checkout_dirty)) || [[ $checkout_commit == unknown || $checkout_commit != "$repo_source_commit" ]]; then
   local_gooarchy=1
 fi
 
@@ -263,6 +266,7 @@ plan_tmp=$GOOARCHY_STATE/repository-plan.sh.$$
   printf 'GOOARCHY_REPOSITORY_SCOTTLAND_VERSION=%q\n' "$repo_scottland_version"
   printf 'GOOARCHY_REPOSITORY_WAYFIRE_VERSION=%q\n' "$repo_wayfire_version"
   printf 'GOOARCHY_ARCH_WAYFIRE_VERSION=%q\n' "$arch_wayfire_version"
+  printf 'GOOARCHY_CHECKOUT_COMMIT=%q\n' "$checkout_commit"
   printf 'GOOARCHY_BUILD_LOCAL_GOOARCHY=%q\n' "$local_gooarchy"
   printf 'GOOARCHY_BUILD_LOCAL_SCOTTLAND=%q\n' "$local_scottland"
   printf 'GOOARCHY_REPLACE_SCOTTLAND=%q\n' "$replace_scottland"
@@ -288,6 +292,8 @@ mv -f -- "$plan_tmp" "$GOOARCHY_STATE/repository-plan.sh"
 if ((local_gooarchy)); then
   if ((checkout_dirty)); then
     report "The checkout has uncommitted changes, so gooarchy and gooarchy-flavorings will be built locally instead of using the repository copies."
+  elif [[ $checkout_commit == unknown ]]; then
+    report "The checkout's Git commit is unreadable, so gooarchy and gooarchy-flavorings will be built locally instead of using the repository copies."
   else
     report "Checkout commit $checkout_commit differs from the repository gooarchy source commit $repo_source_commit, so gooarchy and gooarchy-flavorings will be built locally."
   fi
