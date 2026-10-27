@@ -7,8 +7,12 @@ source "$GOOARCHY_INSTALL/helpers/logging.sh"
 load_repository_plan
 
 if ((GOOARCHY_BUILD_LOCAL_GOOARCHY)); then
-  checkout_commit=$(git -C "$GOOARCHY_PATH" rev-parse HEAD)
-  report "Building gooarchy and gooarchy-flavorings locally from checkout $checkout_commit because it is dirty or differs from repository source $GOOARCHY_REPOSITORY_SOURCE_COMMIT; repository copies are skipped. To return, use a clean checkout at the repository source commit and rerun install.sh."
+  checkout_commit=$GOOARCHY_CHECKOUT_COMMIT
+  if [[ $checkout_commit == unknown ]]; then
+    report "Building gooarchy and gooarchy-flavorings locally with unknown checkout commit because it could not be read; repository copies are skipped."
+  else
+    report "Building gooarchy and gooarchy-flavorings locally from checkout $checkout_commit because it is dirty or differs from repository source $GOOARCHY_REPOSITORY_SOURCE_COMMIT; repository copies are skipped. To return, use a clean checkout at the repository source commit and rerun install.sh."
+  fi
 
   flavorings_recipe=$GOOARCHY_PATH/packaging/gooarchy-flavorings/PKGBUILD
   flavorings_source=$GOOARCHY_PATH
