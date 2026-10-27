@@ -159,15 +159,13 @@ ssh_opts=(-i "$run/id_ed25519" -p "$port" -o StrictHostKeyChecking=no -o UserKno
           -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=15)
 guest_transport=ssh
 rpc_root=$run/guest-rpc
-ssh_refused=0
+last_ssh_error_file=$run/last-ssh-error.log
+last_ssh_error_current=0
+agent_log_cleared=0
 [[ -f $rpc_root/ssh-route-unavailable ]] && guest_transport=rpc
 
 ssh_route_unavailable() {
   grep -Eq 'connect to host 127\.0\.0\.1 port [0-9]+: (Operation not permitted|Permission denied|Network is unreachable|No route to host|Connection timed out)' "$1"
-}
-
-ssh_connection_refused() {
-  grep -Eq 'connect to host 127\.0\.0\.1 port [0-9]+: Connection refused' "$1"
 }
 
 use_rpc_transport() {
@@ -192,6 +190,21 @@ ssh_with_error_capture() {
   wait "$tee_pid" || true
   rm -f "$error_pipe"
   return "$status"
+}
+
+clear_last_ssh_error() {
+  last_ssh_error_current=0
+  if ! rm -f -- "$last_ssh_error_file"; then
+    log "WARNING: could not clear the previous SSH-error capture"
+  fi
+}
+
+save_last_ssh_error() {
+  if cp -- "$1" "$last_ssh_error_file"; then
+    last_ssh_error_current=1
+  else
+    log "WARNING: could not preserve the last SSH error"
+  fi
 }
 
 rpc_guest_request() {
@@ -252,15 +265,16 @@ guest() {
     return $?
   fi
 
+  clear_last_ssh_error
   error_dir=$(mktemp -d "$run/guest-ssh-error.XXXXXX")
   error_file=$error_dir/stderr
   if ssh_with_error_capture "$error_file" "${tty_opts[@]}" arch@127.0.0.1 "$@"; then
     rm -rf -- "$error_dir"
-    ssh_refused=0
     return 0
   else
     status=$?
   fi
+  save_last_ssh_error "$error_file"
   if ssh_route_unavailable "$error_file"; then
     use_rpc_transport
     log "SSH forwarding is unavailable; using the shared guest command channel"
@@ -272,7 +286,6 @@ guest() {
     rpc_guest '' "$@"
     return $?
   fi
-  if ssh_connection_refused "$error_file"; then ssh_refused=1; else ssh_refused=0; fi
   rm -rf -- "$error_dir"
   return "$status"
 }
@@ -287,22 +300,21 @@ guest_stdin() {
     return "$status"
   fi
 
+  clear_last_ssh_error
   error_dir=$(mktemp -d "$run/guest-ssh-error.XXXXXX")
   error_file=$error_dir/stderr
   if ssh_with_error_capture "$error_file" arch@127.0.0.1 "$@" <"$input_file"; then
     rm -f -- "$input_file"
     rm -rf -- "$error_dir"
-    ssh_refused=0
     return 0
   else
     status=$?
   fi
+  save_last_ssh_error "$error_file"
   if ssh_route_unavailable "$error_file"; then
     use_rpc_transport
     log "SSH forwarding is unavailable; using the shared guest command channel"
     if rpc_guest "$input_file" "$@"; then status=0; else status=$?; fi
-  else
-    if ssh_connection_refused "$error_file"; then ssh_refused=1; else ssh_refused=0; fi
   fi
   rm -f -- "$input_file"
   rm -rf -- "$error_dir"
@@ -348,6 +360,9 @@ seed() {
 #cloud-config
 bootcmd:
   - |
+      if ! systemctl mask --now --quiet systemd-time-wait-sync.service; then
+        echo 'WARNING: could not mask the test guest time-wait service' >&2
+      fi
       mkdir -p /run/gooarchy-vm-rpc
       if ! mountpoint -q /run/gooarchy-vm-rpc; then
         mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 gooarchy-vm-rpc /run/gooarchy-vm-rpc
@@ -359,7 +374,7 @@ bootcmd:
           exec runuser --login --user arch -- /usr/bin/python3 \
             /run/gooarchy-vm-rpc/guest-command-agent.py /run/gooarchy-vm-rpc
         ' \
-          >/run/gooarchy-vm-rpc-agent.log 2>&1 </dev/null &
+          >/run/gooarchy-vm-rpc/agent.log 2>&1 </dev/null &
       else
         echo 'guest command channel is unavailable' >&2
       fi
@@ -411,18 +426,63 @@ running() {
 wait_guest_channel() {
   local deadline=$((SECONDS + ${1:-300})) transport_noted=0 started=$SECONDS
   until guest true 2>/dev/null; do
-    if [[ $guest_transport == ssh && $ssh_refused == 1 && -f $rpc_root/ready ]] &&
+    if [[ $guest_transport == ssh && -f $rpc_root/ready ]] &&
       (( SECONDS - started >= 30 )); then
       use_rpc_transport
     fi
     if [[ $guest_transport == rpc && $transport_noted == 0 ]]; then
-      log "SSH forwarding is unavailable; waiting on the shared guest command channel"
+      log "SSH command channel is not ready; waiting on the shared guest command channel"
       transport_noted=1
     fi
     running || die "QEMU exited; see $run/qemu.log"
-    (( SECONDS < deadline )) || die "the guest command channel did not become ready"
+    if (( SECONDS >= deadline )); then
+      record_guest_channel_diagnostics "$((SECONDS - started))"
+      die "the guest command channel did not become ready"
+    fi
     sleep 5
   done
+}
+
+record_guest_channel_diagnostics() {
+  local elapsed=$1
+  log "guest command channel timeout diagnostics after ${elapsed}s (transport=$guest_transport)"
+  if (( last_ssh_error_current == 1 )) && [[ -s $last_ssh_error_file ]]; then
+    log "last SSH error:"
+    if ! cat -- "$last_ssh_error_file" >&2; then
+      log "WARNING: the last SSH error capture could not be read"
+    fi
+  elif [[ -s $last_ssh_error_file ]]; then
+    log "WARNING: retained SSH error may be stale or unverified:"
+    if ! cat -- "$last_ssh_error_file" >&2; then
+      log "WARNING: the retained SSH error capture could not be read"
+    fi
+  elif [[ -e $last_ssh_error_file ]]; then
+    log "WARNING: the last SSH error capture is empty"
+  else
+    log "WARNING: the last SSH error capture is unavailable"
+  fi
+
+  if [[ ! -d $rpc_root || ! -r $rpc_root ]]; then
+    log "WARNING: the shared guest agent ready-file state is unavailable"
+  elif [[ -f $rpc_root/ready ]]; then
+    log "shared guest agent ready file: present"
+  else
+    log "shared guest agent ready file: absent"
+  fi
+
+  if [[ -s $rpc_root/agent.log ]]; then
+    if (( agent_log_cleared == 0 )); then
+      log "WARNING: the shared guest agent log may be stale or unverified"
+    fi
+    log "shared guest agent log:"
+    if ! cat -- "$rpc_root/agent.log" >&2; then
+      log "WARNING: the shared guest agent log could not be read"
+    fi
+  elif [[ -e $rpc_root/agent.log ]]; then
+    log "WARNING: the shared guest agent log is empty"
+  else
+    log "WARNING: the shared guest agent log is unavailable"
+  fi
 }
 
 screendump() {
@@ -474,6 +534,13 @@ start_qemu() {
   mkdir -p "$rpc_root/requests" "$rpc_root/responses"
   chmod 0777 "$rpc_root" "$rpc_root/requests" "$rpc_root/responses"
   rm -f "$rpc_root/ready"
+  clear_last_ssh_error
+  agent_log_cleared=0
+  if rm -f -- "$rpc_root/agent.log"; then
+    agent_log_cleared=1
+  else
+    log "WARNING: could not clear the old guest agent log"
+  fi
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
@@ -500,10 +567,6 @@ start_qemu() {
 }
 
 prepare_guest() {
-  # Test-only: the guest's clock comes from QEMU's RTC, and a test machine may not pass NTP
-  # through, which would leave systemd-time-wait-sync (and the cloud image's pacman-init, and
-  # sshd after it) waiting forever on the next boot.
-  guest 'sudo systemctl mask --quiet systemd-time-wait-sync.service'
   if [[ -n $proxy ]]; then
     # Test-only: let sudo (pacman, makepkg -s) keep the proxy variables.
     guest 'echo "Defaults env_keep += \"ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy\"" |
