@@ -177,6 +177,23 @@ use_rpc_transport() {
   fi
 }
 
+ssh_with_error_capture() {
+  local error_file=$1 error_pipe tee_pid status
+  shift
+  error_pipe=$error_file.pipe
+  mkfifo "$error_pipe" || return 125
+  tee "$error_file" <"$error_pipe" >&2 &
+  tee_pid=$!
+  if ssh "${ssh_opts[@]}" "$@" 2>"$error_pipe"; then
+    status=0
+  else
+    status=$?
+  fi
+  wait "$tee_pid" || true
+  rm -f "$error_pipe"
+  return "$status"
+}
+
 rpc_guest_request() {
   local asynchronous=$1
   shift
@@ -220,7 +237,7 @@ rpc_guest() { rpc_guest_request 0 "$@"; }
 rpc_guest_async() { rpc_guest_request 1 '' "$@"; }
 
 guest() {
-  local error_file status
+  local error_dir error_file status
   local -a tty_opts=()
   if [[ ${1:-} == -t || ${1:-} == -tt ]]; then
     tty_opts=(-t)
@@ -235,10 +252,10 @@ guest() {
     return $?
   fi
 
-  error_file=$(mktemp "$run/guest-ssh-error.XXXXXX")
-  if ssh "${ssh_opts[@]}" "${tty_opts[@]}" arch@127.0.0.1 "$@" 2>"$error_file"; then
-    cat "$error_file" >&2
-    rm -f -- "$error_file"
+  error_dir=$(mktemp -d "$run/guest-ssh-error.XXXXXX")
+  error_file=$error_dir/stderr
+  if ssh_with_error_capture "$error_file" "${tty_opts[@]}" arch@127.0.0.1 "$@"; then
+    rm -rf -- "$error_dir"
     ssh_refused=0
     return 0
   else
@@ -247,7 +264,7 @@ guest() {
   if ssh_route_unavailable "$error_file"; then
     use_rpc_transport
     log "SSH forwarding is unavailable; using the shared guest command channel"
-    rm -f -- "$error_file"
+    rm -rf -- "$error_dir"
     if (($# == 0)) && ((${#tty_opts[@]})); then
       log "an interactive shell is unavailable through the shared guest command channel"
       return 2
@@ -256,13 +273,12 @@ guest() {
     return $?
   fi
   if ssh_connection_refused "$error_file"; then ssh_refused=1; else ssh_refused=0; fi
-  cat "$error_file" >&2
-  rm -f -- "$error_file"
+  rm -rf -- "$error_dir"
   return "$status"
 }
 
 guest_stdin() {
-  local input_file error_file status
+  local input_file error_dir error_file status
   input_file=$(mktemp "$run/guest-stdin.XXXXXX")
   cat >"$input_file"
   if [[ $guest_transport == rpc ]]; then
@@ -271,10 +287,11 @@ guest_stdin() {
     return "$status"
   fi
 
-  error_file=$(mktemp "$run/guest-ssh-error.XXXXXX")
-  if ssh "${ssh_opts[@]}" arch@127.0.0.1 "$@" <"$input_file" 2>"$error_file"; then
-    cat "$error_file" >&2
-    rm -f -- "$input_file" "$error_file"
+  error_dir=$(mktemp -d "$run/guest-ssh-error.XXXXXX")
+  error_file=$error_dir/stderr
+  if ssh_with_error_capture "$error_file" arch@127.0.0.1 "$@" <"$input_file"; then
+    rm -f -- "$input_file"
+    rm -rf -- "$error_dir"
     ssh_refused=0
     return 0
   else
@@ -286,9 +303,9 @@ guest_stdin() {
     if rpc_guest "$input_file" "$@"; then status=0; else status=$?; fi
   else
     if ssh_connection_refused "$error_file"; then ssh_refused=1; else ssh_refused=0; fi
-    cat "$error_file" >&2
   fi
-  rm -f -- "$input_file" "$error_file"
+  rm -f -- "$input_file"
+  rm -rf -- "$error_dir"
   return "$status"
 }
 
@@ -336,8 +353,11 @@ bootcmd:
         mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 gooarchy-vm-rpc /run/gooarchy-vm-rpc
       fi
       if mountpoint -q /run/gooarchy-vm-rpc; then
-        nohup runuser --login --user arch -- /usr/bin/python3 \
-          /run/gooarchy-vm-rpc/guest-command-agent.py /run/gooarchy-vm-rpc \
+        nohup /bin/bash -c '
+          until getent passwd arch >/dev/null 2>&1 && [ -d /home/arch ]; do sleep 1; done
+          exec runuser --login --user arch -- /usr/bin/python3 \
+            /run/gooarchy-vm-rpc/guest-command-agent.py /run/gooarchy-vm-rpc
+        ' \
           >/run/gooarchy-vm-rpc-agent.log 2>&1 </dev/null &
       else
         echo 'guest command channel is unavailable' >&2
@@ -1245,10 +1265,7 @@ case ${1:-all} in
   nvidia-install) cmd_nvidia_install ;;
   nvidia-r15-row) shift; cmd_nvidia_r15_row "$@" ;;
   nvidia-reference) trap cmd_stop EXIT; cmd_nvidia_reference ;;
-  ssh)
-    shift
-    if (($#)); then guest "$@"; else guest -t; fi
-    ;;
+  ssh) shift; guest -t "$@" ;;
   stop) cmd_stop ;;
   all)
     rm -f "$run/artifacts"
