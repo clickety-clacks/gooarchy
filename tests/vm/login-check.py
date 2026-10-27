@@ -2,9 +2,9 @@
 """Log in on the guest's consoles the way a person does, by typing at getty through QEMU's keyboard
 (QMP send-key), and check what each login starts. Run by tests/vm/run.sh login-check, on the host.
 
-  login-check.py QMP_SOCKET OUTDIR -- SSH-COMMAND...
+  login-check.py QMP_SOCKET OUTDIR -- GUEST-COMMAND...
 
-The SSH command reaches the guest as its admin user (passwordless sudo), to set up accounts and to
+The guest command reaches the guest as its admin user (passwordless sudo), to set up accounts and to
 observe. Covered: a password login on tty1 starts Scottland; root on tty1 stays a console; the
 ~/.config/gooarchy/no-session opt-out; a second user gets Scottland and Gooarchy's defaults; a login
 on tty2 stays a console. Autologin is turned off for this and put back afterwards. Writes
@@ -19,7 +19,7 @@ import sys
 import time
 
 QMP, OUT = sys.argv[1], sys.argv[2]
-SSH = sys.argv[sys.argv.index("--") + 1:]
+GUEST_COMMAND = sys.argv[sys.argv.index("--") + 1:]
 results = []
 
 
@@ -33,7 +33,8 @@ def check(name, ok, detail=""):
 
 
 def guest(command, timeout=60):
-    r = subprocess.run(SSH + [command], capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(GUEST_COMMAND + [command], stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=timeout)
     return r.stdout.strip()
 
 
