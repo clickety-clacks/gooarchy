@@ -384,8 +384,8 @@ bootcmd:
         nohup /bin/bash -c '
           until arch_home="\$(getent passwd arch | cut -d: -f6)" &&
                 [ -n "\$arch_home" ] && [ -d "\$arch_home" ]; do sleep 1; done
-          exec runuser --login --user arch -- /usr/bin/python3 \
-            /run/gooarchy-vm-rpc/guest-command-agent.py /run/gooarchy-vm-rpc
+          exec runuser --login --command \
+            "exec /usr/bin/python3 /run/gooarchy-vm-rpc/guest-command-agent.py /run/gooarchy-vm-rpc" arch
         ' \
           >/run/gooarchy-vm-rpc/agent.log 2>&1 </dev/null &
       else
