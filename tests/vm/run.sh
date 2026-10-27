@@ -545,6 +545,8 @@ start_qemu() {
   qemu_graphics_args display "$gpu" "$size" "${GOOARCHY_VM_VNC:-}" || die "invalid VM graphics configuration"
   seed
   mkdir -p "$rpc_root/requests" "$rpc_root/responses"
+  cp -- "$repo/tests/vm/guest-command-agent.py" "$rpc_root/guest-command-agent.py"
+  chmod 0644 "$rpc_root/guest-command-agent.py"
   chmod 0777 "$rpc_root" "$rpc_root/requests" "$rpc_root/responses"
   rm -f "$rpc_root/ready"
   clear_last_ssh_error
