@@ -338,7 +338,7 @@ fetch_image() {
 
 seed() {
   # cloud-init NoCloud seed: the image's default user (arch, with passwordless sudo) gets this
-  # run's SSH key. QEMU serves these files to the guest over guestfwd; no host socket is used.
+  # run's SSH key. QEMU presents these files on a local, read-only CIDATA volume.
   [[ -f $run/id_ed25519 ]] || ssh-keygen -q -t ed25519 -N '' -C gooarchy-vm-test -f "$run/id_ed25519"
   mkdir -p "$run/seed"
   # One instance id per disk: a new one makes cloud-init set the machine up again.
@@ -459,7 +459,7 @@ cmd_start() {
 }
 
 start_qemu() {
-  local seed_port=80 seed_response_command
+  local seed_node=gooarchy_vm_seed
   local -a display
   local kernel_args=()
   if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
@@ -470,7 +470,6 @@ start_qemu() {
   fi
   qemu_graphics_args display "$gpu" "$size" "${GOOARCHY_VM_VNC:-}" || die "invalid VM graphics configuration"
   seed
-  printf -v seed_response_command 'python3 %q %q' "$here/seed-http-response.py" "$run/seed"
   mkdir -p "$rpc_root/requests" "$rpc_root/responses"
   chmod 0777 "$rpc_root" "$rpc_root/requests" "$rpc_root/responses"
   rm -f "$rpc_root/ready"
@@ -478,12 +477,14 @@ start_qemu() {
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
   # Keep QEMU in this process group so a test runner can clean it up with the wrapper.
-  # guestfwd serves NoCloud files directly from the QEMU child process without a host socket.
+  # NoCloud reads the local CIDATA volume before network setup, so seed delivery needs no host route.
   "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
     "${kernel_args[@]}" \
     -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
-    -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22,guestfwd=tcp:10.0.2.100:$seed_port-cmd:$seed_response_command" \
-    -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.100:$seed_port/" \
+    -blockdev "driver=vvfat,node-name=$seed_node,dir=$run/seed,label=CIDATA,rw=off,read-only=on" \
+    -device "virtio-blk-pci,drive=$seed_node" \
+    -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
+    -smbios "type=1,serial=ds=nocloud" \
     "${display[@]}" -audiodev none,id=noaudio -device intel-hda -device hda-duplex,audiodev=noaudio \
     -device virtio-tablet-pci -device virtio-keyboard-pci \
     -virtfs "local,path=$dir/pkgcache,mount_tag=gooarchy-pkgcache,security_model=mapped-xattr,id=pkgcache" \
