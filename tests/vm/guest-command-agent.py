@@ -2,10 +2,13 @@
 """Run test commands delivered through a shared virtio filesystem."""
 
 import os
+import pwd
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+ARCH_HOME = pwd.getpwnam("arch").pw_dir
 
 
 def write_status(path, value):
@@ -26,7 +29,7 @@ def process_request(request, responses):
             if (request / "async").exists():
                 subprocess.Popen(
                     ["/bin/bash", "-c", command],
-                    cwd="/home/arch",
+                    cwd=ARCH_HOME,
                     stdin=source,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -39,7 +42,7 @@ def process_request(request, responses):
                 ) as stderr:
                     result = subprocess.run(
                         ["/bin/bash", "-c", command],
-                        cwd="/home/arch",
+                        cwd=ARCH_HOME,
                         stdin=source,
                         stdout=stdout,
                         stderr=stderr,
