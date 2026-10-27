@@ -402,7 +402,8 @@ running() {
   mapfile -d '' -t args 2>/dev/null <"/proc/$pid/cmdline" || return 1
   [[ ${args[0]:-} == */qemu-system-x86_64 || ${args[0]:-} == qemu-system-x86_64 ]] || return 1
   for arg in "${args[@]}"; do
-    [[ $arg == "file=$run/disk.qcow2,if=virtio,discard=unmap" ]] && return 0
+    [[ $arg == "file=$run/disk.qcow2,if=virtio,discard=unmap" ||
+       $arg == "file=$run/disk.qcow2,if=none,id=gooarchy_vm_root,discard=unmap" ]] && return 0
   done
   return 1
 }
@@ -478,9 +479,11 @@ start_qemu() {
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
   # Keep QEMU in this process group so a test runner can clean it up with the wrapper.
   # NoCloud reads the local CIDATA volume before network setup, so seed delivery needs no host route.
+  # Prefer the guest root disk explicitly; firmware priority among unindexed disks is unspecified.
   "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
     "${kernel_args[@]}" \
-    -drive "file=$run/disk.qcow2,if=virtio,discard=unmap" \
+    -drive "file=$run/disk.qcow2,if=none,id=gooarchy_vm_root,discard=unmap" \
+    -device "virtio-blk-pci,drive=gooarchy_vm_root,bootindex=1" \
     -blockdev "driver=vvfat,node-name=$seed_node,dir=$run/seed,label=CIDATA,rw=off,read-only=on" \
     -device "virtio-blk-pci,drive=$seed_node" \
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
