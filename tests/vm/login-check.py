@@ -33,7 +33,8 @@ def check(name, ok, detail=""):
 
 
 def guest(command, timeout=60):
-    r = subprocess.run(GUEST_COMMAND + [command], capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(GUEST_COMMAND + [command], stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=timeout)
     return r.stdout.strip()
 
 
