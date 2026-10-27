@@ -69,8 +69,10 @@
 # runs leave the synthetic sysfs override unset.
 # Host needs: x86_64 Linux with KVM (/dev/kvm), QEMU (or tests/vm/fetch-qemu.sh), with virgl a
 # usable render node, plus python3, ssh/ssh-keygen, curl, git, tar.
-set -euo pipefail
-here=$(cd -- "$(dirname -- "$0")" && pwd)
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  set -euo pipefail
+fi
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
 source "$here/qemu-graphics.sh"
 dir=${GOOARCHY_VM_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gooarchy-vm-test}
@@ -1322,6 +1324,7 @@ cleanup_interrupted_invocation() {
   exit "$status"
 }
 
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
 trap 'cleanup_interrupted_invocation 129' HUP
 trap 'cleanup_interrupted_invocation 130' INT
 trap 'cleanup_interrupted_invocation 143' TERM
@@ -1374,5 +1377,6 @@ case ${1:-all} in
     log "artifacts: $(artifacts)"
     summary
     ;;
-  *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2 ;;
+  *) sed -n '2,/^[[:space:]]*set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//' >&2; exit 2 ;;
 esac
+fi
