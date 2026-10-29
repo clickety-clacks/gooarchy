@@ -10,7 +10,7 @@ cat >"$tmp/bin/pacman" <<'SH'
 set -euo pipefail
 case ${1:-} in
   -Qi)
-    printf 'Name            : scottland\n'
+    printf 'Name            : %s\n' "${FAKE_INSTALLED_NAME:-scottland}"
     printf 'Version         : %s\n' "${FAKE_INSTALLED_VERSION:-0.3.4-1}"
     printf 'Packager        : %s\n' "${FAKE_PACKAGER:-Unknown Packager}"
     printf 'Validated By    : %s\n' "${FAKE_VALIDATED_BY:-Signature}"
@@ -22,7 +22,10 @@ case ${1:-} in
     case ${2:-} in
       gooarchy/scottland)
         printf 'Name            : scottland\n'
-        printf 'Version         : %s\n' "${FAKE_REPOSITORY_VERSION:-0.3.4-1}"
+        repository_version=${FAKE_REPOSITORY_VERSION-0.3.4-1}
+        if [[ -n $repository_version ]]; then
+          printf 'Version         : %s\n' "$repository_version"
+        fi
         ;;
       *) exit 1 ;;
     esac
@@ -55,6 +58,17 @@ if ! package_is_repository_copy scottland; then
   echo "signed package matching the Gooarchy repository version was not recognized" >&2
   exit 1
 fi
+if ! package_was_repository_copy scottland; then
+  echo "signed package offered by the selected Gooarchy repository was not recognized before upgrade" >&2
+  exit 1
+fi
+FAKE_INSTALLED_NAME=another-package
+export FAKE_INSTALLED_NAME
+if package_was_repository_copy scottland; then
+  echo "a different installed package name was recognized as a repository copy" >&2
+  exit 1
+fi
+unset FAKE_INSTALLED_NAME
 FAKE_PACKAGER='An unrelated packager'
 export FAKE_PACKAGER
 if ! package_is_repository_copy scottland; then
@@ -75,6 +89,42 @@ if package_is_repository_copy scottland; then
   echo "a different repository version was recognized as the installed copy" >&2
   exit 1
 fi
+if ! package_was_repository_copy scottland; then
+  echo "an older signed package offered by the selected Gooarchy repository was not recognized before upgrade" >&2
+  exit 1
+fi
+FAKE_REPOSITORY_VERSION=
+export FAKE_REPOSITORY_VERSION
+if package_was_repository_copy scottland; then
+  echo "a signed package was recognized when the selected Gooarchy repository did not offer it" >&2
+  exit 1
+fi
+FAKE_VALIDATED_BY=None
+export FAKE_VALIDATED_BY
+if package_was_repository_copy scottland; then
+  echo "an older package without signature validation was recognized before upgrade" >&2
+  exit 1
+fi
+FAKE_VALIDATED_BY=Signature
+FAKE_REPOSITORY_VERSION=0.3.4-1
+export FAKE_VALIDATED_BY FAKE_REPOSITORY_VERSION
+
+if ! repository_scottland_wayfire_import_exception 0.3.4-1 wayfire 1 0; then
+  echo "the exact imported core's unversioned Wayfire metadata was not exempted" >&2
+  exit 1
+fi
+if ! repository_scottland_wayfire_import_exception 0.3.4-1 "" 0 0; then
+  echo "unavailable Wayfire metadata became a new stop for the exact imported core" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.3.4-1 wayfire=0.11.0 1 0; then
+  echo "the imported core's versioned Wayfire dependency was incorrectly exempted" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.3.3-1 wayfire 1 0; then
+  echo "the unversioned Wayfire exception was broadened to another build" >&2
+  exit 1
+fi
 
 arch_wayfire_package_version=
 arch_wayfire_version=
@@ -90,11 +140,12 @@ if [[ -z $arch_wayfire_version ]]; then optional_wayfire_warning=1; fi
 repository_scottland_wayfire_allowed 0.3.4-1 wayfire "$arch_wayfire_version" 0
 repository_scottland_wayfire_allowed 0.3.4-1 wayfire 0.13.0 0
 repository_scottland_wayfire_allowed 0.3.4-1 "" "" 0
-repository_scottland_wayfire_allowed 0.3.4-1 wayfire=0.11.0 0.10.0 0
 repository_scottland_wayfire_allowed 0.3.3-1 wayfire=0.11.0 0.11.0 0
 expect_wayfire_status 2 0.3.4-1 wayfire "" 1
 expect_wayfire_status 1 0.3.3-1 wayfire=0.11.0 0.10.0 0
-expect_wayfire_status 0 0.3.3-1 wayfire=0.11.0 "" 0
+expect_wayfire_status 3 0.3.3-1 wayfire=0.11.0 "" 0
+expect_wayfire_status 3 0.3.4-1 wayfire=0.11.0 "" 0
+expect_wayfire_status 0 0.3.4-1 wayfire=0.11.0 0.11.0 0
 expect_wayfire_status 0 0.3.3-1 wayfire=0.10.0 0.10.0 0
 expect_wayfire_status 0 0.3.3-1 wayfire=0.11.0 0.10.0 1
 expect_wayfire_status 2 0.3.3-1 wayfire 0.13.0 0
