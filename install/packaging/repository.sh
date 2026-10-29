@@ -161,6 +161,7 @@ repo_scottland_depends=$(awk '
   in_depends { depends = depends " " $0 }
   END { print depends }
 ' <<<"$repo_scottland_metadata")
+repo_scottland_packager=$(awk -F: '$1 ~ /^[[:space:]]*Packager[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$repo_scottland_metadata")
 repo_wayfire_dependency=
 repo_dependency_fields=()
 read -r -a repo_dependency_fields <<<"$repo_scottland_depends"
@@ -187,11 +188,14 @@ if [[ -z $arch_wayfire_version ]]; then
 fi
 wayfire_policy_status=0
 repository_scottland_wayfire_allowed \
-  "$repo_scottland_version" "$repo_wayfire_dependency" \
+  "$repo_scottland_version" "$repo_scottland_packager" \
+  "$repo_wayfire_dependency" "$repo_scottland_metadata_available" \
   "$arch_wayfire_version" "$scottland_override" || wayfire_policy_status=$?
-if [[ $repo_scottland_version == 0.3.4-1 && $scottland_override == 0 ]]; then
+if repository_scottland_is_imported_core \
+  "$repo_scottland_version" "$repo_scottland_packager" \
+  "$repo_scottland_metadata_available" "$scottland_override"; then
   if repository_scottland_wayfire_import_exception \
-    "$repo_scottland_version" "$repo_wayfire_dependency" \
+    "$repo_scottland_version" "$repo_scottland_packager" "$repo_wayfire_dependency" \
     "$repo_scottland_metadata_available" "$scottland_override"; then
     if [[ $repo_scottland_metadata_available == 0 || -z $repo_wayfire_dependency ]]; then
       report "Warning: the selected Gooarchy repository did not expose Wayfire dependency metadata for Scottland 0.3.4-1; pacman will still enforce the package's actual dependencies and signatures."

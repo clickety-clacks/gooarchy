@@ -109,19 +109,43 @@ FAKE_VALIDATED_BY=Signature
 FAKE_REPOSITORY_VERSION=0.3.4-1
 export FAKE_VALIDATED_BY FAKE_REPOSITORY_VERSION
 
-if ! repository_scottland_wayfire_import_exception 0.3.4-1 wayfire 1 0; then
+if ! repository_scottland_is_imported_core 0.3.4-1 'Unknown Packager' 1 0; then
+  echo "the exact upstream package identity was not recognized" >&2
+  exit 1
+fi
+if repository_scottland_is_imported_core 0.3.4-1 Gooarchy 1 0; then
+  echo "a package sharing the imported version bypassed the upstream Packager identity" >&2
+  exit 1
+fi
+if ! repository_scottland_is_imported_core 0.3.4-1 "" 0 0; then
+  echo "unavailable package metadata became a replacement stop for the exact imported version" >&2
+  exit 1
+fi
+if ! repository_scottland_wayfire_import_exception 0.3.4-1 'Unknown Packager' wayfire 1 0; then
   echo "the exact imported core's unversioned Wayfire metadata was not exempted" >&2
   exit 1
 fi
-if ! repository_scottland_wayfire_import_exception 0.3.4-1 "" 0 0; then
+if ! repository_scottland_wayfire_import_exception 0.3.4-1 'Unknown Packager' "" 1 0; then
+  echo "absent dependency metadata became a replacement stop for the exact imported core" >&2
+  exit 1
+fi
+if ! repository_scottland_wayfire_import_exception 0.3.4-1 "" "" 0 0; then
   echo "unavailable Wayfire metadata became a new stop for the exact imported core" >&2
   exit 1
 fi
-if repository_scottland_wayfire_import_exception 0.3.4-1 wayfire=0.11.0 1 0; then
+if repository_scottland_wayfire_import_exception 0.3.4-1 'Unknown Packager' wayfire=0.11.0 1 0; then
   echo "the imported core's versioned Wayfire dependency was incorrectly exempted" >&2
   exit 1
 fi
-if repository_scottland_wayfire_import_exception 0.3.3-1 wayfire 1 0; then
+if repository_scottland_wayfire_import_exception 0.3.4-1 "" wayfire=0.11.0 0 0; then
+  echo "unavailable package metadata exempted a versioned Wayfire dependency" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.3.4-1 Gooarchy wayfire 1 0; then
+  echo "a different Packager with an unversioned dependency was incorrectly exempted" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.3.3-1 'Unknown Packager' wayfire 1 0; then
   echo "the unversioned Wayfire exception was broadened to another build" >&2
   exit 1
 fi
@@ -137,19 +161,23 @@ fi
 optional_wayfire_warning=0
 if [[ -z $arch_wayfire_version ]]; then optional_wayfire_warning=1; fi
 [[ $optional_wayfire_warning == 1 ]]
-repository_scottland_wayfire_allowed 0.3.4-1 wayfire "$arch_wayfire_version" 0
-repository_scottland_wayfire_allowed 0.3.4-1 wayfire 0.13.0 0
-repository_scottland_wayfire_allowed 0.3.4-1 "" "" 0
-repository_scottland_wayfire_allowed 0.3.3-1 wayfire=0.11.0 0.11.0 0
-expect_wayfire_status 2 0.3.4-1 wayfire "" 1
-expect_wayfire_status 1 0.3.3-1 wayfire=0.11.0 0.10.0 0
-expect_wayfire_status 3 0.3.3-1 wayfire=0.11.0 "" 0
-expect_wayfire_status 3 0.3.4-1 wayfire=0.11.0 "" 0
-expect_wayfire_status 0 0.3.4-1 wayfire=0.11.0 0.11.0 0
-expect_wayfire_status 0 0.3.3-1 wayfire=0.10.0 0.10.0 0
-expect_wayfire_status 0 0.3.3-1 wayfire=0.11.0 0.10.0 1
-expect_wayfire_status 2 0.3.3-1 wayfire 0.13.0 0
-expect_wayfire_status 2 0.3.3-1 "" 0.13.0 0
-expect_wayfire_status 2 0.3.3-1 wayland 0.13.0 0
+repository_scottland_wayfire_allowed 0.3.4-1 'Unknown Packager' wayfire 1 "$arch_wayfire_version" 0
+repository_scottland_wayfire_allowed 0.3.4-1 'Unknown Packager' wayfire 1 0.13.0 0
+repository_scottland_wayfire_allowed 0.3.4-1 "" "" 0 "" 0
+repository_scottland_wayfire_allowed 0.3.3-1 Gooarchy wayfire=0.11.0 1 0.11.0 0
+expect_wayfire_status 2 0.3.4-1 Gooarchy wayfire 1 "" 0
+expect_wayfire_status 3 0.3.4-1 "" wayfire=0.11.0 0 "" 0
+expect_wayfire_status 1 0.3.3-1 Gooarchy wayfire=0.11.0 1 0.10.0 0
+expect_wayfire_status 3 0.3.3-1 Gooarchy wayfire=0.11.0 1 "" 0
+expect_wayfire_status 3 0.3.4-1 'Unknown Packager' wayfire=0.11.0 1 "" 0
+expect_wayfire_status 1 0.3.4-1 'Unknown Packager' wayfire=0.11.0 1 0.10.0 0
+expect_wayfire_status 0 0.3.4-1 'Unknown Packager' wayfire=0.11.0 1 0.11.0 0
+expect_wayfire_status 1 0.3.4-1 Gooarchy wayfire=0.11.0 1 0.10.0 0
+expect_wayfire_status 3 0.3.4-1 Gooarchy wayfire=0.11.0 1 "" 0
+expect_wayfire_status 0 0.3.3-1 Gooarchy wayfire=0.10.0 1 0.10.0 0
+expect_wayfire_status 0 0.3.3-1 Gooarchy wayfire=0.11.0 1 0.10.0 1
+expect_wayfire_status 2 0.3.3-1 Gooarchy wayfire 1 0.13.0 0
+expect_wayfire_status 2 0.3.3-1 Gooarchy "" 1 0.13.0 0
+expect_wayfire_status 2 0.3.3-1 Gooarchy wayland 1 0.13.0 0
 
 echo "repository signature/version recognition and Wayfire dependency policy passed"

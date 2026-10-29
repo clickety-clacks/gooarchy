@@ -47,18 +47,28 @@ package_is_repository_copy() {
   [[ -n $repository_version && $installed_version == "$repository_version" ]]
 }
 
-# Only the imported 0.3.4 core's unversioned Wayfire dependency (or unavailable dependency
-# metadata) avoids this display-metadata check. A versioned dependency always needs an Arch
-# version to compare, including on the imported package.
-repository_scottland_wayfire_import_exception() {
-  local package_version=$1 dependency=$2 metadata_available=$3 override=$4
+# The imported 0.3.4 core is identified by the upstream Packager value whenever package metadata
+# is available. If the package metadata itself is unavailable, keep the no-new-stop behavior for
+# this exact selected-repository version. When dependency metadata exists, only its unversioned
+# Wayfire dependency avoids comparison; versioned dependencies always need an Arch version.
+repository_scottland_is_imported_core() {
+  local package_version=$1 packager=$2 metadata_available=$3 override=$4
   [[ $package_version == 0.3.4-1 && $override != 1 ]] || return 1
-  [[ $metadata_available == 0 || -z $dependency || $dependency == wayfire ]]
+  [[ $packager == 'Unknown Packager' || $metadata_available == 0 ]]
+}
+
+repository_scottland_wayfire_import_exception() {
+  local package_version=$1 packager=$2 dependency=$3 metadata_available=$4 override=$5
+  repository_scottland_is_imported_core \
+    "$package_version" "$packager" "$metadata_available" "$override" || return 1
+  [[ -z $dependency || $dependency == wayfire ]]
 }
 
 repository_scottland_wayfire_allowed() {
-  local package_version=$1 dependency=$2 arch_version=$3 override=$4 required_version
-  repository_scottland_wayfire_import_exception "$package_version" "$dependency" 1 "$override" && return 0
+  local package_version=$1 packager=$2 dependency=$3 metadata_available=$4
+  local arch_version=$5 override=$6 required_version
+  repository_scottland_wayfire_import_exception \
+    "$package_version" "$packager" "$dependency" "$metadata_available" "$override" && return 0
   case $dependency in
     wayfire=*) required_version=${dependency#wayfire=} ;;
     *) return 2 ;;
