@@ -170,6 +170,27 @@ class ReleaseAPITests(unittest.TestCase):
             release_notes="Synthetic release notes.",
         )
 
+    def rewrite_manifest_and_rebind_receipt(self) -> None:
+        self.manifest_path.write_text(
+            json.dumps(self.manifest, sort_keys=True, separators=(",", ":")) + "\n"
+        )
+        self.manifest_hash = digest(self.manifest_path.read_bytes())
+        receipt = json.loads(self.signatures_path.read_text(encoding="utf-8"))
+        receipt["manifest_sha256"] = self.manifest_hash
+        self.signatures_path.write_text(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n"
+        )
+
+    def use_transfer_v2_manifest(self) -> None:
+        self.manifest["schema"] = "gooarchy-repository-transfer-v2"
+        for package in self.manifest["packages"]:
+            package.update({
+                "architecture": "any",
+                "source_revision": "Gooarchy " + "a" * 40,
+                "origin_kind": "source-build",
+            })
+        self.rewrite_manifest_and_rebind_receipt()
+
     def test_publish_forwards_release_notes_file_without_reformatting(self) -> None:
         notes = (
             "Installation validation stopped before first boot because virtual display support was unavailable.\r\n\r\n"
@@ -209,12 +230,48 @@ class ReleaseAPITests(unittest.TestCase):
         self.assertEqual(api.release_notes, notes)
         self.assertEqual(api.promotions, 1)
 
-    def test_latest_moves_only_after_exact_assets_are_read_back(self) -> None:
+    def test_legacy_v1_manifest_moves_latest_only_after_exact_assets_are_read_back(self) -> None:
         api = FakeReleaseAPI()
         self.publish(api)
         self.assertEqual(api.promotions, 1)
         self.assertEqual(api.latest, "gooarchy-repo-test")
         self.assertEqual(set(api.assets), {path.name for path in self.assets.iterdir()})
+
+    def test_transfer_v2_with_signatures_v1_is_accepted(self) -> None:
+        self.use_transfer_v2_manifest()
+
+        api = FakeReleaseAPI()
+        self.publish(api)
+
+        self.assertEqual(api.promotions, 1)
+        self.assertEqual(api.latest, "gooarchy-repo-test")
+        self.assertEqual(set(api.assets), {path.name for path in self.assets.iterdir()})
+
+    def test_unknown_transfer_schema_is_rejected_before_remote_draft_creation(self) -> None:
+        self.manifest["schema"] = "gooarchy-repository-transfer-v3"
+        self.rewrite_manifest_and_rebind_receipt()
+
+        api = FakeReleaseAPI()
+        with self.assertRaisesRegex(release_api.ReleaseError, "schema is unsupported"):
+            self.publish(api)
+        self.assertEqual(api.promotions, 0)
+        self.assertEqual(api.assets, {})
+        self.assertFalse(api.draft)
+
+    def test_transfer_v2_still_requires_receipt_to_bind_exact_manifest(self) -> None:
+        self.use_transfer_v2_manifest()
+        receipt = json.loads(self.signatures_path.read_text(encoding="utf-8"))
+        receipt["manifest_sha256"] = "0" * 64
+        self.signatures_path.write_text(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n"
+        )
+
+        api = FakeReleaseAPI()
+        with self.assertRaisesRegex(release_api.ReleaseError, "does not match the verified transfer"):
+            self.publish(api)
+        self.assertEqual(api.promotions, 0)
+        self.assertEqual(api.assets, {})
+        self.assertFalse(api.draft)
 
     def test_incomplete_draft_never_promotes_latest(self) -> None:
         api = FakeReleaseAPI()
@@ -251,6 +308,7 @@ class ReleaseAPITests(unittest.TestCase):
         self.assertEqual(api.assets, {})
 
     def test_manifest_payload_hash_mismatch_is_rejected_before_draft_creation(self) -> None:
+        self.use_transfer_v2_manifest()
         (self.assets / "gooarchy.db").write_bytes(b"tampered database")
         api = FakeReleaseAPI()
         with self.assertRaisesRegex(release_api.ReleaseError, "manifest or signature receipt"):

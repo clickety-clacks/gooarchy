@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY = "clickety-clacks/gooarchy"
+TRANSFER_MANIFEST_SCHEMAS = {
+    "gooarchy-repository-transfer-v1",
+    "gooarchy-repository-transfer-v2",
+}
 API_ROOT = f"https://api.github.com/repos/{REPOSITORY}"
 API_VERSION = "2026-03-10"
 TOKEN_LIMIT = 8192
@@ -114,7 +118,7 @@ def prepare_assets(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ReleaseError("transfer manifest is unreadable or invalid JSON.") from error
-    if not isinstance(manifest, dict) or manifest.get("schema") != "gooarchy-repository-transfer-v1":
+    if not isinstance(manifest, dict) or manifest.get("schema") not in TRANSFER_MANIFEST_SCHEMAS:
         raise ReleaseError("transfer manifest schema is unsupported.")
     if manifest.get("repository") != REPOSITORY:
         raise ReleaseError("transfer manifest names a different release repository.")
