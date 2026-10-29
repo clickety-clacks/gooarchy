@@ -44,7 +44,10 @@ else
 fi
 trap 'rm -rf -- "$tmp"' EXIT
 mkdir -p "$tmp/src" "$tmp/release/wayland-helper"
-printf '%s\n' fixture >"$tmp/release/cua-driver"
+cat >"$tmp/release/cua-driver" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$CUA_TEST_UPSTREAM_LOG"
+EOF
 printf '%s\n' fixture >"$tmp/release/cua-cursor-theme"
 printf '%s\n' fixture >"$tmp/release/libcua_driver_sdk.so"
 printf '%s\n' fixture >"$tmp/release/cua_driver_node_runtime.node"
@@ -52,11 +55,13 @@ chmod +x "$tmp/release/cua-driver" "$tmp/release/cua-cursor-theme"
 printf '%s\n' fixture >"$tmp/release/wayland-helper/extension.js"
 tar -czf "$tmp/src/cua-driver-rs-${pkgver}-linux-x86_64-binary.tar.gz" -C "$tmp/release" .
 cp -- "$service" "$tmp/src/cua-driver.service"
+cp -- "$(dirname -- "$recipe")/cua-driver-wrapper.sh" "$tmp/src/cua-driver-wrapper.sh"
 printf 'MIT License\nfixture\n' >"$tmp/src/LICENSE.md"
 
 srcdir=$tmp/src
 pkgdir=$tmp/pkg
 package
+[[ -x $pkgdir/usr/lib/cua-driver/cua-driver-upstream ]]
 [[ -x $pkgdir/usr/lib/cua-driver/cua-driver ]]
 [[ $(readlink "$pkgdir/usr/bin/cua-driver") == /usr/lib/cua-driver/cua-driver ]]
 [[ $(readlink "$pkgdir/usr/bin/cua-cursor-theme") == /usr/lib/cua-driver/cua-cursor-theme ]]
@@ -124,9 +129,19 @@ esac
 EOF
 cat >"$tmp/bin/pacman" <<'EOF'
 #!/usr/bin/env bash
-[[ ${1:-} == -Q ]] || exit 93
-shift
-for package in "$@"; do printf '%s 1-1\n' "$package"; done
+case ${1:-} in
+  -Qoq)
+    printf '%s\n' "$*" >>"$CUA_TEST_PACMAN_LOG"
+    [[ ${2:-} == -- && $# == 3 ]] || exit 93
+    [[ ${CUA_TEST_PACMAN_OWNS:-yes} == yes ]] || exit 1
+    printf 'cua-driver\n'
+    ;;
+  -Q)
+    shift
+    for package in "$@"; do printf '%s 1-1\n' "$package"; done
+    ;;
+  *) exit 93 ;;
+esac
 EOF
 chmod +x "$tmp/bin/timeout" "$tmp/bin/sleep" "$tmp/bin/systemctl" "$tmp/bin/cua-driver" "$tmp/bin/pacman"
 
@@ -135,9 +150,44 @@ export GOOARCHY_INSTALL=$repo_root/install
 export GOOARCHY_STATE=$tmp/state
 export GOOARCHY_INSTALL_LOG_FILE=$tmp/install.log
 export CUA_TEST_SYSTEMCTL_LOG=$tmp/systemctl.log
+export CUA_TEST_PACMAN_LOG=$tmp/pacman.log
+export CUA_TEST_UPSTREAM_LOG=$tmp/upstream.log
 export CUA_TEST_STATUS_COUNT=$tmp/status-count
 mkdir -p "$GOOARCHY_STATE"
 touch "$GOOARCHY_STATE/builds.tsv"
+
+expected_pacman_guidance='This executable is managed by pacman. Update with `sudo pacman -Syu`; release selection and availability are controlled by your package repository. The upstream installer and stable/nightly channel switching are disabled.'
+assert_pacman_managed_operation_blocked() {
+  local label=$1
+  shift
+  : >"$CUA_TEST_PACMAN_LOG"
+  : >"$CUA_TEST_UPSTREAM_LOG"
+  if "$pkgdir/usr/lib/cua-driver/cua-driver" "$@" >"$tmp/$label-managed-output" 2>&1; then
+    echo "pacman-managed cua-driver accepted mutation: $*" >&2
+    exit 1
+  fi
+  grep -Fxq -- "$expected_pacman_guidance" "$tmp/$label-managed-output"
+  grep -Fq -- "-Qoq -- $pkgdir/usr/lib/cua-driver/cua-driver-upstream" "$CUA_TEST_PACMAN_LOG"
+  [[ ! -s $CUA_TEST_UPSTREAM_LOG ]]
+}
+assert_pacman_managed_operation_blocked channel channel set nightly
+assert_pacman_managed_operation_blocked update update --apply
+
+: >"$CUA_TEST_PACMAN_LOG"
+"$pkgdir/usr/lib/cua-driver/cua-driver" status >"$tmp/read-only-output" 2>&1
+grep -Fxq 'status' "$CUA_TEST_UPSTREAM_LOG"
+[[ ! -s $CUA_TEST_PACMAN_LOG ]]
+
+: >"$CUA_TEST_PACMAN_LOG"
+: >"$CUA_TEST_UPSTREAM_LOG"
+export CUA_TEST_PACMAN_OWNS=no
+if "$pkgdir/usr/lib/cua-driver/cua-driver" update --apply >"$tmp/unconfirmed-output" 2>&1; then
+  echo 'cua-driver accepted a mutation when pacman ownership could not be confirmed' >&2
+  exit 1
+fi
+grep -Fq 'Unable to confirm pacman ownership of cua-driver' "$tmp/unconfirmed-output"
+[[ ! -s $CUA_TEST_UPSTREAM_LOG ]]
+export CUA_TEST_PACMAN_OWNS=yes
 
 run_check() {
   local label=$1
