@@ -6,14 +6,14 @@
 # Keep this final upstream tag and package version aligned. RCs, branches, and raw commits are
 # unsupported source selectors.
 pkgname=gooarchy-flavorings
-_tag=v0.2.0
-pkgver=0.2.0
+_tag=v0.2.1
+pkgver=0.2.1
 pkgrel=1
 # Expected identity for the selected final tag. These values validate the tag and any imported
 # package receipt; _tag remains the sole source selector.
-_upstream_commit=ecbaafc1c92eecf6b21143241e1618707f3e3f36
-_upstream_tree=032d9108982071a8a3c7452d137995ffb3e6e707
-_upstream_archive_sha256=cc151da8b5cb1108b739b8946bf54da48036403dbea34ccc3f224f2d8246bc02
+_upstream_commit=a7107415e39be00fb50745788c17429932bf6829
+_upstream_tree=d1ec6a0ded81b8e4cb8ccb167a8679fb9f8542b6
+_upstream_archive_sha256=722d4cf2f83c2f1f16e27e0a2e1105a28cf46716025bf1f290565df6300763af
 pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
 arch=('any')
 url="https://github.com/clickety-clacks/gooarchy-flavorings.git"
