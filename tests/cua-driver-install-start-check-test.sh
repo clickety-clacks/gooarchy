@@ -34,11 +34,17 @@ cat >"$tmp/bin/cua-driver" <<'EOF'
 printf '%s\n' "$*" >>"$CUA_TEST_DRIVER_LOG"
 case ${1:-} in
   serve)
+    if [[ ${2:-} != --socket || ${4:-} != --pid-file ]] \
+      || [[ $(dirname -- "${3:-/}") != "$(dirname -- "${5:-/}")" ]] \
+      || [[ $(basename -- "${5:-}") != daemon.pid ]]; then
+      exit 94
+    fi
     if [[ $CUA_TEST_CONSOLE_SERVE_MODE == fail ]]; then
       echo 'console serve failed' >&2
       exit 1
     fi
     printf '%s\n' "$$" >"$CUA_TEST_CONSOLE_PID_FILE"
+    printf '%s\n' "$$" >"$5"
     touch "$CUA_TEST_CONSOLE_STATE"
     while [[ -e $CUA_TEST_CONSOLE_STATE ]]; do /bin/sleep 0.01; done
     ;;
@@ -47,6 +53,11 @@ case ${1:-} in
     ;;
   status)
     if [[ ${2:-} == --socket ]]; then
+      if [[ ${4:-} != --pid-file ]] \
+        || [[ $(dirname -- "${3:-/}") != "$(dirname -- "${5:-/}")" ]] \
+        || [[ $(basename -- "${5:-}") != daemon.pid ]]; then
+        exit 95
+      fi
       if [[ -e $CUA_TEST_CONSOLE_STATE ]]; then
         echo 'daemon running'
         exit 0
@@ -87,7 +98,10 @@ export CUA_TEST_SYSTEMCTL_LOG=$tmp/systemctl.log
 export CUA_TEST_DRIVER_LOG=$tmp/driver.log
 export GOOARCHY_INSTALL_LOG_FILE=$tmp/install.log
 export GOOARCHY_STATE=$tmp/state
+export HOME=$tmp/home
 mkdir -p "$GOOARCHY_STATE"
+mkdir -p "$HOME/.cache/cua-driver"
+printf '%s\n' 'unrelated-daemon-pid' >"$HOME/.cache/cua-driver/cua-driver.pid"
 touch "$GOOARCHY_STATE/builds.tsv"
 
 run_check() {
@@ -158,6 +172,7 @@ if kill -0 "$console_pid" 2>/dev/null; then
   echo 'console check left its temporary daemon process running' >&2
   exit 1
 fi
+[[ $(cat "$HOME/.cache/cua-driver/cua-driver.pid") == unrelated-daemon-pid ]]
 
 export CUA_TEST_CONSOLE_SERVE_MODE=fail
 run_check console-failure

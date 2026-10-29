@@ -1,7 +1,7 @@
 # Start check for the signed cua-driver package installed with Gooarchy.
 
 cua_driver_console_start_check() {
-  local binary=$1 temp_dir socket serve_log server_pid
+  local binary=$1 temp_dir socket pid_file serve_log server_pid
   local serve_status=0 status_output= status_detail= serve_detail=
   local answer_status=1 stop_status=0 stop_output= final_status=0 final_output=
   local retry_stop_status=0 retry_stop_output= attempt
@@ -11,16 +11,17 @@ cua_driver_console_start_check() {
     return 0
   }
   socket=$temp_dir/daemon.sock
+  pid_file=$temp_dir/daemon.pid
   serve_log=$temp_dir/serve.log
 
   # Use a private socket so the check cannot attach to a pre-existing user daemon. The
   # timeout bounds and cleans up this foreground server even if status or stop fails.
-  timeout --signal=TERM --kill-after=1s 40s "$binary" serve --socket "$socket" \
-    >"$serve_log" 2>&1 &
+  timeout --signal=TERM --kill-after=1s 40s "$binary" serve \
+    --socket "$socket" --pid-file "$pid_file" >"$serve_log" 2>&1 &
   server_pid=$!
 
   for attempt in {1..12}; do
-    status_output=$(timeout 2s "$binary" status --socket "$socket" 2>&1) && {
+    status_output=$(timeout 2s "$binary" status --socket "$socket" --pid-file "$pid_file" 2>&1) && {
       answer_status=0
       break
     }
@@ -33,10 +34,10 @@ cua_driver_console_start_check() {
   fi
   wait "$server_pid" || serve_status=$?
 
-  final_output=$(timeout 2s "$binary" status --socket "$socket" 2>&1) || final_status=$?
+  final_output=$(timeout 2s "$binary" status --socket "$socket" --pid-file "$pid_file" 2>&1) || final_status=$?
   if ((final_status == 0)); then
     retry_stop_output=$(timeout 3s "$binary" stop --socket "$socket" 2>&1) || retry_stop_status=$?
-    final_output=$(timeout 2s "$binary" status --socket "$socket" 2>&1) || final_status=$?
+    final_output=$(timeout 2s "$binary" status --socket "$socket" --pid-file "$pid_file" 2>&1) || final_status=$?
   fi
 
   serve_detail=$(<"$serve_log")
