@@ -92,7 +92,7 @@ fresh_install_pin=$(env -i PATH="$no_git_path" GOOARCHY_INSTALL="$repo_root/inst
     source "$GOOARCHY_INSTALL/helpers/all.sh"
     printf "%s|%s\n" "$GOOARCHY_SCOTTLAND_REF" "$GOOARCHY_SCOTTLAND_SOURCE_KIND"
   ')
-[[ $fresh_install_pin == 'v0.3.1|tag' ]] || {
+[[ $fresh_install_pin == 'v0.3.4|tag' ]] || {
   printf 'fresh-install source selection returned %s instead of the default final tag\n' "$fresh_install_pin" >&2
   exit 1
 }
