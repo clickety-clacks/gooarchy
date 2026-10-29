@@ -12,7 +12,7 @@ case ${1:-} in
   -Qi)
     printf 'Name            : scottland\n'
     printf 'Version         : %s\n' "${FAKE_INSTALLED_VERSION:-0.3.4-1}"
-    printf 'Packager        : Unknown Packager\n'
+    printf 'Packager        : %s\n' "${FAKE_PACKAGER:-Unknown Packager}"
     printf 'Validated By    : %s\n' "${FAKE_VALIDATED_BY:-Signature}"
     ;;
   -Q)
@@ -37,10 +37,31 @@ GOOARCHY_STATE="$tmp/state"
 export GOOARCHY_STATE
 source "$repo_root/install/helpers/repository.sh"
 
+expect_wayfire_status() {
+  local expected=$1 status=0
+  shift
+  if repository_scottland_wayfire_allowed "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  if ((status != expected)); then
+    echo "Wayfire policy returned $status, expected $expected" >&2
+    exit 1
+  fi
+}
+
 if ! package_is_repository_copy scottland; then
   echo "signed package matching the Gooarchy repository version was not recognized" >&2
   exit 1
 fi
+FAKE_PACKAGER='An unrelated packager'
+export FAKE_PACKAGER
+if ! package_is_repository_copy scottland; then
+  echo "repository-copy recognition depended on the Packager field" >&2
+  exit 1
+fi
+unset FAKE_PACKAGER
 FAKE_VALIDATED_BY=None
 export FAKE_VALIDATED_BY
 if package_is_repository_copy scottland; then
@@ -66,32 +87,18 @@ fi
 optional_wayfire_warning=0
 if [[ -z $arch_wayfire_version ]]; then optional_wayfire_warning=1; fi
 [[ $optional_wayfire_warning == 1 ]]
-repository_scottland_wayfire_allowed 0.3.4-1 Gooarchy wayfire=0.11.0 "$arch_wayfire_version" 0
-
-repository_scottland_wayfire_allowed 0.3.4-1 "Unknown Packager" wayfire 0.13.0 0
-repository_scottland_wayfire_allowed 0.3.4-1 "Unknown Packager" wayfire "" 0
-repository_scottland_wayfire_allowed 0.3.4-1 Gooarchy wayfire=0.11.0 0.11.0 0
-repository_scottland_wayfire_allowed 0.3.4-1 Gooarchy wayfire=0.11.0 "" 0
-repository_scottland_wayfire_allowed 0.3.4-1 Gooarchy wayfire=0.11.0 0.10.0 1
-if repository_scottland_wayfire_allowed 0.3.3-1 "Unknown Packager" wayfire 0.13.0 0; then
-  echo "unversioned Wayfire was accepted for the wrong package version" >&2
-  exit 1
-fi
-if repository_scottland_wayfire_allowed 0.3.4-1 Gooarchy wayfire 0.13.0 0; then
-  echo "unversioned Wayfire was accepted for a source-built package" >&2
-  exit 1
-fi
-if repository_scottland_wayfire_allowed 0.3.4-1 Gooarchy wayfire=0.11.0 0.10.0 0; then
-  echo "a known versioned Wayfire mismatch was accepted without override" >&2
-  exit 1
-fi
-set +e
-repository_scottland_wayfire_allowed 0.3.4-1 Gooarchy wayland 0.13.0 0
-status=$?
-set -e
-if ((status != 2)); then
-  echo "an unsupported Wayfire dependency returned status $status, expected 2" >&2
-  exit 1
-fi
+repository_scottland_wayfire_allowed 0.3.4-1 wayfire "$arch_wayfire_version" 0
+repository_scottland_wayfire_allowed 0.3.4-1 wayfire 0.13.0 0
+repository_scottland_wayfire_allowed 0.3.4-1 "" "" 0
+repository_scottland_wayfire_allowed 0.3.4-1 wayfire=0.11.0 0.10.0 0
+repository_scottland_wayfire_allowed 0.3.3-1 wayfire=0.11.0 0.11.0 0
+expect_wayfire_status 2 0.3.4-1 wayfire "" 1
+expect_wayfire_status 1 0.3.3-1 wayfire=0.11.0 0.10.0 0
+expect_wayfire_status 0 0.3.3-1 wayfire=0.11.0 "" 0
+expect_wayfire_status 0 0.3.3-1 wayfire=0.10.0 0.10.0 0
+expect_wayfire_status 0 0.3.3-1 wayfire=0.11.0 0.10.0 1
+expect_wayfire_status 2 0.3.3-1 wayfire 0.13.0 0
+expect_wayfire_status 2 0.3.3-1 "" 0.13.0 0
+expect_wayfire_status 2 0.3.3-1 wayland 0.13.0 0
 
 echo "repository signature/version recognition and Wayfire dependency policy passed"

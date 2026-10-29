@@ -28,19 +28,16 @@ package_is_repository_copy() {
   [[ -n $repository_version && $installed_version == "$repository_version" ]]
 }
 
-# Return success for the exact imported core's unversioned wayfire dependency, or for a
-# versioned dependency that matches the available Arch version. Pacman remains the dependency
-# authority when the optional version query is unavailable. Status 2 means the package omitted
-# Wayfire entirely; status 1 means its compatibility declaration is not acceptable here.
+# The signed Gooarchy repository supplies the unchanged upstream 0.3.4 core. Do not make
+# installer acceptance depend on optional Wayfire version/dependency display metadata for that
+# package; pacman still validates its signature and enforces the archive's real dependencies.
+# Other Scottland builds retain the exact versioned-dependency check when Arch exposes a
+# comparison version. Missing optional version metadata remains nonfatal; the package manager
+# still enforces the package's actual dependencies and signatures.
 repository_scottland_wayfire_allowed() {
-  local package_version=$1 packager=$2 dependency=$3 arch_version=$4 override=$5 required_version
+  local package_version=$1 dependency=$2 arch_version=$3 override=$4 required_version
+  [[ $package_version == 0.3.4-1 && $override != 1 ]] && return 0
   case $dependency in
-    wayfire)
-      # This is the exact unchanged upstream core asset. Its package dependency still
-      # requires Wayfire; only a version comparison is unavailable in the archive.
-      [[ $package_version == 0.3.4-1 && $packager == "Unknown Packager" ]]
-      return
-      ;;
     wayfire=*) required_version=${dependency#wayfire=} ;;
     *) return 2 ;;
   esac

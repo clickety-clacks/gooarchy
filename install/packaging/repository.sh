@@ -145,8 +145,12 @@ for package in gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-goo
 done
 
 repo_scottland_version=$(sync_package_field scottland Version)
-repo_scottland_packager=$(sync_package_field scottland Packager)
-repo_scottland_depends=$(pacman -Si gooarchy/scottland 2>/dev/null | awk '
+repo_scottland_metadata_available=1
+if ! repo_scottland_metadata=$(pacman -Si gooarchy/scottland 2>/dev/null); then
+  repo_scottland_metadata_available=0
+  repo_scottland_metadata=
+fi
+repo_scottland_depends=$(awk '
   /^Depends On[[:space:]]*:/ {
     in_depends = 1
     sub(/^[^:]*:[[:space:]]*/, "")
@@ -156,19 +160,16 @@ repo_scottland_depends=$(pacman -Si gooarchy/scottland 2>/dev/null | awk '
   /^[^[:space:]].*:/ { in_depends = 0 }
   in_depends { depends = depends " " $0 }
   END { print depends }
-')
+' <<<"$repo_scottland_metadata")
 repo_wayfire_dependency=
 repo_dependency_fields=()
 read -r -a repo_dependency_fields <<<"$repo_scottland_depends"
 for repo_dependency in "${repo_dependency_fields[@]}"; do
   if [[ $repo_dependency == wayfire || $repo_dependency == wayfire=* ]]; then
-    [[ -z $repo_wayfire_dependency ]] ||
-      fail_repository "the repository's scottland package declares Wayfire more than once."
     repo_wayfire_dependency=$repo_dependency
+    break
   fi
 done
-[[ -n $repo_wayfire_dependency ]] ||
-  fail_repository "the repository's scottland package does not declare its Wayfire dependency."
 repo_wayfire_version=
 if [[ $repo_wayfire_dependency == wayfire=* ]]; then
   repo_wayfire_version=${repo_wayfire_dependency#wayfire=}
@@ -182,29 +183,31 @@ if arch_wayfire_package_version=$(sync_package_field wayfire Version extra); the
   fi
 fi
 if [[ -z $arch_wayfire_version ]]; then
-  report "Warning: Arch's current Wayfire version is unavailable, so the version comparison could not be made; pacman will still enforce package dependencies and signatures."
+  report "Warning: Arch's current Wayfire version is unavailable, so a version comparison could not be made; pacman will still enforce package dependencies and signatures."
 fi
-
 wayfire_policy_status=0
 repository_scottland_wayfire_allowed \
-  "$repo_scottland_version" "$repo_scottland_packager" "$repo_wayfire_dependency" \
+  "$repo_scottland_version" "$repo_wayfire_dependency" \
   "$arch_wayfire_version" "$scottland_override" || wayfire_policy_status=$?
-case $wayfire_policy_status in
-  0) ;;
-  1)
-    if [[ $repo_wayfire_dependency == wayfire ]]; then
-      fail_repository "an unversioned Wayfire dependency is supported only for the unchanged Scottland 0.3.4-1 upstream package identity."
-    fi
-    fail_repository "repository scottland requires ${repo_wayfire_dependency#wayfire=}, while Arch serves Wayfire ${arch_wayfire_version}. Publish a matching Scottland first; to build one deliberately, set GOOARCHY_SCOTTLAND_REF and rerun install.sh. No package was installed or upgraded."
-    ;;
-  *) fail_repository "the repository's scottland package does not declare a supported Wayfire dependency." ;;
-esac
-if [[ $repo_wayfire_dependency == wayfire ]]; then
-  if [[ -n $arch_wayfire_version ]]; then
-    report "Warning: Scottland 0.3.4-1 records build Wayfire 0.11.0-1 and declares the unversioned dependency 'wayfire'; Arch currently serves Wayfire ${arch_wayfire_package_version}. Compatibility with that runtime is unverified. Pacman will enforce the declared dependency and package signatures."
-  else
-    report "Warning: Scottland 0.3.4-1 records build Wayfire 0.11.0-1 and declares the unversioned dependency 'wayfire'; compatibility with the current runtime is unverified. Pacman will enforce the declared dependency and package signatures."
+if [[ $repo_scottland_version == 0.3.4-1 && $scottland_override == 0 ]]; then
+  if [[ $repo_scottland_metadata_available == 0 || -z $repo_wayfire_dependency ]]; then
+    report "Warning: the selected Gooarchy repository did not expose Wayfire dependency metadata for Scottland 0.3.4-1; pacman will still enforce the package's actual dependencies and signatures."
   fi
+  if [[ -z $arch_wayfire_version ]]; then
+    report "Warning: Arch's current Wayfire version is unavailable; runtime compatibility cannot be assessed."
+  fi
+  report "Warning: upstream Scottland 0.3.4-1 records build Wayfire 0.11.0-1; compatibility with the current runtime is unverified. Pacman will enforce the package's actual dependencies and signatures."
+else
+  case $wayfire_policy_status in
+    0) ;;
+    1)
+      fail_repository "repository scottland requires ${repo_wayfire_dependency#wayfire=}, while Arch serves Wayfire ${arch_wayfire_version}. Publish a matching Scottland first; to build one deliberately, set GOOARCHY_SCOTTLAND_REF and rerun install.sh. No package was installed or upgraded."
+      ;;
+    2)
+      fail_repository "the repository's scottland package does not declare an exact Wayfire dependency."
+      ;;
+    *) fail_repository "the repository's scottland package has no supported Wayfire dependency." ;;
+  esac
 fi
 
 mkdir -p "$GOOARCHY_BUILD"
