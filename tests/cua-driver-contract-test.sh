@@ -69,6 +69,7 @@ package
 cmp -- "$service" "$pkgdir/usr/lib/systemd/user/cua-driver.service"
 cmp -- "$tmp/src/LICENSE.md" "$pkgdir/usr/share/licenses/cua-driver/LICENSE"
 
+package_archive=
 if command -v makepkg >/dev/null 2>&1; then
   mkdir -p "$tmp/sources" "$tmp/build" "$tmp/packages"
   (
@@ -78,10 +79,13 @@ if command -v makepkg >/dev/null 2>&1; then
   )
   archive=$(find "$tmp/packages" -type f -name 'cua-driver-0.38.0-1-x86_64.pkg.tar.*' -print -quit)
   [[ -n $archive && -s $archive ]]
+  package_archive=$archive
   bsdtar -xOf "$archive" .PKGINFO >"$tmp/pkginfo"
   grep -Fxq 'pkgname = cua-driver' "$tmp/pkginfo"
   grep -Fxq 'pkgver = 0.38.0-1' "$tmp/pkginfo"
   bsdtar -tf "$archive" | grep -Eq '(^|/)usr/lib/systemd/user/graphical-session.target.wants/cua-driver.service$'
+  bsdtar -tf "$archive" | grep -Eq '(^|/)usr/lib/cua-driver/cua-driver$'
+  bsdtar -tf "$archive" | grep -Eq '(^|/)usr/lib/cua-driver/cua-driver-upstream$'
   sha256sum "$archive"
 else
   echo 'makepkg unavailable; unsigned archive build skipped.'
@@ -132,7 +136,7 @@ cat >"$tmp/bin/pacman" <<'EOF'
 case ${1:-} in
   -Qoq)
     printf '%s\n' "$*" >>"$CUA_TEST_PACMAN_LOG"
-    [[ ${2:-} == -- && $# == 3 ]] || exit 93
+    [[ ${2:-} == -- && $# == 3 && ${3:-} == "$CUA_TEST_PACMAN_EXPECTED_PATH" ]] || exit 93
     [[ ${CUA_TEST_PACMAN_OWNS:-yes} == yes ]] || exit 1
     printf 'cua-driver\n'
     ;;
@@ -152,6 +156,7 @@ export GOOARCHY_INSTALL_LOG_FILE=$tmp/install.log
 export CUA_TEST_SYSTEMCTL_LOG=$tmp/systemctl.log
 export CUA_TEST_PACMAN_LOG=$tmp/pacman.log
 export CUA_TEST_UPSTREAM_LOG=$tmp/upstream.log
+export CUA_TEST_PACMAN_EXPECTED_PATH=$pkgdir/usr/lib/cua-driver/cua-driver-upstream
 export CUA_TEST_STATUS_COUNT=$tmp/status-count
 mkdir -p "$GOOARCHY_STATE"
 touch "$GOOARCHY_STATE/builds.tsv"
@@ -167,7 +172,7 @@ assert_pacman_managed_operation_blocked() {
     exit 1
   fi
   grep -Fxq -- "$expected_pacman_guidance" "$tmp/$label-managed-output"
-  grep -Fq -- "-Qoq -- $pkgdir/usr/lib/cua-driver/cua-driver-upstream" "$CUA_TEST_PACMAN_LOG"
+  grep -Fq -- "-Qoq -- $CUA_TEST_PACMAN_EXPECTED_PATH" "$CUA_TEST_PACMAN_LOG"
   [[ ! -s $CUA_TEST_UPSTREAM_LOG ]]
 }
 assert_pacman_managed_operation_blocked channel channel set nightly
@@ -188,6 +193,34 @@ fi
 grep -Fq 'Unable to confirm pacman ownership of cua-driver' "$tmp/unconfirmed-output"
 [[ ! -s $CUA_TEST_UPSTREAM_LOG ]]
 export CUA_TEST_PACMAN_OWNS=yes
+
+if [[ -n $package_archive ]]; then
+  package_root=$tmp/package-archive-root
+  mkdir -p "$package_root"
+  bsdtar -xf "$package_archive" -C "$package_root"
+  package_wrapper=$package_root/usr/lib/cua-driver/cua-driver
+  packaged_upstream=$package_root/usr/lib/cua-driver/cua-driver-upstream
+  export CUA_TEST_PACMAN_EXPECTED_PATH=$packaged_upstream
+  packaged_upstream_sha=$(sha256sum "$packaged_upstream" | awk '{print $1}')
+  : >"$CUA_TEST_PACMAN_LOG"
+  for label in package-channel package-update; do
+    : >"$CUA_TEST_UPSTREAM_LOG"
+    if [[ $label == package-channel ]]; then
+      set -- channel set nightly
+    else
+      set -- update --apply
+    fi
+    if "$package_wrapper" "$@" >"$tmp/$label-output" 2>&1; then
+      echo "the packaged cua-driver accepted mutation: $*" >&2
+      exit 1
+    fi
+    grep -Fxq -- "$expected_pacman_guidance" "$tmp/$label-output"
+    [[ ! -s $CUA_TEST_UPSTREAM_LOG ]]
+  done
+  [[ $(wc -l <"$CUA_TEST_PACMAN_LOG") -eq 2 ]]
+  [[ $(sha256sum "$packaged_upstream" | awk '{print $1}') == "$packaged_upstream_sha" ]]
+  echo "real cua-driver package archive's wrapper blocked channel and updater mutations before invoking the packaged executable."
+fi
 
 run_check() {
   local label=$1
