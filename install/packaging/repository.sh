@@ -139,7 +139,7 @@ fi
 rm -f -- "$refresh_conf"
 trap - EXIT
 
-for package in gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-gooarchy; do
+for package in gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-gooarchy cua-driver; do
   sync_package_field "$package" Version >/dev/null ||
     fail_repository "the Gooarchy repository at $repository_url did not provide $package after refresh; no package was installed or built."
 done

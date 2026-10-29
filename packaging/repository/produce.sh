@@ -205,11 +205,16 @@ if [[ -n $scottland_pair_dir ]]; then
 fi
 
 required_initial=(gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-gooarchy \
-  linux-gooarchy linux-gooarchy-headers)
+  linux-gooarchy linux-gooarchy-headers cua-driver)
 if [[ -z $base_tag ]]; then
   for required_name in "${required_initial[@]}"; do
-    [[ ${selected[$required_name]+present} ]] || die "the first repository transfer must include all six rev 5 packages; missing $required_name."
+    [[ ${selected[$required_name]+present} ]] || die "the first repository transfer must include all seven required packages; missing $required_name."
   done
+elif ! awk -F '\t' '$1 == "cua-driver" { found=1 } END { exit !found }' "$base_records_file"; then
+  [[ ${selected[cua-driver]+present} ]] ||
+    die "the transfer must add cua-driver before Gooarchy can depend on it."
+  [[ ${selected[gooarchy]+present} ]] ||
+    die "the transfer must update gooarchy with cua-driver before the first cua-driver release."
 fi
 
 [[ -z ${GOOARCHY_SCOTTLAND_REF:-} && -z ${GOOARCHY_SCOTTLAND_REF_KIND:-} ]] ||

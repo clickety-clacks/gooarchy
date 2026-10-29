@@ -32,7 +32,7 @@ check() {
 }
 
 package() {
-  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'jq' 'glibc' 'gcc-libs' 'pam'
+  depends=('scottland' 'strata-bin' 'gooarchy-flavorings' 'cua-driver' 'jq' 'glibc' 'gcc-libs' 'pam'
            $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$_repo/install/gooarchy-base.packages"))
   # Optional, not required: editing the system tools is the exception, and package upgrades work
   # without a toolchain (docs/rulings.md).

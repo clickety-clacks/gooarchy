@@ -1,0 +1,42 @@
+# Cua Driver desktop-control daemon, packaged for Gooarchy.
+# Upstream's official x86_64 Linux binary is installed under /usr/lib so pacman owns the
+# executable used by its update command; /usr/bin provides the user-facing command.
+pkgname=cua-driver
+pkgver=0.38.0
+pkgrel=1
+pkgdesc='Cua Driver desktop control daemon'
+arch=('x86_64')
+url='https://github.com/trycua/cua'
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'libx11' 'libxi' 'libxkbcommon')
+
+_upstream_tag="cua-driver-rs-v${pkgver}"
+source=(
+  "cua-driver-rs-${pkgver}-linux-x86_64-binary.tar.gz::https://github.com/trycua/cua/releases/download/${_upstream_tag}/cua-driver-rs-${pkgver}-linux-x86_64-binary.tar.gz"
+  "LICENSE.md::https://raw.githubusercontent.com/trycua/cua/${_upstream_tag}/LICENSE.md"
+  'cua-driver.service'
+)
+sha256sums=(
+  '31ab9709dd91ce73677e49b9f3e75c6f0d3e4d9625c286c9e58262bfbea698dd'
+  'c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9'
+  'SKIP'
+)
+
+package() {
+  local libdir="$pkgdir/usr/lib/cua-driver"
+  install -d "$libdir"
+  tar -xzf "$srcdir/cua-driver-rs-${pkgver}-linux-x86_64-binary.tar.gz" -C "$libdir"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/cua-driver/cua-driver "$pkgdir/usr/bin/cua-driver"
+  ln -s /usr/lib/cua-driver/cua-cursor-theme "$pkgdir/usr/bin/cua-cursor-theme"
+
+  install -Dm644 "$srcdir/cua-driver.service" \
+    "$pkgdir/usr/lib/systemd/user/cua-driver.service"
+  install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+  ln -s ../cua-driver.service \
+    "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/cua-driver.service"
+
+  install -Dm644 "$srcdir/LICENSE.md" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
