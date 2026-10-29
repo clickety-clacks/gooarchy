@@ -41,7 +41,7 @@ def package_filename(name: str, version: str) -> str:
     return f"{name}-{version}-any.pkg.tar.zst"
 
 
-def create_package(path: Path, name: str, version: str) -> None:
+def create_package(path: Path, name: str, version: str, *, packager: str = "Gooarchy") -> None:
     pkginfo = (
         f"pkgname = {name}\n"
         f"pkgbase = {name}\n"
@@ -51,7 +51,7 @@ def create_package(path: Path, name: str, version: str) -> None:
         "builddate = 0\n"
         "size = 1\n"
         "arch = any\n"
-        "packager = Gooarchy\n"
+        f"packager = {packager}\n"
     ).encode()
     tar_bytes = io.BytesIO()
     with tarfile.open(fileobj=tar_bytes, mode="w") as archive:
@@ -98,7 +98,7 @@ def make_bundle(parent: Path, versions: dict[str, str], *, base: dict[str, Any] 
             "sha256": sha256(payload / filename),
             "architecture": "any",
             "source_revision": source,
-            "rebuilt": name not in retained,
+            "origin_kind": "retained-release" if name in retained else "source-build",
         })
     create_database(payload / "gooarchy.db", database_records)
     manifest = {
@@ -219,6 +219,15 @@ class RepositoryTransferTests(unittest.TestCase):
         self.assertEqual(observed["source"]["tag"], tag)
         self.assertEqual(observed["source"]["commit"], "a7107415e39be00fb50745788c17429932bf6829")
         self.assertEqual(observed["sha256"], sha256(archive))
+        source = observed["source"]
+        self.assertEqual(
+            protocol.flavorings_source_revision(observed),
+            "Flavorings tag:{} commit:{} tree:{}; source archive SHA256:{}; "
+            "PKGBUILD SHA256:{}; imported package SHA256:{}".format(
+                source["tag"], source["commit"], source["tree"], source["archive_sha256"],
+                observed["pkgbuild_sha256"], observed["sha256"],
+            ),
+        )
 
     def test_prebuilt_flavorings_input_rejects_wrong_tag_version_hash_and_build_identity(self) -> None:
         archive, manifest_path, _tag, _version, metadata = self.make_flavorings_input()
@@ -493,7 +502,7 @@ class RepositoryTransferTests(unittest.TestCase):
         bundle, _, _ = make_bundle(self.root, versions)
         source_map_path = self.root / "sources.json"
         source_map_path.write_text(json.dumps({
-            name: {"revision": f"Gooarchy {COMMIT}", "rebuilt": True}
+            name: {"revision": f"Gooarchy {COMMIT}", "origin_kind": "source-build"}
             for name in NAMES
         }))
         stdout = io.StringIO()
@@ -513,6 +522,105 @@ class RepositoryTransferTests(unittest.TestCase):
         self.assertEqual(observed["source_tree"], subprocess.check_output(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD^{tree}"], text=True
         ).strip())
+
+    def test_legacy_transfer_manifest_remains_verifiable(self) -> None:
+        versions = {name: "1.0.0-1" for name in NAMES}
+        bundle, _manifest_hash, manifest = make_bundle(self.root, versions)
+        manifest["schema"] = protocol.LEGACY_SCHEMA
+        for package in manifest["packages"]:
+            package["rebuilt"] = package.pop("origin_kind") == "source-build"
+        manifest_path = bundle / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
+        observed = self.verify(bundle, sha256(manifest_path))
+        self.assertEqual(observed["schema"], protocol.LEGACY_SCHEMA)
+
+    def test_signed_upstream_pair_manifest_covers_unknown_packager_assets(self) -> None:
+        versions = {name: "1.0.0-1" for name in NAMES}
+        versions["scottland-omarchy"] = "1.0.0-1"
+        bundle, _manifest_hash, manifest = make_bundle(self.root, versions)
+        payload = bundle / "payload"
+        pair_records: dict[str, dict[str, Any]] = {}
+        fake_source = {
+            "repository": protocol.SCOTTLAND_REPOSITORY,
+            "tag": "v0.3.4",
+            "commit": "3" * 40,
+            "tree": "4" * 40,
+            "release_url": "https://github.com/clickety-clacks/scottland/releases/tag/v0.3.4",
+            "source_pkgbuild_sha256": "5" * 64,
+        }
+        fake_checksums = {"filename": "SHA256SUMS", "sha256": "6" * 64}
+        for name in sorted(protocol.SCOTTLAND_PACKAGE_NAMES):
+            filename = package_filename(name, versions[name])
+            path = payload / filename
+            create_package(path, name, versions[name], packager="Unknown Packager")
+            entry = {
+                "name": name,
+                "version": versions[name],
+                "architecture": "any",
+                "filename": filename,
+                "sha256": sha256(path),
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "7" * 64,
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "wayfire" if name == "scottland" else "scottland=0.3.4-1",
+            }
+            pair_records[name] = entry
+            package_record = next(item for item in manifest["packages"] if item["name"] == name)
+            package_record.update({
+                "filename": filename,
+                "sha256": entry["sha256"],
+                "architecture": "any",
+                "source_revision": protocol.scottland_source_revision(
+                    {"source": fake_source, "checksums": fake_checksums}, entry
+                ),
+                "origin_kind": "upstream-release",
+            })
+        checksum_files = ["gooarchy.db", *(entry["filename"] for entry in manifest["packages"])]
+        write_sums(bundle, checksum_files)
+        manifest_path = bundle / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
+        manifest_hash = sha256(manifest_path)
+        pair_pin = {"source": fake_source, "checksums": fake_checksums, "packages": list(pair_records.values())}
+
+        expected_payloads = {
+            entry["filename"]: entry["sha256"] for entry in manifest["packages"]
+        }
+        expected_payloads["gooarchy.db"] = manifest["database"]["sha256"]
+        with patch.object(protocol, "load_scottland_pair_manifest", return_value=pair_pin), \
+             patch.object(protocol, "verify_scottland_pair_package"), \
+             patch.object(protocol, "package_info", side_effect=lambda path: {
+                 "name": next(item["name"] for item in manifest["packages"] if item["filename"] == path.name),
+                 "version": next(item["version"] for item in manifest["packages"] if item["filename"] == path.name),
+                 "arch": next(item["architecture"] for item in manifest["packages"] if item["filename"] == path.name),
+                 "packager": "Unknown Packager" if path.name in {item["filename"] for item in pair_records.values()} else "Gooarchy",
+             }):
+            signed = self.root / "signed-upstream"
+            signed.mkdir()
+            shutil.copy2(manifest_path, signed / "manifest.json")
+            shutil.copy2(bundle / "SHA256SUMS", signed / "SHA256SUMS")
+            shutil.copytree(payload, signed / "payload")
+            signatures = signed / "signatures"
+            signatures.mkdir()
+            for filename in expected_payloads:
+                (signatures / f"{filename}.sig").write_bytes(f"synthetic:{filename}".encode())
+            protocol.write_signature_receipt(SimpleNamespace(
+                bundle=bundle,
+                signatures=signatures,
+                expected_manifest_sha256=manifest_hash,
+                fingerprint=FINGERPRINT,
+                signer_role="primary",
+                output=signed / "SIGNATURES.json",
+            ))
+            (signed / "SHA256SUMS").write_text((bundle / "SHA256SUMS").read_text())
+            observed = protocol.load_and_verify_bundle(signed, manifest_hash, FINGERPRINT, signed=True)
+        self.assertEqual(
+            {item["name"] for item in observed["packages"] if item["origin_kind"] == "upstream-release"},
+            protocol.SCOTTLAND_PACKAGE_NAMES,
+        )
+        self.assertEqual(
+            {entry["filename"]: entry["payload_sha256"] for entry in json.loads((signed / "SIGNATURES.json").read_text())["signatures"]},
+            expected_payloads,
+        )
 
     def test_transfer_hash_rejects_tampering_and_wrong_out_of_band_hash(self) -> None:
         versions = {name: "1.0.0-1" for name in NAMES}

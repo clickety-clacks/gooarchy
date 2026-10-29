@@ -19,11 +19,33 @@ package_is_installed() {
 }
 
 package_is_repository_copy() {
-  local package=$1 info packager validated
+  local package=$1 info validated installed_version repository_version
   info=$(pacman -Qi "$package" 2>/dev/null) || return 1
-  packager=$(awk -F: '$1 ~ /^[[:space:]]*Packager[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$info")
   validated=$(awk -F: '$1 ~ /^[[:space:]]*Validated By[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$info")
-  [[ $packager == "$GOOARCHY_REPOSITORY_PACKAGER" && $validated == *Signature* ]]
+  [[ $validated == *Signature* ]] || return 1
+  installed_version=$(installed_package_version "$package") || return 1
+  repository_version=$(sync_package_field "$package" Version gooarchy)
+  [[ -n $repository_version && $installed_version == "$repository_version" ]]
+}
+
+# Return success for the exact imported core's unversioned wayfire dependency, or for a
+# versioned dependency that matches the available Arch version. Pacman remains the dependency
+# authority when the optional version query is unavailable. Status 2 means the package omitted
+# Wayfire entirely; status 1 means its compatibility declaration is not acceptable here.
+repository_scottland_wayfire_allowed() {
+  local package_version=$1 packager=$2 dependency=$3 arch_version=$4 override=$5 required_version
+  case $dependency in
+    wayfire)
+      # This is the exact unchanged upstream core asset. Its package dependency still
+      # requires Wayfire; only a version comparison is unavailable in the archive.
+      [[ $package_version == 0.3.4-1 && $packager == "Unknown Packager" ]]
+      return
+      ;;
+    wayfire=*) required_version=${dependency#wayfire=} ;;
+    *) return 2 ;;
+  esac
+  [[ -n $required_version ]] || return 2
+  [[ $override == 1 || -z $arch_version || $required_version == "$arch_version" ]]
 }
 
 sync_package_field() {

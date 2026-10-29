@@ -14,17 +14,21 @@ usage() {
   cat >&2 <<'USAGE'
 Usage: packaging/repository/produce.sh --output <new-transfer-directory> --all
        packaging/repository/produce.sh --output <new-transfer-directory> --flavorings-package <archive> --all
+       packaging/repository/produce.sh --output <new-transfer-directory> --scottland-pair <directory> <scottland> <scottland-omarchy>
        packaging/repository/produce.sh --output <new-transfer-directory> <package> [<package> ...]
 
 Builds package archives and an unsigned repository database only. It does not
 read signing credentials, create signatures, or contact GitHub Releases. The optional
 Flavorings archive is accepted only when it matches the reviewed source-input manifest.
+The Scottland pair directory is accepted only when both unchanged release assets match the
+pinned upstream identity, metadata, dependency and release-checksum manifest.
 USAGE
   exit 2
 }
 
 output_dir=
 flavorings_package=
+scottland_pair_dir=
 all_packages=0
 requested_packages=()
 while (($#)); do
@@ -42,6 +46,12 @@ while (($#)); do
       (($# >= 2)) || usage
       [[ -z $flavorings_package ]] || usage
       flavorings_package=$2
+      shift 2
+      ;;
+    --scottland-pair)
+      (($# >= 2)) || usage
+      [[ -z $scottland_pair_dir ]] || usage
+      scottland_pair_dir=$2
       shift 2
       ;;
     --help|-h)
@@ -168,6 +178,7 @@ while IFS= read -r -d '' recipe_file; do
   done < <(sed -nE 's/^[[:space:]]*pkgname = ([^[:space:]]+)$/\1/p' <<<"$srcinfo")
 done < <(find "${recipe_roots[@]}" -type f -name PKGBUILD -print0 | sort -z)
 [[ ${recipe_for[scottland]+present} ]] || recipe_for[scottland]=@scottland
+[[ ${recipe_for[scottland-omarchy]+present} ]] || recipe_for[scottland-omarchy]=@scottland
 
 if ((all_packages)); then
   mapfile -t requested_packages < <(printf '%s\n' "${!recipe_for[@]}" | sort -u)
@@ -185,6 +196,12 @@ if [[ -n $flavorings_package ]]; then
     die "the prebuilt Flavorings input must be a regular package archive."
   [[ ${recipe_for[gooarchy-flavorings]:-} == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]] ||
     die "the prebuilt Flavorings input requires Gooarchy's self-contained Flavorings recipe."
+fi
+if [[ -n $scottland_pair_dir ]]; then
+  [[ ${selected[scottland]+present} && ${selected[scottland-omarchy]+present} ]] ||
+    die "--scottland-pair requires both scottland and scottland-omarchy in the selected package set."
+  [[ ${recipe_for[scottland]} == @scottland && ${recipe_for[scottland-omarchy]} == @scottland ]] ||
+    die "--scottland-pair requires the existing Scottland source-package mapping."
 fi
 
 required_initial=(gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-gooarchy \
@@ -224,8 +241,8 @@ if [[ -n $flavorings_package ]]; then
     --recipe "$repo_root/packaging/gooarchy-flavorings/PKGBUILD") ||
     die "the prebuilt Flavorings package does not match the reviewed source input."
   flavorings_input_filename=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["filename"])' <<<"$flavorings_input_record")
-  flavorings_source_revision=$(python3 -c 'import json,sys; x=json.load(sys.stdin); s=x["source"]; print("Flavorings tag:{} commit:{} tree:{}; source archive SHA256:{}; PKGBUILD SHA256:{}; imported package SHA256:{}".format(s["tag"],s["commit"],s["tree"],s["archive_sha256"],x["pkgbuild_sha256"],x["sha256"]))' \
-    <<<"$flavorings_input_record") || die "could not record imported Flavorings provenance."
+  flavorings_source_revision=$(jq -er '.source_revision' <<<"$flavorings_input_record") ||
+    die "could not record imported Flavorings provenance."
 fi
 
 built_dir="$work_dir/built"
@@ -233,6 +250,12 @@ sources_dir="$work_dir/sources"
 source_build_dir="$work_dir/build"
 kernel_dir="$work_dir/kernel"
 mkdir -m 700 "$built_dir" "$sources_dir" "$source_build_dir"
+scottland_pair_record=
+if [[ -n $scottland_pair_dir ]]; then
+  scottland_pair_record=$(python3 "$script_dir/repository-protocol.py" stage-scottland-pair-input \
+    --directory "$scottland_pair_dir" --output-directory "$built_dir") ||
+    die "the Scottland pair does not match its exact pinned release input."
+fi
 makepkg_config="$work_dir/makepkg.conf"
 {
   printf 'source /etc/makepkg.conf\n'
@@ -287,13 +310,21 @@ build_scottland() {
   ) || die "makepkg failed for the pinned Scottland recipe."
 }
 
-declare -A recipe_built=() package_archive=() package_version=() source_revision=()
+declare -A recipe_built=() package_archive=() package_version=() source_revision=() source_origin=()
 for package_name in "${requested_packages[@]}"; do
   recipe_file=${recipe_for[$package_name]}
   if [[ $recipe_file == @scottland ]]; then
-    [[ ${recipe_built[scottland]+present} ]] || build_scottland
-    recipe_built[scottland]=1
-    source_revision[$package_name]="$scottland_source_label (resolved $scottland_source_revision)"
+    if [[ -n $scottland_pair_dir ]]; then
+      source_revision[$package_name]=$(jq -er --arg package "$package_name" \
+        '.packages[$package].source_revision' <<<"$scottland_pair_record") ||
+        die "the verified Scottland pair has no provenance record for $package_name."
+      source_origin[$package_name]=upstream-release
+    else
+      [[ ${recipe_built[scottland]+present} ]] || build_scottland
+      recipe_built[scottland]=1
+      source_revision[$package_name]="$scottland_source_label (resolved $scottland_source_revision)"
+      source_origin[$package_name]=source-build
+    fi
   else
     if [[ $package_name == gooarchy-flavorings && -n $flavorings_package ]]; then
       python3 "$script_dir/repository-protocol.py" stage-flavorings-input \
@@ -303,6 +334,7 @@ for package_name in "${requested_packages[@]}"; do
         >/dev/null || die "the staged prebuilt Flavorings archive does not match its reviewed source input."
       recipe_built[$recipe_file]=1
       source_revision[$package_name]=$flavorings_source_revision
+      source_origin[$package_name]=prebuilt-input
     else
       if [[ ! ${recipe_built[$recipe_file]+present} ]]; then
         recipe_dir=$(dirname -- "$recipe_file")
@@ -339,6 +371,7 @@ for package_name in "${requested_packages[@]}"; do
           ;;
         *) source_revision[$package_name]="Gooarchy $checkout_commit" ;;
       esac
+      source_origin[$package_name]=source-build
     fi
   fi
 done
@@ -352,8 +385,23 @@ for package_path in "$built_dir"/*.pkg.tar.* "$kernel_dir"/*.pkg.tar.*; do
     die "package metadata has no valid package name: $(basename -- "$package_path")."
   [[ ${selected[$package_name]+present} ]] || continue
   [[ ! ${package_archive[$package_name]+present} ]] || die "more than one archive was built for $package_name."
-  [[ $(jq -er '.packager' <<<"$package_info") == Gooarchy ]] ||
-    die "$package_name does not carry the Gooarchy packager identity."
+  package_packager=$(jq -er '.packager' <<<"$package_info") ||
+    die "$package_name has no valid packager identity."
+  if [[ ${source_origin[$package_name]:-} == upstream-release ]]; then
+    expected_packager=$(jq -er --arg package "$package_name" \
+      '.packages[$package].packager' <<<"$scottland_pair_record") ||
+      die "the Scottland input has no pinned packager identity for $package_name."
+    expected_sha256=$(jq -er --arg package "$package_name" \
+      '.packages[$package].sha256' <<<"$scottland_pair_record") ||
+      die "the Scottland input has no pinned package hash for $package_name."
+    [[ $package_packager == "$expected_packager" ]] ||
+      die "$package_name packager metadata differs from the pinned upstream archive."
+    [[ $(sha256sum -- "$package_path" | awk '{print $1}') == "$expected_sha256" ]] ||
+      die "$package_name bytes differ from the pinned upstream archive."
+  else
+    [[ $package_packager == Gooarchy ]] ||
+      die "$package_name does not carry the Gooarchy source-build packager identity."
+  fi
   package_arch=$(jq -er '.arch' <<<"$package_info") || die "$package_name has no valid architecture."
   [[ $package_arch == any || $package_arch == x86_64 ]] || die "$package_name has unsupported architecture $package_arch."
   package_archive[$package_name]=$package_path
@@ -375,6 +423,10 @@ for package_name in "${requested_packages[@]}"; do
   if [[ $old_version != none ]]; then
     comparison=$(vercmp "${package_version[$package_name]}" "$old_version") || die "vercmp failed for $package_name."
     if ((comparison <= 0)); then
+      if [[ -n $scottland_pair_dir &&
+        ( $package_name == scottland || $package_name == scottland-omarchy ) ]]; then
+        die "the pinned Scottland import must advance both pair members; $package_name is not newer than the base release."
+      fi
       echo "Refused $package_name: new version ${package_version[$package_name]} is not newer than published version $old_version; source revision: ${source_revision[$package_name]}; this package remains unchanged."
       continue
     fi
@@ -385,12 +437,12 @@ done
 
 # A package recipe may emit multiple packages. Only selected, version-advancing packages replace
 # their base versions; all other base package files remain in the unsigned database.
-declare -A chosen_file=() chosen_version=() chosen_source=() chosen_rebuilt=()
+declare -A chosen_file=() chosen_version=() chosen_source=() chosen_origin=()
 for package_name in "${accepted_packages[@]}"; do
   chosen_file[$package_name]=$(basename -- "${package_archive[$package_name]}")
   chosen_version[$package_name]=${package_version[$package_name]}
   chosen_source[$package_name]=${source_revision[$package_name]}
-  chosen_rebuilt[$package_name]=true
+  chosen_origin[$package_name]=${source_origin[$package_name]}
 done
 if [[ -n $base_tag ]]; then
   while IFS=$'\t' read -r old_name old_ver old_file; do
@@ -401,20 +453,20 @@ if [[ -n $base_tag ]]; then
       chosen_file[$old_name]=$old_file
       chosen_version[$old_name]=$old_ver
       chosen_source[$old_name]="retained from release tag:$base_tag"
-      chosen_rebuilt[$old_name]=false
+      chosen_origin[$old_name]=retained-release
     fi
   done <"$base_records_file"
 fi
 
-# Build a source map that records the rebuilt source revision or the exact retained release.
+# Build a source map that records the package origin and exact source or release revision.
 source_map_file="$work_dir/source-map.json"
 source_map_tsv="$work_dir/source-map.tsv"
 : >"$source_map_tsv"
 for package_name in "${!chosen_file[@]}"; do
-  rebuilt=${chosen_rebuilt[$package_name]}
+  origin_kind=${chosen_origin[$package_name]}
   revision=${chosen_source[$package_name]}
   [[ $revision != *$'\t'* && $revision != *$'\n'* ]] || die "invalid source revision for $package_name."
-  printf '%s\t%s\t%s\n' "$package_name" "$revision" "$rebuilt" >>"$source_map_tsv"
+  printf '%s\t%s\t%s\n' "$package_name" "$revision" "$origin_kind" >>"$source_map_tsv"
 done
 python3 - "$source_map_tsv" "$source_map_file" <<'PY'
 import json
@@ -423,10 +475,10 @@ source, destination = sys.argv[1:]
 entries = {}
 with open(source, encoding="utf-8") as stream:
     for line in stream:
-        name, revision, rebuilt = line.rstrip("\n").split("\t", 2)
-        if name in entries or rebuilt not in {"true", "false"}:
+        name, revision, origin_kind = line.rstrip("\n").split("\t", 2)
+        if name in entries or not origin_kind:
             raise SystemExit("invalid package source map")
-        entries[name] = {"revision": revision, "rebuilt": rebuilt == "true"}
+        entries[name] = {"revision": revision, "origin_kind": origin_kind}
 with open(destination, "w", encoding="utf-8") as stream:
     json.dump(entries, stream, sort_keys=True, separators=(",", ":"))
     stream.write("\n")
