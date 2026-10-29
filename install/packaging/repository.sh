@@ -145,7 +145,12 @@ for package in gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-goo
 done
 
 repo_scottland_version=$(sync_package_field scottland Version)
-repo_scottland_depends=$(pacman -Si gooarchy/scottland 2>/dev/null | awk '
+repo_scottland_metadata_available=1
+if ! repo_scottland_metadata=$(pacman -Si gooarchy/scottland 2>/dev/null); then
+  repo_scottland_metadata_available=0
+  repo_scottland_metadata=
+fi
+repo_scottland_depends=$(awk '
   /^Depends On[[:space:]]*:/ {
     in_depends = 1
     sub(/^[^:]*:[[:space:]]*/, "")
@@ -155,18 +160,65 @@ repo_scottland_depends=$(pacman -Si gooarchy/scottland 2>/dev/null | awk '
   /^[^[:space:]].*:/ { in_depends = 0 }
   in_depends { depends = depends " " $0 }
   END { print depends }
-')
-repo_wayfire_version=$(sed -nE 's/.*(^|[[:space:]])wayfire=([^[:space:]]+).*/\2/p' <<<"$repo_scottland_depends")
-[[ -n $repo_wayfire_version ]] ||
-  fail_repository "the repository's scottland package does not declare its exact wayfire dependency."
-arch_wayfire_package_version=$(sync_package_field wayfire Version extra)
-[[ -n $arch_wayfire_package_version ]] || fail_repository "Arch's wayfire package is unavailable after repository refresh."
-arch_wayfire_version=${arch_wayfire_package_version#*:}
-arch_wayfire_version=${arch_wayfire_version%-*}
-
-if ((scottland_override == 0)) && [[ $repo_wayfire_version != "$arch_wayfire_version" ]]; then
-  fail_repository "repository scottland requires wayfire=$repo_wayfire_version, while Arch serves wayfire=$arch_wayfire_version. Publish a new Scottland first; to build one deliberately, set GOOARCHY_SCOTTLAND_REF and rerun install.sh. No package was installed or upgraded."
+' <<<"$repo_scottland_metadata")
+repo_scottland_packager=$(awk -F: '$1 ~ /^[[:space:]]*Packager[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$repo_scottland_metadata")
+repo_wayfire_dependency=
+repo_dependency_fields=()
+read -r -a repo_dependency_fields <<<"$repo_scottland_depends"
+for repo_dependency in "${repo_dependency_fields[@]}"; do
+  if [[ $repo_dependency == wayfire || $repo_dependency == wayfire=* ]]; then
+    repo_wayfire_dependency=$repo_dependency
+    break
+  fi
+done
+repo_wayfire_version=
+if [[ $repo_wayfire_dependency == wayfire=* ]]; then
+  repo_wayfire_version=${repo_wayfire_dependency#wayfire=}
 fi
+arch_wayfire_package_version=
+arch_wayfire_version=
+if arch_wayfire_package_version=$(sync_package_field wayfire Version extra); then
+  if [[ -n $arch_wayfire_package_version ]]; then
+    arch_wayfire_version=${arch_wayfire_package_version#*:}
+    arch_wayfire_version=${arch_wayfire_version%-*}
+  fi
+fi
+if [[ -z $arch_wayfire_version ]]; then
+  report "Warning: Arch's current Wayfire version is unavailable, so a version comparison could not be made; pacman will still enforce package dependencies and signatures."
+fi
+wayfire_policy_status=0
+repository_scottland_wayfire_allowed \
+  "$repo_scottland_version" "$repo_scottland_packager" \
+  "$repo_wayfire_dependency" "$repo_scottland_metadata_available" \
+  "$arch_wayfire_version" "$scottland_override" || wayfire_policy_status=$?
+if repository_scottland_is_imported_core \
+  "$repo_scottland_version" "$repo_scottland_packager" \
+  "$repo_scottland_metadata_available" "$scottland_override"; then
+  if repository_scottland_wayfire_import_exception \
+    "$repo_scottland_version" "$repo_scottland_packager" "$repo_wayfire_dependency" \
+    "$repo_scottland_metadata_available" "$scottland_override"; then
+    if [[ $repo_scottland_metadata_available == 0 || -z $repo_wayfire_dependency ]]; then
+      report "Warning: the selected Gooarchy repository did not expose Wayfire dependency metadata for Scottland 0.3.4-1; pacman will still enforce the package's actual dependencies and signatures."
+    fi
+    if [[ -z $arch_wayfire_version ]]; then
+      report "Warning: Arch's current Wayfire version is unavailable; runtime compatibility cannot be assessed."
+    fi
+  fi
+  report "Upstream Scottland 0.3.4-1 records build Wayfire 0.11.0-1; this is build evidence and does not establish runtime compatibility."
+fi
+case $wayfire_policy_status in
+  0) ;;
+  1)
+    fail_repository "repository scottland requires ${repo_wayfire_dependency#wayfire=}, while Arch serves Wayfire ${arch_wayfire_version}. Publish a matching Scottland first; to build one deliberately, set GOOARCHY_SCOTTLAND_REF and rerun install.sh. No package was installed or upgraded."
+    ;;
+  2)
+    fail_repository "the repository's scottland package does not declare an exact Wayfire dependency."
+    ;;
+  3)
+    fail_repository "repository scottland declares ${repo_wayfire_dependency}, but Arch's current Wayfire version is unavailable for the required comparison. No package was installed or upgraded."
+    ;;
+  *) fail_repository "the repository's scottland package has no supported Wayfire dependency." ;;
+esac
 
 mkdir -p "$GOOARCHY_BUILD"
 repo_cache=$(mktemp -d /tmp/gooarchy-repository-package.XXXXXX)
@@ -210,7 +262,7 @@ if package_is_installed scottland; then
     previous_scottland_ref=$(awk -F '\t' '$1 == "scottland" { ref = ($7 != "" ? $7 : $3) } END { print ref }' "$GOOARCHY_STATE/builds.tsv")
     previous_scottland_ref_kind=$(awk -F '\t' '$1 == "scottland" { kind = $6 } END { print kind }' "$GOOARCHY_STATE/builds.tsv")
   fi
-  if ((local_scottland == 0)) && ! package_is_repository_copy scottland; then
+  if ((local_scottland == 0)) && ! package_was_repository_copy scottland; then
     replace_scottland=1
   fi
 fi
@@ -230,7 +282,7 @@ previous_gooarchy_source_commit=
 if package_is_installed gooarchy; then
   previous_gooarchy_installed=1
   previous_gooarchy_version=$(installed_package_version gooarchy)
-  package_is_repository_copy gooarchy && previous_gooarchy_repository_copy=1
+  package_was_repository_copy gooarchy && previous_gooarchy_repository_copy=1
   if [[ -r /usr/share/gooarchy/build-info ]]; then
     previous_gooarchy_source_commit=$(sed -nE \
       's/^checkout ([[:xdigit:]]{40})( with uncommitted changes)?$/\1/p' \
@@ -240,7 +292,7 @@ fi
 if package_is_installed gooarchy-flavorings; then
   previous_flavorings_installed=1
   previous_flavorings_version=$(installed_package_version gooarchy-flavorings)
-  package_is_repository_copy gooarchy-flavorings && previous_flavorings_repository_copy=1
+  package_was_repository_copy gooarchy-flavorings && previous_flavorings_repository_copy=1
 fi
 previous_portal_installed=0
 previous_portal_repository_copy=0
@@ -250,7 +302,7 @@ previous_arch_portal_version=
 if package_is_installed xdg-desktop-portal-wlr-gooarchy; then
   previous_portal_installed=1
   previous_portal_version=$(installed_package_version xdg-desktop-portal-wlr-gooarchy)
-  package_is_repository_copy xdg-desktop-portal-wlr-gooarchy && previous_portal_repository_copy=1
+  package_was_repository_copy xdg-desktop-portal-wlr-gooarchy && previous_portal_repository_copy=1
 fi
 if package_is_installed xdg-desktop-portal-wlr; then
   previous_arch_portal_installed=1

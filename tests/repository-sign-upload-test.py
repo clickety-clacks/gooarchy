@@ -237,12 +237,12 @@ with open(state_path, 'w', encoding='utf-8') as stream: json.dump(state, stream)
                 "sha256": digest(path),
                 "architecture": "any",
                 "source_revision": f"Gooarchy {self.commit}",
-                "rebuilt": True,
+                "origin_kind": "source-build",
             })
         database = payload / "gooarchy.db"
         create_database(database, records)
         manifest = {
-            "schema": "gooarchy-repository-transfer-v1",
+            "schema": "gooarchy-repository-transfer-v2",
             "repository": "clickety-clacks/gooarchy",
             "source_commit": self.commit,
             "source_tree": self.tree,

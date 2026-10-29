@@ -18,12 +18,64 @@ package_is_installed() {
   pacman -Qq 2>/dev/null | awk -v wanted="$1" '$0 == wanted { found=1 } END { exit !found }'
 }
 
-package_is_repository_copy() {
-  local package=$1 info packager validated
+package_has_validated_signature() {
+  local package=$1 info installed_name validated
   info=$(pacman -Qi "$package" 2>/dev/null) || return 1
-  packager=$(awk -F: '$1 ~ /^[[:space:]]*Packager[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$info")
+  installed_name=$(awk -F: '$1 ~ /^[[:space:]]*Name[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$info")
+  [[ $installed_name == "$package" ]] || return 1
   validated=$(awk -F: '$1 ~ /^[[:space:]]*Validated By[[:space:]]*$/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<<"$info")
-  [[ $packager == "$GOOARCHY_REPOSITORY_PACKAGER" && $validated == *Signature* ]]
+  [[ $validated == *Signature* ]]
+}
+
+# Before an upgrade, the selected repository may already have a newer version than the installed
+# package. Pacman does not retain the source repository in its local package record, so preserve
+# the prior signed-package classification when that package is still offered by Gooarchy.
+package_was_repository_copy() {
+  local package=$1 repository_version
+  repository_version=$(sync_package_field "$package" Version gooarchy)
+  [[ -n $repository_version ]] || return 1
+  package_has_validated_signature "$package"
+}
+
+# After installation, require the signed installed package to match the version selected from
+# Gooarchy. This is the exact post-install recognition used by package consumers.
+package_is_repository_copy() {
+  local package=$1 installed_version repository_version
+  package_has_validated_signature "$package" || return 1
+  installed_version=$(installed_package_version "$package") || return 1
+  repository_version=$(sync_package_field "$package" Version gooarchy)
+  [[ -n $repository_version && $installed_version == "$repository_version" ]]
+}
+
+# The imported 0.3.4 core is identified by the upstream Packager value whenever package metadata
+# is available. If the package metadata itself is unavailable, keep the no-new-stop behavior for
+# this exact selected-repository version. When dependency metadata exists, only its unversioned
+# Wayfire dependency avoids comparison; versioned dependencies always need an Arch version.
+repository_scottland_is_imported_core() {
+  local package_version=$1 packager=$2 metadata_available=$3 override=$4
+  [[ $package_version == 0.3.4-1 && $override != 1 ]] || return 1
+  [[ $packager == 'Unknown Packager' || $metadata_available == 0 ]]
+}
+
+repository_scottland_wayfire_import_exception() {
+  local package_version=$1 packager=$2 dependency=$3 metadata_available=$4 override=$5
+  repository_scottland_is_imported_core \
+    "$package_version" "$packager" "$metadata_available" "$override" || return 1
+  [[ -z $dependency || $dependency == wayfire ]]
+}
+
+repository_scottland_wayfire_allowed() {
+  local package_version=$1 packager=$2 dependency=$3 metadata_available=$4
+  local arch_version=$5 override=$6 required_version
+  repository_scottland_wayfire_import_exception \
+    "$package_version" "$packager" "$dependency" "$metadata_available" "$override" && return 0
+  case $dependency in
+    wayfire=*) required_version=${dependency#wayfire=} ;;
+    *) return 2 ;;
+  esac
+  [[ -n $required_version ]] || return 2
+  [[ -n $arch_version ]] || return 3
+  [[ $override == 1 || $required_version == "$arch_version" ]]
 }
 
 sync_package_field() {

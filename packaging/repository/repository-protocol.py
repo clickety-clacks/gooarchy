@@ -20,11 +20,54 @@ from typing import Any
 # The protocol runs from a required-clean checkout; importing the database reader must not dirty it.
 sys.dont_write_bytecode = True
 
-SCHEMA = "gooarchy-repository-transfer-v1"
+SCHEMA = "gooarchy-repository-transfer-v2"
+LEGACY_SCHEMA = "gooarchy-repository-transfer-v1"
 SIGNATURE_SCHEMA = "gooarchy-repository-signatures-v1"
 PACKAGE_INPUT_SCHEMA = "gooarchy-prebuilt-package-v1"
+SCOTTLAND_PAIR_SCHEMA = "gooarchy-scottland-pair-input-v1"
 REPOSITORY = "clickety-clacks/gooarchy"
 FLAVORINGS_REPOSITORY = "clickety-clacks/gooarchy-flavorings"
+SCOTTLAND_REPOSITORY = "clickety-clacks/scottland"
+SCOTTLAND_PACKAGE_NAMES = {"scottland", "scottland-omarchy"}
+PACKAGE_ORIGINS = {"source-build", "prebuilt-input", "upstream-release", "retained-release"}
+SCOTTLAND_PAIR_PIN = {
+    "source": {
+        "repository": SCOTTLAND_REPOSITORY,
+        "tag": "v0.3.4",
+        "commit": "bbf09cbd6b9cb80adc9d7fa0a7cf88f6c8641f25",
+        "tree": "33f1fe1bde2e647606134661db377a291829677f",
+        "release_url": "https://github.com/clickety-clacks/scottland/releases/tag/v0.3.4",
+        "source_pkgbuild_sha256": "aabf2369223c39f8a1f0e90deece23c72eb01612e0c16bd85d01ecdae6ef2f39",
+    },
+    "checksums": {
+        "filename": "SHA256SUMS",
+        "sha256": "969be4b5d480e9a762f9434d41dfb50e3b73f80deb50b37f4eb66b2031598e24",
+    },
+    "packages": {
+        "scottland": {
+            "name": "scottland",
+            "version": "0.3.4-1",
+            "architecture": "x86_64",
+            "filename": "scottland-0.3.4-1-x86_64.pkg.tar.zst",
+            "sha256": "e6a1bf08b324ba01a38bbbdb633156827ec7cd6144c0b1dcb120d6b7fc902986",
+            "packager": "Unknown Packager",
+            "pkgbuild_sha256": "5c7258994a4c8c780573b29c3659c54061809e80fc1c4345bcb6b68f8195fa14",
+            "wayfire_build": "0.11.0-1",
+            "required_dependency": "wayfire",
+        },
+        "scottland-omarchy": {
+            "name": "scottland-omarchy",
+            "version": "0.3.4-1",
+            "architecture": "any",
+            "filename": "scottland-omarchy-0.3.4-1-any.pkg.tar.zst",
+            "sha256": "c25611cd270bbf7dcfb5012a89223029f790e9a645c7bd6794b167dd2bd8f832",
+            "packager": "Unknown Packager",
+            "pkgbuild_sha256": "5c7258994a4c8c780573b29c3659c54061809e80fc1c4345bcb6b68f8195fa14",
+            "wayfire_build": "0.11.0-1",
+            "required_dependency": "scottland=0.3.4-1",
+        },
+    },
+}
 FINGERPRINT_RE = re.compile(r"^(?:[0-9A-F]{40}|[0-9A-F]{64})$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -131,6 +174,260 @@ def build_info(path: Path) -> dict[str, str]:
     }
 
 
+def build_info_details(path: Path) -> dict[str, Any]:
+    """Return the pinned build identity plus repeated installed package records."""
+    completed = subprocess.run(
+        ["bsdtar", "-xOf", str(path), ".BUILDINFO"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        fail(f"cannot read build metadata from {path.name}")
+    fields: dict[str, list[str]] = {}
+    for line in completed.stdout.splitlines():
+        if " = " not in line:
+            continue
+        key, value = line.split(" = ", 1)
+        fields.setdefault(key, []).append(value)
+    identity = build_info(path)
+    installed = fields.get("installed", [])
+    return {**identity, "installed": installed}
+
+
+def package_dependencies(path: Path) -> list[str]:
+    completed = subprocess.run(
+        ["bsdtar", "-xOf", str(path), ".PKGINFO"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        fail(f"cannot read package metadata from {path.name}")
+    return [
+        line.split(" = ", 1)[1]
+        for line in completed.stdout.splitlines()
+        if line.startswith("depend = ")
+    ]
+
+
+def scottland_pair_manifest_path() -> Path:
+    return Path(__file__).with_name("scottland-v0.3.4-input.json")
+
+
+def load_scottland_pair_manifest(path: Path | None = None) -> dict[str, Any]:
+    """Read the reviewed upstream asset pins and reject ambiguous pair metadata."""
+    manifest_path = path or scottland_pair_manifest_path()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"cannot read Scottland pair input manifest: {error}")
+    if not isinstance(manifest, dict) or set(manifest) != {"schema", "source", "checksums", "packages"}:
+        fail("Scottland pair input manifest has invalid fields")
+    if manifest["schema"] != SCOTTLAND_PAIR_SCHEMA:
+        fail("Scottland pair input manifest has the wrong schema")
+    if (
+        manifest["source"] != SCOTTLAND_PAIR_PIN["source"]
+        or manifest["checksums"] != SCOTTLAND_PAIR_PIN["checksums"]
+    ):
+        fail("Scottland pair input manifest differs from the pinned upstream source or release checksum")
+    source = manifest["source"]
+    source_fields = {
+        "repository", "tag", "commit", "tree", "release_url", "source_pkgbuild_sha256"
+    }
+    if not isinstance(source, dict) or set(source) != source_fields:
+        fail("Scottland source identity has invalid fields")
+    if source["repository"] != SCOTTLAND_REPOSITORY or source["tag"] != "v0.3.4":
+        fail("Scottland source identity is not the reviewed upstream release")
+    if (
+        not isinstance(source["commit"], str) or not COMMIT_RE.fullmatch(source["commit"])
+        or not isinstance(source["tree"], str) or not COMMIT_RE.fullmatch(source["tree"])
+    ):
+        fail("Scottland source commit or tree is invalid")
+    if source["release_url"] != f"https://github.com/{SCOTTLAND_REPOSITORY}/releases/tag/{source['tag']}":
+        fail("Scottland release URL does not match its pinned repository and tag")
+    if not isinstance(source["source_pkgbuild_sha256"], str) or not SHA256_RE.fullmatch(source["source_pkgbuild_sha256"]):
+        fail("Scottland source PKGBUILD hash is invalid")
+    checksums = manifest["checksums"]
+    if not isinstance(checksums, dict) or set(checksums) != {"filename", "sha256"}:
+        fail("Scottland checksum record has invalid fields")
+    if checksums["filename"] != "SHA256SUMS" or not isinstance(checksums["sha256"], str) or not SHA256_RE.fullmatch(checksums["sha256"]):
+        fail("Scottland checksum identity is invalid")
+    packages = manifest["packages"]
+    if not isinstance(packages, list) or len(packages) != 2:
+        fail("Scottland input must pin exactly the core and adapter packages")
+    observed: dict[str, dict[str, Any]] = {}
+    required_fields = {
+        "name", "version", "architecture", "filename", "sha256", "packager",
+        "pkgbuild_sha256", "wayfire_build", "required_dependency",
+    }
+    for package in packages:
+        if not isinstance(package, dict) or set(package) != required_fields:
+            fail("Scottland package input has invalid fields")
+        name = package["name"]
+        if not isinstance(name, str):
+            fail("Scottland package name is invalid")
+        expected = {
+            "scottland": ("0.3.4-1", "x86_64", "wayfire"),
+            "scottland-omarchy": ("0.3.4-1", "any", "scottland=0.3.4-1"),
+        }.get(name)
+        if expected is None or name in observed:
+            fail("Scottland input must contain each pinned package exactly once")
+        if (package["version"], package["architecture"], package["required_dependency"]) != expected:
+            fail(f"Scottland package identity or dependency pin is invalid for {name}")
+        expected_filename = f"{name}-{expected[0]}-{expected[1]}.pkg.tar.zst"
+        if package["filename"] != expected_filename:
+            fail(f"Scottland package filename is invalid for {name}")
+        safe_asset_name(package["filename"])
+        if not isinstance(package["sha256"], str) or not SHA256_RE.fullmatch(package["sha256"]):
+            fail(f"Scottland package hash is invalid for {name}")
+        if package["packager"] != "Unknown Packager":
+            fail(f"Scottland upstream packager identity is invalid for {name}")
+        if not isinstance(package["pkgbuild_sha256"], str) or not SHA256_RE.fullmatch(package["pkgbuild_sha256"]):
+            fail(f"Scottland build recipe hash is invalid for {name}")
+        if package["wayfire_build"] != "0.11.0-1":
+            fail(f"Scottland build Wayfire identity is invalid for {name}")
+        if package != SCOTTLAND_PAIR_PIN["packages"][name]:
+            fail(f"Scottland package metadata differs from the pinned release asset: {name}")
+        observed[name] = package
+    if set(observed) != SCOTTLAND_PACKAGE_NAMES:
+        fail("Scottland input is missing a member of the reviewed package pair")
+    return manifest
+
+
+def scottland_source_revision(manifest: dict[str, Any], package: dict[str, Any]) -> str:
+    source = manifest["source"]
+    source_pkgbuild_matches_buildinfo = source["source_pkgbuild_sha256"] == package["pkgbuild_sha256"]
+    return (
+        f"upstream release asset; repository:{source['repository']}; tag:{source['tag']}; "
+        f"commit:{source['commit']}; tree:{source['tree']}; "
+        f"release-checksums-sha256:{manifest['checksums']['sha256']}; "
+        f"source-PKGBUILD-sha256:{source['source_pkgbuild_sha256']}; "
+        f"embedded-BUILDINFO-PKGBUILD-sha256:{package['pkgbuild_sha256']}; "
+        f"source-PKGBUILD-matches-BUILDINFO:{'yes' if source_pkgbuild_matches_buildinfo else 'no'}; "
+        f"asset:{package['filename']} sha256:{package['sha256']}"
+    )
+
+
+def verify_scottland_pair_package(
+    archive: Path, package: dict[str, Any]
+) -> None:
+    if archive.is_symlink() or not archive.is_file():
+        fail(f"Scottland package is not a regular file: {archive.name}")
+    if sha256_file(archive) != package["sha256"]:
+        fail(f"Scottland package hash does not match its pin: {archive.name}")
+    expected_info = {
+        "name": package["name"], "version": package["version"],
+        "arch": package["architecture"], "packager": package["packager"],
+    }
+    if package_info(archive) != expected_info:
+        fail(f"Scottland .PKGINFO does not match its pinned identity: {package['name']}")
+    expected_build = {
+        "name": package["name"], "version": package["version"],
+        "arch": package["architecture"], "packager": package["packager"],
+        "pkgbuild_sha256": package["pkgbuild_sha256"],
+    }
+    build = build_info_details(archive)
+    if any(build.get(key) != value for key, value in expected_build.items()):
+        fail(f"Scottland .BUILDINFO does not match its pinned build evidence: {package['name']}")
+    expected_wayfire = f"wayfire-{package['wayfire_build']}-x86_64"
+    installed_wayfire = [value for value in build["installed"] if value.startswith("wayfire-")]
+    if installed_wayfire != [expected_wayfire]:
+        fail(f"Scottland .BUILDINFO does not match its pinned build evidence: {package['name']}")
+    if package_dependencies(archive).count(package["required_dependency"]) != 1:
+        fail(f"Scottland dependency metadata does not match its pin: {package['name']}")
+
+
+def verify_scottland_pair_input(directory: Path, manifest_path: Path | None = None) -> dict[str, Any]:
+    if directory.is_symlink() or not directory.is_dir():
+        fail("Scottland pair input must be a real directory")
+    manifest = load_scottland_pair_manifest(manifest_path)
+    source_pkgbuild = directory / "PKGBUILD"
+    if source_pkgbuild.is_symlink() or not source_pkgbuild.is_file():
+        fail("Scottland pair input is missing the pinned upstream PKGBUILD")
+    if sha256_file(source_pkgbuild) != manifest["source"]["source_pkgbuild_sha256"]:
+        fail("Scottland upstream PKGBUILD does not match the pinned release source")
+    checksum_path = directory / manifest["checksums"]["filename"]
+    if checksum_path.is_symlink() or not checksum_path.is_file():
+        fail("Scottland pair input is missing its pinned SHA256SUMS file")
+    if sha256_file(checksum_path) != manifest["checksums"]["sha256"]:
+        fail("Scottland SHA256SUMS does not match its pinned release digest")
+    expected_sums = [
+        f"{item['sha256']}  {item['filename']}"
+        for item in sorted(manifest["packages"], key=lambda entry: entry["filename"])
+    ]
+    try:
+        actual_sums = checksum_path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as error:
+        fail(f"cannot read Scottland SHA256SUMS: {error}")
+    if actual_sums != expected_sums:
+        fail("Scottland SHA256SUMS entries do not match the pinned package pair")
+    records: dict[str, dict[str, Any]] = {}
+    for package in manifest["packages"]:
+        archive = directory / package["filename"]
+        if not archive.exists():
+            fail(f"Scottland pair input is missing a regular archive: {package['filename']}")
+        verify_scottland_pair_package(archive, package)
+        records[package["name"]] = {
+            **package,
+            "source_revision": scottland_source_revision(manifest, package),
+            "origin_kind": "upstream-release",
+        }
+    return {"source": manifest["source"], "checksums": manifest["checksums"], "packages": records}
+
+
+def stage_scottland_pair_input(
+    directory: Path, output_directory: Path, manifest_path: Path | None = None
+) -> dict[str, Any]:
+    """Copy the two verified release assets without changing their bytes."""
+    if output_directory.is_symlink() or not output_directory.is_dir():
+        fail("Scottland staging output must be a real directory")
+    if not hasattr(os, "O_NOFOLLOW"):
+        fail("safe Scottland input staging requires O_NOFOLLOW support")
+    source_record = verify_scottland_pair_input(directory, manifest_path)
+    manifest = load_scottland_pair_manifest(manifest_path)
+    created: list[Path] = []
+    try:
+        for package in manifest["packages"]:
+            source = directory / package["filename"]
+            destination = output_directory / package["filename"]
+            if destination.exists() or destination.is_symlink():
+                fail(f"staged Scottland package already exists: {destination.name}")
+            source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            output_fd = -1
+            created_output = False
+            try:
+                if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+                    fail(f"Scottland input is not a regular file: {source.name}")
+                output_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                created_output = True
+                created.append(destination)
+                with os.fdopen(source_fd, "rb") as source_stream:
+                    source_fd = -1
+                    with os.fdopen(output_fd, "wb") as destination_stream:
+                        output_fd = -1
+                        shutil.copyfileobj(source_stream, destination_stream)
+                os.chmod(destination, 0o400)
+            except BaseException:
+                if created_output:
+                    destination.unlink(missing_ok=True)
+                    if destination in created:
+                        created.remove(destination)
+                raise
+            finally:
+                if source_fd >= 0:
+                    os.close(source_fd)
+                if output_fd >= 0:
+                    os.close(output_fd)
+        for package in manifest["packages"]:
+            verify_scottland_pair_package(output_directory / package["filename"], package)
+        return source_record
+    except BaseException:
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise
+
+
 def flavorings_recipe_identity(recipe_path: Path) -> dict[str, Any]:
     text = recipe_path.read_text(encoding="utf-8")
 
@@ -224,10 +521,27 @@ def verify_flavorings_input(archive: Path, manifest_path: Path, recipe_path: Pat
     return manifest
 
 
+def flavorings_source_revision(manifest: dict[str, Any]) -> str:
+    source = manifest["source"]
+    return (
+        f"Flavorings tag:{source['tag']} commit:{source['commit']} tree:{source['tree']}; "
+        f"source archive SHA256:{source['archive_sha256']}; "
+        f"PKGBUILD SHA256:{manifest['pkgbuild_sha256']}; "
+        f"imported package SHA256:{manifest['sha256']}"
+    )
+
+
 def flavorings_input_manifest_path(recipe_path: Path) -> Path:
     """Resolve the package receipt belonging to the final source tag in the recipe."""
     identity = flavorings_recipe_identity(recipe_path)
     return recipe_path.parent / f"{identity['source']['tag']}-input.json"
+
+
+def verify_flavorings_prebuilt_package(archive: Path) -> dict[str, Any]:
+    repository_root = Path(__file__).resolve().parents[2]
+    recipe_path = repository_root / "packaging/gooarchy-flavorings/PKGBUILD"
+    manifest_path = flavorings_input_manifest_path(recipe_path)
+    return verify_flavorings_input(archive, manifest_path, recipe_path)
 
 
 def stage_flavorings_input(archive: Path, output: Path, manifest_path: Path, recipe_path: Path) -> dict[str, Any]:
@@ -271,13 +585,15 @@ def load_sources(path: Path) -> dict[str, dict[str, Any]]:
     for name, entry in value.items():
         if not isinstance(name, str) or not isinstance(entry, dict):
             fail("source map entries must map package names to objects")
+        if set(entry) != {"revision", "origin_kind"}:
+            fail(f"source map fields are invalid for {name}")
         revision = entry.get("revision")
-        rebuilt = entry.get("rebuilt")
+        origin_kind = entry.get("origin_kind")
         if not isinstance(revision, str) or not revision.strip() or any(ord(c) < 32 for c in revision):
             fail(f"source revision is missing or invalid for {name}")
-        if not isinstance(rebuilt, bool):
-            fail(f"rebuilt must be a boolean for {name}")
-        result[name] = {"revision": revision, "rebuilt": rebuilt}
+        if origin_kind not in PACKAGE_ORIGINS:
+            fail(f"package origin kind is invalid for {name}")
+        result[name] = {"revision": revision, "origin_kind": origin_kind}
     return result
 
 
@@ -355,6 +671,12 @@ def write_manifest(args: argparse.Namespace) -> None:
     packages: list[dict[str, Any]] = []
     expected_payload: set[str] = {"gooarchy.db"}
     base_by_name = {entry["name"]: entry for entry in (base["packages"] if base else [])}
+    pair_manifest = (
+        load_scottland_pair_manifest()
+        if any(source["origin_kind"] == "upstream-release" for source in sources.values())
+        else None
+    )
+    upstream_names: set[str] = set()
     for name, version, filename in records:
         safe_asset_name(filename)
         path = payload / filename
@@ -363,20 +685,45 @@ def write_manifest(args: argparse.Namespace) -> None:
         info = package_info(path)
         if info["name"] != name or info["version"] != version:
             fail(f"package metadata and repository database disagree for {name}")
-        if info["packager"] != "Gooarchy":
-            fail(f"{name} does not carry the Gooarchy package identity")
         if info["arch"] not in {"any", "x86_64"}:
             fail(f"{name} has unsupported architecture {info['arch']}")
         source = sources[name]
+        origin_kind = source["origin_kind"]
         previous = base_by_name.get(name)
-        if not source["rebuilt"] and (
+        if origin_kind == "retained-release" and (
             previous is None
             or previous["version"] != version
             or previous["filename"] != filename
             or previous["sha256"] != sha256_file(path)
         ):
             fail(f"retained package does not match the exact base release: {name}")
-        if source["rebuilt"] and previous is not None:
+        if origin_kind == "retained-release":
+            if source["revision"] != f"retained from release tag:{base['release_tag']}":
+                fail(f"retained package source does not identify the exact base release: {name}")
+        elif origin_kind == "source-build":
+            if info["packager"] != "Gooarchy":
+                fail(f"{name} does not carry the Gooarchy source-build packager identity")
+        elif origin_kind == "prebuilt-input":
+            if name != "gooarchy-flavorings":
+                fail("only the reviewed Flavorings package may use prebuilt-input provenance")
+            prebuilt = verify_flavorings_prebuilt_package(path)
+            if source["revision"] != flavorings_source_revision(prebuilt):
+                fail("prebuilt Flavorings source provenance differs from its pinned input")
+        elif origin_kind == "upstream-release":
+            if pair_manifest is None:
+                fail("Scottland package provenance is missing its pin manifest")
+            pinned = next((item for item in pair_manifest["packages"] if item["name"] == name), None)
+            if pinned is None or source["revision"] != scottland_source_revision(pair_manifest, pinned):
+                fail(f"{name} does not identify the pinned upstream Scottland release asset")
+            if (version, filename, info["arch"]) != (
+                pinned["version"], pinned["filename"], pinned["architecture"]
+            ):
+                fail(f"{name} package identity differs from its pinned upstream release asset")
+            verify_scottland_pair_package(path, pinned)
+            upstream_names.add(name)
+        else:
+            fail(f"unsupported package origin kind for {name}")
+        if origin_kind != "retained-release" and previous is not None:
             comparison = subprocess.run(
                 ["vercmp", version, previous["version"]],
                 check=True,
@@ -388,7 +735,7 @@ def write_manifest(args: argparse.Namespace) -> None:
             except ValueError:
                 fail(f"vercmp returned an invalid result for {name}")
             if comparison_value <= 0:
-                fail(f"rebuilt package is not newer than the base release: {name}")
+                fail(f"new package is not newer than the base release: {name}")
         packages.append(
             {
                 "name": name,
@@ -397,10 +744,13 @@ def write_manifest(args: argparse.Namespace) -> None:
                 "sha256": sha256_file(path),
                 "architecture": info["arch"],
                 "source_revision": source["revision"],
-                "rebuilt": source["rebuilt"],
+                "origin_kind": origin_kind,
             }
         )
         expected_payload.add(filename)
+
+    if upstream_names and upstream_names != SCOTTLAND_PACKAGE_NAMES:
+        fail("an upstream Scottland import must contain the exact core and adapter pair")
 
     if base is not None:
         if not set(base_by_name).issubset(package_names):
@@ -577,7 +927,8 @@ def load_and_verify_bundle(
         "base", "packages", "database"
     }:
         fail("transfer manifest has invalid fields")
-    if manifest["schema"] != SCHEMA or manifest["repository"] != REPOSITORY:
+    schema = manifest["schema"]
+    if not isinstance(schema, str) or schema not in {SCHEMA, LEGACY_SCHEMA} or manifest["repository"] != REPOSITORY:
         fail("transfer bundle has the wrong protocol or repository identity")
     if not isinstance(manifest["source_commit"], str) or not COMMIT_RE.fullmatch(manifest["source_commit"]):
         fail("source commit must be a full Git SHA")
@@ -603,10 +954,14 @@ def load_and_verify_bundle(
     names: set[str] = set()
     filenames: set[str] = {"gooarchy.db"}
     release_asset_names = {"gooarchy.db", "gooarchy.db.sig"}
+    origins: dict[str, str] = {}
     for package in packages:
-        if not isinstance(package, dict) or set(package) != {
-            "name", "version", "filename", "sha256", "architecture", "source_revision", "rebuilt"
-        }:
+        expected_fields = (
+            {"name", "version", "filename", "sha256", "architecture", "source_revision", "rebuilt"}
+            if schema == LEGACY_SCHEMA else
+            {"name", "version", "filename", "sha256", "architecture", "source_revision", "origin_kind"}
+        )
+        if not isinstance(package, dict) or set(package) != expected_fields:
             fail("package record has invalid fields")
         name = package["name"]
         if not isinstance(name, str) or not name or name in names:
@@ -627,15 +982,27 @@ def load_and_verify_bundle(
         revision = package["source_revision"]
         if not isinstance(revision, str) or not revision.strip() or any(ord(c) < 32 for c in revision):
             fail(f"source revision is invalid for {name}")
-        if not isinstance(package["rebuilt"], bool):
-            fail(f"rebuilt must be a boolean for {name}")
+        if schema == LEGACY_SCHEMA:
+            if not isinstance(package["rebuilt"], bool):
+                fail(f"rebuilt must be a boolean for {name}")
+            origins[name] = "source-build" if package["rebuilt"] else "retained-release"
+        else:
+            origin_kind = package["origin_kind"]
+            if not isinstance(origin_kind, str) or origin_kind not in PACKAGE_ORIGINS:
+                fail(f"package origin kind is invalid for {name}")
+            origins[name] = origin_kind
         names.add(name)
         filenames.add(filename)
+
+    upstream_names = {name for name, origin in origins.items() if origin == "upstream-release"}
+    pair_manifest = load_scottland_pair_manifest() if upstream_names else None
+    if upstream_names and upstream_names != SCOTTLAND_PACKAGE_NAMES:
+        fail("an upstream Scottland import must contain the exact core and adapter pair")
 
     if base is None:
         if not REQUIRED_INITIAL.issubset(names):
             fail("first repository bundle is missing one or more required packages")
-        if not all(package["rebuilt"] for package in packages):
+        if any(origin == "retained-release" for origin in origins.values()):
             fail("first repository bundle cannot contain retained packages")
     else:
         base_by_name = {package["name"]: package for package in base["packages"]}
@@ -643,7 +1010,8 @@ def load_and_verify_bundle(
             fail("transfer bundle dropped a package from its base release")
         for package in packages:
             old = base_by_name.get(package["name"])
-            if not package["rebuilt"]:
+            origin = origins[package["name"]]
+            if origin == "retained-release":
                 if old is None or any(
                     package[key] != old[old_key]
                     for key, old_key in (("version", "version"), ("filename", "filename"), ("sha256", "sha256"))
@@ -663,7 +1031,7 @@ def load_and_verify_bundle(
                 except ValueError:
                     fail(f"vercmp returned an invalid result for {package['name']}")
                 if comparison_value <= 0:
-                    fail(f"rebuilt package is not newer than the base release: {package['name']}")
+                    fail(f"new package is not newer than the base release: {package['name']}")
 
     expected_payload = filenames
     actual_payload: set[str] = set()
@@ -690,8 +1058,42 @@ def load_and_verify_bundle(
         info = package_info(path)
         if info["name"] != package["name"] or info["version"] != package["version"]:
             fail(f"package metadata differs from the manifest: {package['name']}")
-        if info["arch"] != package["architecture"] or info["packager"] != "Gooarchy":
-            fail(f"package identity differs from the manifest: {package['name']}")
+        if info["arch"] != package["architecture"]:
+            fail(f"package architecture differs from the manifest: {package['name']}")
+        if schema == LEGACY_SCHEMA and info["packager"] != "Gooarchy":
+            fail(f"legacy package identity differs from the manifest: {package['name']}")
+        origin = origins[package["name"]]
+        if origin == "source-build":
+            if info["packager"] != "Gooarchy":
+                fail(f"source-built package does not carry the Gooarchy packager identity: {package['name']}")
+        elif origin == "prebuilt-input":
+            if package["name"] != "gooarchy-flavorings":
+                fail("only the reviewed Flavorings package may use prebuilt-input provenance")
+            prebuilt = verify_flavorings_prebuilt_package(path)
+            if package["source_revision"] != flavorings_source_revision(prebuilt):
+                fail("prebuilt Flavorings source provenance differs from its pinned input")
+        elif origin == "upstream-release":
+            if pair_manifest is None:
+                fail("Scottland package provenance is missing its pin manifest")
+            pinned = next(
+                (item for item in pair_manifest["packages"] if item["name"] == package["name"]),
+                None,
+            )
+            if pinned is None or package["source_revision"] != scottland_source_revision(pair_manifest, pinned):
+                fail(f"upstream source provenance differs from the pinned Scottland asset: {package['name']}")
+            if (
+                package["version"], package["filename"], package["sha256"], package["architecture"]
+            ) != (
+                pinned["version"], pinned["filename"], pinned["sha256"], pinned["architecture"]
+            ):
+                fail(f"package identity differs from the pinned Scottland release asset: {package['name']}")
+            verify_scottland_pair_package(path, pinned)
+        elif origin == "retained-release":
+            # The exact base-release hash above is the provenance for retained bytes;
+            # the upstream or Gooarchy packager field remains unchanged in the archive.
+            pass
+        else:
+            fail(f"unsupported package origin kind for {package['name']}")
     database_path = payload / "gooarchy.db"
     if sha256_file(database_path) != database["sha256"]:
         fail("repository database hash mismatch")
@@ -793,6 +1195,12 @@ def main() -> int:
     flavorings_stage.add_argument("--output", type=Path, required=True)
     flavorings_stage.add_argument("--manifest", type=Path, required=True)
     flavorings_stage.add_argument("--recipe", type=Path, required=True)
+    scottland_pair_path = commands.add_parser("scottland-pair-input-manifest-path")
+    scottland_pair_input = commands.add_parser("verify-scottland-pair-input")
+    scottland_pair_input.add_argument("--directory", type=Path, required=True)
+    scottland_pair_stage = commands.add_parser("stage-scottland-pair-input")
+    scottland_pair_stage.add_argument("--directory", type=Path, required=True)
+    scottland_pair_stage.add_argument("--output-directory", type=Path, required=True)
     package_metadata = commands.add_parser("package-info")
     package_metadata_source = package_metadata.add_mutually_exclusive_group(required=True)
     package_metadata_source.add_argument("--archive", type=Path)
@@ -842,6 +1250,7 @@ def main() -> int:
                 "sha256": manifest["sha256"],
                 "source": manifest["source"],
                 "pkgbuild_sha256": manifest["pkgbuild_sha256"],
+                "source_revision": flavorings_source_revision(manifest),
             }, sort_keys=True, separators=(",", ":")))
         elif args.command == "flavorings-input-manifest-path":
             print(flavorings_input_manifest_path(args.recipe))
@@ -856,7 +1265,22 @@ def main() -> int:
                 "sha256": manifest["sha256"],
                 "source": manifest["source"],
                 "pkgbuild_sha256": manifest["pkgbuild_sha256"],
+                "source_revision": flavorings_source_revision(manifest),
             }, sort_keys=True, separators=(",", ":")))
+        elif args.command == "scottland-pair-input-manifest-path":
+            print(scottland_pair_manifest_path())
+        elif args.command == "verify-scottland-pair-input":
+            print(json.dumps(
+                verify_scottland_pair_input(args.directory),
+                sort_keys=True,
+                separators=(",", ":"),
+            ))
+        elif args.command == "stage-scottland-pair-input":
+            print(json.dumps(
+                stage_scottland_pair_input(args.directory, args.output_directory),
+                sort_keys=True,
+                separators=(",", ":"),
+            ))
         elif args.command == "write":
             write_manifest(args)
         elif args.command == "base":
