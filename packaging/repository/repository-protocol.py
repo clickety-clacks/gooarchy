@@ -577,6 +577,153 @@ def stage_flavorings_input(archive: Path, output: Path, manifest_path: Path, rec
             os.close(output_fd)
 
 
+def cua_driver_recipe_identity(recipe_path: Path) -> dict[str, Any]:
+    text = recipe_path.read_text(encoding="utf-8")
+
+    def assignment(name: str) -> str:
+        matches = re.findall(rf"(?m)^{re.escape(name)}=(.+)$", text)
+        if len(matches) != 1:
+            fail(f"cua-driver recipe must define exactly one {name}")
+        value = matches[0].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if not value:
+            fail(f"cua-driver recipe has an empty {name}")
+        return value
+
+    def array(name: str) -> list[str]:
+        matches = re.findall(rf"(?ms)^{re.escape(name)}=\((.*?)\)", text)
+        if len(matches) != 1:
+            fail(f"cua-driver recipe must define exactly one {name} array")
+        values = re.findall(r"['\"]([^'\"]+)['\"]", matches[0])
+        if not values:
+            fail(f"cua-driver recipe has an empty {name} array")
+        return values
+
+    package = assignment("pkgname")
+    pkgver = assignment("pkgver")
+    pkgrel = assignment("pkgrel")
+    architecture = array("arch")
+    dependencies = array("depends")
+    if package != "cua-driver" or len(architecture) != 1 or architecture[0] != "x86_64":
+        fail("cua-driver recipe has an unexpected package identity")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", pkgver) or not re.fullmatch(r"[0-9]+", pkgrel):
+        fail("cua-driver recipe version is invalid")
+    return {
+        "package": package,
+        "version": f"{pkgver}-{pkgrel}",
+        "architecture": architecture[0],
+        "filename": f"{package}-{pkgver}-{pkgrel}-{architecture[0]}.pkg.tar.zst",
+        "packager": "Gooarchy",
+        "depends": dependencies,
+        "pkgbuild_sha256": sha256_file(recipe_path),
+    }
+
+
+def cua_driver_input_manifest_path(recipe_path: Path) -> Path:
+    """Resolve the checked-in archive receipt for the current cua-driver recipe version."""
+    identity = cua_driver_recipe_identity(recipe_path)
+    return recipe_path.parent / f"{identity['version']}-input.json"
+
+
+def verify_cua_driver_input(archive: Path, manifest_path: Path, recipe_path: Path) -> dict[str, Any]:
+    if archive.is_symlink() or not archive.is_file():
+        fail("prebuilt cua-driver input must be a regular package archive")
+    expected = cua_driver_recipe_identity(recipe_path)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"cannot read prebuilt cua-driver manifest: {error}")
+    required = {
+        "schema", "package", "version", "architecture", "filename", "sha256",
+        "packager", "pkgbuild_sha256", "depends",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != required:
+        fail("prebuilt cua-driver manifest has invalid fields")
+    if manifest["schema"] != PACKAGE_INPUT_SCHEMA or manifest["package"] != "cua-driver":
+        fail("prebuilt input is not the supported cua-driver package")
+    for field in ("version", "architecture", "filename", "packager", "depends"):
+        if manifest[field] != expected[field]:
+            fail(f"prebuilt cua-driver {field} does not match the current recipe")
+    if manifest["packager"] != "Gooarchy":
+        fail("prebuilt cua-driver packager is not eligible")
+    safe_asset_name(manifest["filename"])
+    if archive.name != manifest["filename"]:
+        fail("prebuilt cua-driver archive filename does not match its manifest")
+    if not isinstance(manifest["sha256"], str) or not SHA256_RE.fullmatch(manifest["sha256"]):
+        fail("prebuilt cua-driver package hash is invalid")
+    if not isinstance(manifest["pkgbuild_sha256"], str) or not SHA256_RE.fullmatch(manifest["pkgbuild_sha256"]):
+        fail("prebuilt cua-driver PKGBUILD hash is invalid")
+    if manifest["pkgbuild_sha256"] != expected["pkgbuild_sha256"]:
+        fail("prebuilt cua-driver PKGBUILD hash does not match the current recipe")
+    if sha256_file(archive) != manifest["sha256"]:
+        fail("prebuilt cua-driver package hash does not match its manifest")
+
+    package_expected = {
+        "name": "cua-driver",
+        "version": expected["version"],
+        "arch": "x86_64",
+        "packager": "Gooarchy",
+    }
+    if package_info(archive) != package_expected:
+        fail("prebuilt cua-driver .PKGINFO does not match its reviewed package identity")
+    if build_info(archive) != {
+        **package_expected,
+        "pkgbuild_sha256": manifest["pkgbuild_sha256"],
+    }:
+        fail("prebuilt cua-driver .BUILDINFO does not match its reviewed build identity")
+    if package_dependencies(archive) != expected["depends"]:
+        fail("prebuilt cua-driver dependencies do not match its current recipe")
+    return manifest
+
+
+def verify_cua_driver_prebuilt_package(archive: Path) -> dict[str, Any]:
+    repository_root = Path(__file__).resolve().parents[2]
+    recipe_path = repository_root / "packaging/arch/cua-driver/PKGBUILD"
+    manifest_path = cua_driver_input_manifest_path(recipe_path)
+    return verify_cua_driver_input(archive, manifest_path, recipe_path)
+
+
+def cua_driver_source_revision(manifest: dict[str, Any]) -> str:
+    return (
+        f"prebuilt cua-driver package SHA256:{manifest['sha256']}; "
+        f"PKGBUILD SHA256:{manifest['pkgbuild_sha256']}"
+    )
+
+
+def stage_cua_driver_input(archive: Path, output: Path, manifest_path: Path, recipe_path: Path) -> dict[str, Any]:
+    """Copy an approved cua-driver archive byte-for-byte into private staging."""
+    if output.exists() or output.is_symlink():
+        fail("staged cua-driver output already exists")
+    if not hasattr(os, "O_NOFOLLOW"):
+        fail("safe cua-driver input staging requires O_NOFOLLOW support")
+
+    source_fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    output_fd = -1
+    created_output = False
+    try:
+        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+            fail("prebuilt cua-driver input must be a regular package archive")
+        output_fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created_output = True
+        with os.fdopen(source_fd, "rb") as source:
+            source_fd = -1
+            with os.fdopen(output_fd, "wb") as destination:
+                output_fd = -1
+                shutil.copyfileobj(source, destination)
+        os.chmod(output, 0o400)
+        return verify_cua_driver_input(output, manifest_path, recipe_path)
+    except BaseException:
+        if created_output:
+            output.unlink(missing_ok=True)
+        raise
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if output_fd >= 0:
+            os.close(output_fd)
+
+
 def load_sources(path: Path) -> dict[str, dict[str, Any]]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -704,11 +851,16 @@ def write_manifest(args: argparse.Namespace) -> None:
             if info["packager"] != "Gooarchy":
                 fail(f"{name} does not carry the Gooarchy source-build packager identity")
         elif origin_kind == "prebuilt-input":
-            if name != "gooarchy-flavorings":
-                fail("only the reviewed Flavorings package may use prebuilt-input provenance")
-            prebuilt = verify_flavorings_prebuilt_package(path)
-            if source["revision"] != flavorings_source_revision(prebuilt):
-                fail("prebuilt Flavorings source provenance differs from its pinned input")
+            if name == "gooarchy-flavorings":
+                prebuilt = verify_flavorings_prebuilt_package(path)
+                if source["revision"] != flavorings_source_revision(prebuilt):
+                    fail("prebuilt Flavorings source provenance differs from its pinned input")
+            elif name == "cua-driver":
+                prebuilt = verify_cua_driver_prebuilt_package(path)
+                if source["revision"] != cua_driver_source_revision(prebuilt):
+                    fail("prebuilt cua-driver source provenance differs from its pinned input")
+            else:
+                fail(f"{name} is not an approved prebuilt package input")
         elif origin_kind == "upstream-release":
             if pair_manifest is None:
                 fail("Scottland package provenance is missing its pin manifest")
@@ -1067,11 +1219,16 @@ def load_and_verify_bundle(
             if info["packager"] != "Gooarchy":
                 fail(f"source-built package does not carry the Gooarchy packager identity: {package['name']}")
         elif origin == "prebuilt-input":
-            if package["name"] != "gooarchy-flavorings":
-                fail("only the reviewed Flavorings package may use prebuilt-input provenance")
-            prebuilt = verify_flavorings_prebuilt_package(path)
-            if package["source_revision"] != flavorings_source_revision(prebuilt):
-                fail("prebuilt Flavorings source provenance differs from its pinned input")
+            if package["name"] == "gooarchy-flavorings":
+                prebuilt = verify_flavorings_prebuilt_package(path)
+                if package["source_revision"] != flavorings_source_revision(prebuilt):
+                    fail("prebuilt Flavorings source provenance differs from its pinned input")
+            elif package["name"] == "cua-driver":
+                prebuilt = verify_cua_driver_prebuilt_package(path)
+                if package["source_revision"] != cua_driver_source_revision(prebuilt):
+                    fail("prebuilt cua-driver source provenance differs from its pinned input")
+            else:
+                fail(f"{package['name']} is not an approved prebuilt package input")
         elif origin == "upstream-release":
             if pair_manifest is None:
                 fail("Scottland package provenance is missing its pin manifest")
@@ -1195,6 +1352,17 @@ def main() -> int:
     flavorings_stage.add_argument("--output", type=Path, required=True)
     flavorings_stage.add_argument("--manifest", type=Path, required=True)
     flavorings_stage.add_argument("--recipe", type=Path, required=True)
+    cua_driver_input = commands.add_parser("verify-cua-driver-input")
+    cua_driver_input.add_argument("--archive", type=Path, required=True)
+    cua_driver_input.add_argument("--manifest", type=Path, required=True)
+    cua_driver_input.add_argument("--recipe", type=Path, required=True)
+    cua_driver_manifest_path = commands.add_parser("cua-driver-input-manifest-path")
+    cua_driver_manifest_path.add_argument("--recipe", type=Path, required=True)
+    cua_driver_stage = commands.add_parser("stage-cua-driver-input")
+    cua_driver_stage.add_argument("--archive", type=Path, required=True)
+    cua_driver_stage.add_argument("--output", type=Path, required=True)
+    cua_driver_stage.add_argument("--manifest", type=Path, required=True)
+    cua_driver_stage.add_argument("--recipe", type=Path, required=True)
     scottland_pair_path = commands.add_parser("scottland-pair-input-manifest-path")
     scottland_pair_input = commands.add_parser("verify-scottland-pair-input")
     scottland_pair_input.add_argument("--directory", type=Path, required=True)
@@ -1266,6 +1434,28 @@ def main() -> int:
                 "source": manifest["source"],
                 "pkgbuild_sha256": manifest["pkgbuild_sha256"],
                 "source_revision": flavorings_source_revision(manifest),
+            }, sort_keys=True, separators=(",", ":")))
+        elif args.command == "verify-cua-driver-input":
+            manifest = verify_cua_driver_input(args.archive, args.manifest, args.recipe)
+            print(json.dumps({
+                "package": manifest["package"],
+                "version": manifest["version"],
+                "filename": manifest["filename"],
+                "sha256": manifest["sha256"],
+                "pkgbuild_sha256": manifest["pkgbuild_sha256"],
+                "source_revision": cua_driver_source_revision(manifest),
+            }, sort_keys=True, separators=(",", ":")))
+        elif args.command == "cua-driver-input-manifest-path":
+            print(cua_driver_input_manifest_path(args.recipe))
+        elif args.command == "stage-cua-driver-input":
+            manifest = stage_cua_driver_input(args.archive, args.output, args.manifest, args.recipe)
+            print(json.dumps({
+                "package": manifest["package"],
+                "version": manifest["version"],
+                "filename": manifest["filename"],
+                "sha256": manifest["sha256"],
+                "pkgbuild_sha256": manifest["pkgbuild_sha256"],
+                "source_revision": cua_driver_source_revision(manifest),
             }, sort_keys=True, separators=(",", ":")))
         elif args.command == "scottland-pair-input-manifest-path":
             print(scottland_pair_manifest_path())

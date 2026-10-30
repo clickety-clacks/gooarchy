@@ -1,0 +1,17 @@
+{
+  "schema": "gooarchy-prebuilt-package-v1",
+  "package": "cua-driver",
+  "version": "0.38.0-1",
+  "architecture": "x86_64",
+  "filename": "cua-driver-0.38.0-1-x86_64.pkg.tar.zst",
+  "sha256": "b81a651045d1ea5ccf3d63f696070db50df5eb0978971bcbec3f14e3a95cbd87",
+  "packager": "Gooarchy",
+  "pkgbuild_sha256": "f92864d22298d7f2d25bc2f0e5ed9e7247692f7ee2ef1631c0d221aca6c29d6e",
+  "depends": [
+    "gcc-libs",
+    "glibc",
+    "libx11",
+    "libxi",
+    "libxkbcommon"
+  ]
+}

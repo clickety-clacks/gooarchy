@@ -168,6 +168,157 @@ class RepositoryTransferTests(unittest.TestCase):
             "archive_sha256": "722d4cf2f83c2f1f16e27e0a2e1105a28cf46716025bf1f290565df6300763af",
         })
 
+    def make_cua_driver_input(self) -> tuple[Path, Path, dict[str, Any], dict[str, Any], dict[str, Any]]:
+        recipe_path = ROOT / "packaging/arch/cua-driver/PKGBUILD"
+        identity = protocol.cua_driver_recipe_identity(recipe_path)
+        archive = self.root / identity["filename"]
+        archive.write_bytes(b"synthetic reviewed cua-driver archive")
+        manifest = {
+            "schema": protocol.PACKAGE_INPUT_SCHEMA,
+            "package": identity["package"],
+            "version": identity["version"],
+            "architecture": identity["architecture"],
+            "filename": identity["filename"],
+            "sha256": sha256(archive),
+            "packager": identity["packager"],
+            "pkgbuild_sha256": identity["pkgbuild_sha256"],
+            "depends": identity["depends"],
+        }
+        manifest_path = self.root / "cua-driver-input.json"
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+        package = {
+            "name": identity["package"],
+            "version": identity["version"],
+            "arch": identity["architecture"],
+            "packager": identity["packager"],
+        }
+        build = {
+            "name": identity["package"],
+            "version": identity["version"],
+            "arch": identity["architecture"],
+            "packager": identity["packager"],
+            "pkgbuild_sha256": identity["pkgbuild_sha256"],
+        }
+        metadata = {"package": package, "build": build, "depends": identity["depends"]}
+        return archive, manifest_path, identity, manifest, metadata
+
+    def test_cua_driver_manifest_pins_reviewed_package_and_recipe_identity(self) -> None:
+        recipe_path = ROOT / "packaging/arch/cua-driver/PKGBUILD"
+        identity = protocol.cua_driver_recipe_identity(recipe_path)
+        manifest_path = protocol.cua_driver_input_manifest_path(recipe_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest_path, recipe_path.parent / "0.38.0-1-input.json")
+        self.assertEqual(manifest["package"], "cua-driver")
+        self.assertEqual(manifest["version"], "0.38.0-1")
+        self.assertEqual(manifest["architecture"], "x86_64")
+        self.assertEqual(manifest["filename"], "cua-driver-0.38.0-1-x86_64.pkg.tar.zst")
+        self.assertEqual(
+            manifest["sha256"],
+            "b81a651045d1ea5ccf3d63f696070db50df5eb0978971bcbec3f14e3a95cbd87",
+        )
+        self.assertEqual(manifest["packager"], "Gooarchy")
+        self.assertEqual(manifest["pkgbuild_sha256"], identity["pkgbuild_sha256"])
+        self.assertEqual(manifest["depends"], identity["depends"])
+
+    def test_prebuilt_cua_driver_is_verified_and_staged_byte_for_byte(self) -> None:
+        archive, manifest_path, _identity, _manifest, metadata = self.make_cua_driver_input()
+        recipe_path = ROOT / "packaging/arch/cua-driver/PKGBUILD"
+        output_dir = self.root / "staged"
+        output_dir.mkdir()
+        output = output_dir / archive.name
+        original = archive.read_bytes()
+
+        with patch.object(protocol, "package_info", return_value=metadata["package"]), \
+             patch.object(protocol, "build_info", return_value=metadata["build"]), \
+             patch.object(protocol, "package_dependencies", return_value=metadata["depends"]):
+            verified = protocol.verify_cua_driver_input(archive, manifest_path, recipe_path)
+            staged = protocol.stage_cua_driver_input(archive, output, manifest_path, recipe_path)
+
+        self.assertEqual(staged, verified)
+        self.assertEqual(output.read_bytes(), original)
+        self.assertEqual(sha256(output), verified["sha256"])
+        self.assertEqual(output.stat().st_mode & 0o777, 0o400)
+
+    def test_prebuilt_cua_driver_rejects_hash_and_metadata_mismatches(self) -> None:
+        archive, manifest_path, _identity, manifest, metadata = self.make_cua_driver_input()
+        recipe_path = ROOT / "packaging/arch/cua-driver/PKGBUILD"
+        manifest["sha256"] = "0" * 64
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "package hash does not match"):
+            protocol.verify_cua_driver_input(archive, manifest_path, recipe_path)
+
+        manifest["sha256"] = sha256(archive)
+        manifest["depends"] = ["unexpected-dependency"]
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "depends does not match"):
+            protocol.verify_cua_driver_input(archive, manifest_path, recipe_path)
+
+        manifest["depends"] = metadata["depends"]
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        with patch.object(protocol, "package_info", return_value={**metadata["package"], "name": "other"}):
+            with self.assertRaisesRegex(ValueError, "PKGINFO does not match"):
+                protocol.verify_cua_driver_input(archive, manifest_path, recipe_path)
+
+        with patch.object(protocol, "package_info", return_value=metadata["package"]), \
+             patch.object(protocol, "build_info", return_value={**metadata["build"], "pkgbuild_sha256": "1" * 64}):
+            with self.assertRaisesRegex(ValueError, "BUILDINFO does not match"):
+                protocol.verify_cua_driver_input(archive, manifest_path, recipe_path)
+
+    def test_cua_driver_prebuilt_origin_is_written_and_verified_in_transfer_manifest(self) -> None:
+        versions = {name: "1.0.0-1" for name in NAMES}
+        bundle, _, base_manifest = make_bundle(self.root, versions)
+        payload = bundle / "payload"
+        archive, input_manifest_path, identity, input_manifest, cua_metadata = self.make_cua_driver_input()
+        staged_input = payload / identity["filename"]
+        shutil.copyfile(archive, staged_input)
+        database_records = {
+            item["name"]: (item["version"], item["filename"])
+            for item in base_manifest["packages"]
+        }
+        database_records["cua-driver"] = (identity["version"], identity["filename"])
+        create_database(payload / "gooarchy.db", database_records)
+
+        source_map = {
+            name: {"revision": f"Gooarchy {COMMIT}", "origin_kind": "source-build"}
+            for name in NAMES
+        }
+        source_map["cua-driver"] = {
+            "revision": protocol.cua_driver_source_revision(input_manifest),
+            "origin_kind": "prebuilt-input",
+        }
+        source_map_path = self.root / "sources.json"
+        source_map_path.write_text(json.dumps(source_map), encoding="utf-8")
+        package_metadata = {
+            item["filename"]: {
+                "name": item["name"], "version": item["version"],
+                "arch": item["architecture"], "packager": "Gooarchy",
+            }
+            for item in base_manifest["packages"]
+        }
+        package_metadata[identity["filename"]] = cua_metadata["package"]
+
+        with patch.object(protocol, "package_info", side_effect=lambda path: package_metadata[path.name]), \
+             patch.object(protocol, "build_info", return_value=cua_metadata["build"]), \
+             patch.object(protocol, "package_dependencies", return_value=cua_metadata["depends"]), \
+             patch.object(protocol, "cua_driver_input_manifest_path", return_value=input_manifest_path):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                protocol.write_manifest(SimpleNamespace(
+                    bundle=bundle,
+                    source_root=ROOT,
+                    source_map=source_map_path,
+                    fingerprint=FINGERPRINT,
+                    base_json=None,
+                ))
+            transfer = self.verify(bundle, stdout.getvalue().strip())
+
+        record = next(item for item in transfer["packages"] if item["name"] == "cua-driver")
+        self.assertEqual(record["origin_kind"], "prebuilt-input")
+        self.assertEqual(record["filename"], identity["filename"])
+        self.assertEqual(record["sha256"], sha256(staged_input))
+        self.assertEqual(record["source_revision"], source_map["cua-driver"]["revision"])
+
     def make_flavorings_input(self) -> tuple[Path, Path, str, str, dict[str, str]]:
         recipe_path = ROOT / "packaging/gooarchy-flavorings/PKGBUILD"
         identity = protocol.flavorings_recipe_identity(recipe_path)

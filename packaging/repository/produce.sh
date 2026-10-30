@@ -14,12 +14,14 @@ usage() {
   cat >&2 <<'USAGE'
 Usage: packaging/repository/produce.sh --output <new-transfer-directory> --all
        packaging/repository/produce.sh --output <new-transfer-directory> --flavorings-package <archive> --all
+       packaging/repository/produce.sh --output <new-transfer-directory> --cua-driver-package <archive> --all
        packaging/repository/produce.sh --output <new-transfer-directory> --scottland-pair <directory> <scottland> <scottland-omarchy>
        packaging/repository/produce.sh --output <new-transfer-directory> <package> [<package> ...]
 
 Builds package archives and an unsigned repository database only. It does not
 read signing credentials, create signatures, or contact GitHub Releases. The optional
 Flavorings archive is accepted only when it matches the reviewed source-input manifest.
+The optional cua-driver archive is accepted only when it matches the pinned package-input manifest.
 The Scottland pair directory is accepted only when both unchanged release assets match the
 pinned upstream identity, metadata, dependency and release-checksum manifest.
 USAGE
@@ -28,6 +30,7 @@ USAGE
 
 output_dir=
 flavorings_package=
+cua_driver_package=
 scottland_pair_dir=
 all_packages=0
 requested_packages=()
@@ -46,6 +49,12 @@ while (($#)); do
       (($# >= 2)) || usage
       [[ -z $flavorings_package ]] || usage
       flavorings_package=$2
+      shift 2
+      ;;
+    --cua-driver-package)
+      (($# >= 2)) || usage
+      [[ -z $cua_driver_package ]] || usage
+      cua_driver_package=$2
       shift 2
       ;;
     --scottland-pair)
@@ -197,6 +206,14 @@ if [[ -n $flavorings_package ]]; then
   [[ ${recipe_for[gooarchy-flavorings]:-} == "$repo_root/packaging/gooarchy-flavorings/PKGBUILD" ]] ||
     die "the prebuilt Flavorings input requires Gooarchy's self-contained Flavorings recipe."
 fi
+if [[ -n $cua_driver_package ]]; then
+  [[ ${selected[cua-driver]+present} ]] ||
+    die "--cua-driver-package requires cua-driver in the selected package set."
+  [[ -f $cua_driver_package && ! -L $cua_driver_package ]] ||
+    die "the prebuilt cua-driver input must be a regular package archive."
+  [[ ${recipe_for[cua-driver]:-} == "$repo_root/packaging/arch/cua-driver/PKGBUILD" ]] ||
+    die "the prebuilt cua-driver input requires Gooarchy's canonical cua-driver recipe."
+fi
 if [[ -n $scottland_pair_dir ]]; then
   [[ ${selected[scottland]+present} && ${selected[scottland-omarchy]+present} ]] ||
     die "--scottland-pair requires both scottland and scottland-omarchy in the selected package set."
@@ -248,6 +265,22 @@ if [[ -n $flavorings_package ]]; then
   flavorings_input_filename=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["filename"])' <<<"$flavorings_input_record")
   flavorings_source_revision=$(jq -er '.source_revision' <<<"$flavorings_input_record") ||
     die "could not record imported Flavorings provenance."
+fi
+cua_driver_input_filename=
+cua_driver_source_revision=
+if [[ -n $cua_driver_package ]]; then
+  cua_driver_input_manifest=$(python3 "$script_dir/repository-protocol.py" cua-driver-input-manifest-path \
+    --recipe "$repo_root/packaging/arch/cua-driver/PKGBUILD") ||
+    die "could not select the canonical cua-driver package-input manifest."
+  [[ -s $cua_driver_input_manifest ]] || die "the pinned cua-driver package-input manifest is missing."
+  cua_driver_input_record=$(python3 "$script_dir/repository-protocol.py" verify-cua-driver-input \
+    --archive "$cua_driver_package" --manifest "$cua_driver_input_manifest" \
+    --recipe "$repo_root/packaging/arch/cua-driver/PKGBUILD") ||
+    die "the prebuilt cua-driver package does not match the pinned package-input manifest."
+  cua_driver_input_filename=$(jq -er '.filename' <<<"$cua_driver_input_record") ||
+    die "could not read the verified cua-driver archive filename."
+  cua_driver_source_revision=$(jq -er '.source_revision' <<<"$cua_driver_input_record") ||
+    die "could not record imported cua-driver provenance."
 fi
 
 built_dir="$work_dir/built"
@@ -331,7 +364,16 @@ for package_name in "${requested_packages[@]}"; do
       source_origin[$package_name]=source-build
     fi
   else
-    if [[ $package_name == gooarchy-flavorings && -n $flavorings_package ]]; then
+    if [[ $package_name == cua-driver && -n $cua_driver_package ]]; then
+      python3 "$script_dir/repository-protocol.py" stage-cua-driver-input \
+        --archive "$cua_driver_package" --output "$built_dir/$cua_driver_input_filename" \
+        --manifest "$cua_driver_input_manifest" \
+        --recipe "$repo_root/packaging/arch/cua-driver/PKGBUILD" \
+        >/dev/null || die "the staged prebuilt cua-driver archive does not match its pinned input."
+      recipe_built[$recipe_file]=1
+      source_revision[$package_name]=$cua_driver_source_revision
+      source_origin[$package_name]=prebuilt-input
+    elif [[ $package_name == gooarchy-flavorings && -n $flavorings_package ]]; then
       python3 "$script_dir/repository-protocol.py" stage-flavorings-input \
         --archive "$flavorings_package" --output "$built_dir/$flavorings_input_filename" \
         --manifest "$flavorings_input_manifest" \
