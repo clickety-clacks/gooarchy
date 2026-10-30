@@ -8,8 +8,24 @@ mkdir -p "$tmp/bin"
 
 cat >"$tmp/bin/timeout" <<'EOF'
 #!/usr/bin/env bash
+printf 'timeout %s\n' "$*" >>"$CUA_TEST_DRIVER_LOG"
 while [[ ${1:-} == --* ]]; do shift; done
-shift
+if [[ ${1:-} =~ ^[0-9]+(ms|s|m|h)$ ]]; then shift; fi
+if [[ $CUA_TEST_CONSOLE_SERVE_MODE == unresponsive \
+  && ${1:-} == */cua-driver && ${2:-} == serve ]]; then
+  # Simulate the timeout quickly while preserving its requested arguments in the log.
+  "$@" &
+  timed_pid=$!
+  /bin/sleep 0.05
+  if kill -0 "$timed_pid" 2>/dev/null; then
+    kill -TERM "$timed_pid" 2>/dev/null || true
+    wait "$timed_pid" || true
+    printf '%s\n' 'simulated timeout exit 124' >>"$CUA_TEST_DRIVER_LOG"
+    exit 124
+  fi
+  wait "$timed_pid"
+  exit $?
+fi
 exec "$@"
 EOF
 cat >"$tmp/bin/sleep" <<'EOF'
@@ -43,9 +59,15 @@ case ${1:-} in
       echo 'console serve failed' >&2
       exit 1
     fi
+    if [[ $CUA_TEST_CONSOLE_SERVE_MODE == unresponsive ]]; then
+      trap 'rm -f -- "$CUA_TEST_CONSOLE_STATE"; exit 143' TERM
+    fi
     printf '%s\n' "$$" >"$CUA_TEST_CONSOLE_PID_FILE"
     printf '%s\n' "$$" >"$5"
     touch "$CUA_TEST_CONSOLE_STATE"
+    if [[ $CUA_TEST_CONSOLE_SERVE_MODE == unresponsive ]]; then
+      while :; do :; done
+    fi
     while [[ -e $CUA_TEST_CONSOLE_STATE ]]; do /bin/sleep 0.01; done
     ;;
   stop)
@@ -59,6 +81,7 @@ case ${1:-} in
         exit 95
       fi
       if [[ -e $CUA_TEST_CONSOLE_STATE ]]; then
+        if [[ $CUA_TEST_CONSOLE_SERVE_MODE == unresponsive ]]; then exit 1; fi
         echo 'daemon running'
         exit 0
       fi
@@ -75,6 +98,9 @@ case ${1:-} in
         ;;
       fail)
         echo 'daemon socket unavailable' >&2
+        exit 1
+        ;;
+      unresponsive)
         exit 1
         ;;
       *) exit 92 ;;
@@ -187,4 +213,25 @@ if grep -Fq -- '--user start cua-driver.service' "$tmp/console-failure-systemctl
 fi
 [[ ! -e $tmp/console-failure-daemon-state ]]
 
-echo 'cua-driver graphical and transient console start checks warn and continue on failure; console daemon is stopped before return.'
+export CUA_TEST_CONSOLE_SERVE_MODE=unresponsive
+export CUA_TEST_STATUS_MODE=unresponsive
+run_check console-unresponsive
+grep -Fq 'later installer step ran' "$tmp/console-unresponsive-output"
+grep -Fq 'Gooarchy: cua-driver did not answer' "$tmp/console-unresponsive-output"
+grep -Fq 'serve exited 124 without output' "$tmp/console-unresponsive-output"
+grep -Fq 'Installation will continue' "$tmp/console-unresponsive-output"
+grep -Fq -- 'timeout --signal=TERM --kill-after=1s 40s ' "$tmp/console-unresponsive-driver.log"
+grep -Fq 'simulated timeout exit 124' "$tmp/console-unresponsive-driver.log"
+console_pid=$(cat "$tmp/console-unresponsive-daemon-pid")
+if kill -0 "$console_pid" 2>/dev/null; then
+  echo 'unresponsive console check left its temporary daemon process running' >&2
+  exit 1
+fi
+[[ ! -e $tmp/console-unresponsive-daemon-state ]]
+console_socket=$(sed -n 's/^serve --socket \([^ ]*\) --pid-file .*/\1/p' "$tmp/console-unresponsive-driver.log")
+if [[ -z $console_socket || -e ${console_socket%/daemon.sock} ]]; then
+  echo 'unresponsive console check left its temporary runtime directory behind' >&2
+  exit 1
+fi
+
+echo 'cua-driver startup failures warn and continue; transient console daemons are stopped after readiness and terminated with their temporary files after timeout.'
