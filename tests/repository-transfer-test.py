@@ -395,7 +395,7 @@ class RepositoryTransferTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match the current recipe"):
             protocol.verify_flavorings_input(archive, manifest_path, recipe_path)
 
-        manifest["version"] = "0.2.1-1"
+        manifest["version"] = _version
         manifest["sha256"] = "e" * 64
         manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "package hash does not match"):
