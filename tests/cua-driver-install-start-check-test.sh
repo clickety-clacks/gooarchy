@@ -16,6 +16,25 @@ if [[ $CUA_TEST_CONSOLE_SERVE_MODE == unresponsive \
   # Simulate the timeout quickly while preserving its requested arguments in the log.
   "$@" &
   timed_pid=$!
+  ready=0
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    if [[ -s $CUA_TEST_CONSOLE_PID_FILE && -e $CUA_TEST_CONSOLE_STATE ]] \
+      && [[ $(cat "$CUA_TEST_CONSOLE_PID_FILE") == "$timed_pid" ]]; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$timed_pid" 2>/dev/null; then
+      wait "$timed_pid"
+      exit $?
+    fi
+    /bin/sleep 0.01
+  done
+  if (( !ready )); then
+    kill -TERM "$timed_pid" 2>/dev/null || true
+    wait "$timed_pid" || true
+    printf '%s\n' 'temporary console daemon did not signal readiness' >>"$CUA_TEST_DRIVER_LOG"
+    exit 125
+  fi
   /bin/sleep 0.05
   if kill -0 "$timed_pid" 2>/dev/null; then
     kill -TERM "$timed_pid" 2>/dev/null || true
