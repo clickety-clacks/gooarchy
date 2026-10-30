@@ -17,7 +17,7 @@ _upstream_archive_sha256=722d4cf2f83c2f1f16e27e0a2e1105a28cf46716025bf1f290565df
 pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
 arch=('any')
 url="https://github.com/clickety-clacks/gooarchy-flavorings.git"
-license=('LicenseRef-unlicensed')
+license=('MIT')
 # Runtime needs of what it installs. Building needs only git and Python (and base-devel), not
 # Scottland: on a machine without Scottland yet, build with makepkg --nodeps (see the README).
 depends=('scottland' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
@@ -59,4 +59,5 @@ package() {
     return 1
   }
   make -C "$source_dir" install DESTDIR="$pkgdir"
+  install -Dm644 "$source_dir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
