@@ -250,6 +250,19 @@ def sink_present(rc, inspect_output):
     return rc == 0 and "node.name" in inspect_output
 
 
+def package_has_repository_signature(info, packager):
+    """pacman -Qi reports the signing mechanism in Validated By, alongside the Packager."""
+    fields = {}
+    for line in info.splitlines():
+        label, separator, value = line.partition(":")
+        if separator:
+            fields[label.strip()] = value.strip()
+    return (
+        fields.get("Packager") == packager
+        and "Signature" in fields.get("Validated By", "").split()
+    )
+
+
 def night_longitude(now=None):
     """A longitude where it is local solar midnight right now (the sun is down at the equator)."""
     now = now or datetime.now(timezone.utc)
@@ -334,7 +347,7 @@ def save_session_log(name):
 def main():
     portal_info = run("pacman", "-Qi", "xdg-desktop-portal-wlr-gooarchy")
     check("the Gooarchy portal provider is installed from the signed repository",
-          "Packager        : Gooarchy" in portal_info and "Validated By    : Signature" in portal_info,
+          package_has_repository_signature(portal_info, "Gooarchy"),
           portal_info[:240])
     installed_packages_rc, installed_packages = run_rc("pacman", "-Qq")
     arch_portal_installed = "xdg-desktop-portal-wlr" in installed_packages.splitlines()

@@ -79,6 +79,18 @@ expect("volume parsing", g.volume_of("Volume: 0.40") == 0.40 and g.volume_of("Vo
 expect("an unchanged volume isn't a raise", not (g.volume_of("Volume: 0.40") < g.volume_of("Volume: 0.40")))
 expect("an empty sink section isn't a sink", not g.sink_present(1, "") and not g.sink_present(0, "Audio\n Sinks:\n"))
 expect("a described node is a sink", g.sink_present(0, ' * node.name = "alsa_output.pci"'))
+signature_info = "Packager        : Gooarchy\nValidated By    : Signature\n"
+sha256_signature_info = "Packager        : Gooarchy\nValidated By    : SHA-256 Sum Signature\n"
+unsigned_info = "Packager        : Gooarchy\nValidated By    : SHA-256 Sum\n"
+other_packager_info = "Packager        : Other\nValidated By    : SHA-256 Sum Signature\n"
+expect("pacman signature metadata accepts Signature",
+       g.package_has_repository_signature(signature_info, "Gooarchy"))
+expect("pacman signature metadata accepts SHA-256 Sum Signature",
+       g.package_has_repository_signature(sha256_signature_info, "Gooarchy"))
+expect("pacman signature metadata rejects unsigned packages",
+       not g.package_has_repository_signature(unsigned_info, "Gooarchy"))
+expect("pacman signature metadata checks the expected packager",
+       not g.package_has_repository_signature(other_packager_info, "Gooarchy"))
 black = b"P6\n10 10\n255\n" + bytes(300)
 gray = b"P6\n10 10\n255\n" + bytes([128]) * 300
 noise = b"P6\n10 10\n255\n" + bytes((i * 37) % 256 for i in range(300))
