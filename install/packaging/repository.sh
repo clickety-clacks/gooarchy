@@ -198,13 +198,13 @@ if repository_scottland_is_imported_core \
     "$repo_scottland_version" "$repo_scottland_packager" "$repo_wayfire_dependency" \
     "$repo_scottland_metadata_available" "$scottland_override"; then
     if [[ $repo_scottland_metadata_available == 0 || -z $repo_wayfire_dependency ]]; then
-      report "Warning: the selected Gooarchy repository did not expose Wayfire dependency metadata for Scottland 0.3.4-1; pacman will still enforce the package's actual dependencies and signatures."
+      report "Warning: the selected Gooarchy repository did not expose Wayfire dependency metadata for Scottland ${repo_scottland_version}; pacman will still enforce the package's actual dependencies and signatures."
     fi
     if [[ -z $arch_wayfire_version ]]; then
       report "Warning: Arch's current Wayfire version is unavailable; runtime compatibility cannot be assessed."
     fi
   fi
-  report "Upstream Scottland 0.3.4-1 records build Wayfire 0.11.0-1; this is build evidence and does not establish runtime compatibility."
+  report "Upstream Scottland ${repo_scottland_version} records build Wayfire 0.11.0-1; this is build evidence and does not establish runtime compatibility."
 fi
 case $wayfire_policy_status in
   0) ;;
