@@ -30,41 +30,86 @@ FLAVORINGS_REPOSITORY = "clickety-clacks/gooarchy-flavorings"
 SCOTTLAND_REPOSITORY = "clickety-clacks/scottland"
 SCOTTLAND_PACKAGE_NAMES = {"scottland", "scottland-omarchy"}
 PACKAGE_ORIGINS = {"source-build", "prebuilt-input", "upstream-release", "retained-release"}
-SCOTTLAND_PAIR_PIN = {
-    "source": {
-        "repository": SCOTTLAND_REPOSITORY,
-        "tag": "v0.3.4",
-        "commit": "bbf09cbd6b9cb80adc9d7fa0a7cf88f6c8641f25",
-        "tree": "33f1fe1bde2e647606134661db377a291829677f",
-        "release_url": "https://github.com/clickety-clacks/scottland/releases/tag/v0.3.4",
-        "source_pkgbuild_sha256": "aabf2369223c39f8a1f0e90deece23c72eb01612e0c16bd85d01ecdae6ef2f39",
-    },
-    "checksums": {
-        "filename": "SHA256SUMS",
-        "sha256": "969be4b5d480e9a762f9434d41dfb50e3b73f80deb50b37f4eb66b2031598e24",
-    },
-    "packages": {
-        "scottland": {
-            "name": "scottland",
-            "version": "0.3.4-1",
-            "architecture": "x86_64",
-            "filename": "scottland-0.3.4-1-x86_64.pkg.tar.zst",
-            "sha256": "e6a1bf08b324ba01a38bbbdb633156827ec7cd6144c0b1dcb120d6b7fc902986",
-            "packager": "Unknown Packager",
-            "pkgbuild_sha256": "5c7258994a4c8c780573b29c3659c54061809e80fc1c4345bcb6b68f8195fa14",
-            "wayfire_build": "0.11.0-1",
-            "required_dependency": "wayfire",
+SCOTTLAND_PAIR_MANIFESTS = {
+    "v0.3.4": "scottland-v0.3.4-input.json",
+    "v0.3.5": "scottland-v0.3.5-input.json",
+}
+DEFAULT_SCOTTLAND_PAIR_TAG = "v0.3.5"
+SCOTTLAND_PAIR_PINS = {
+    "v0.3.4": {
+        "source": {
+            "repository": SCOTTLAND_REPOSITORY,
+            "tag": "v0.3.4",
+            "commit": "bbf09cbd6b9cb80adc9d7fa0a7cf88f6c8641f25",
+            "tree": "33f1fe1bde2e647606134661db377a291829677f",
+            "release_url": "https://github.com/clickety-clacks/scottland/releases/tag/v0.3.4",
+            "source_pkgbuild_sha256": "aabf2369223c39f8a1f0e90deece23c72eb01612e0c16bd85d01ecdae6ef2f39",
         },
-        "scottland-omarchy": {
-            "name": "scottland-omarchy",
-            "version": "0.3.4-1",
-            "architecture": "any",
-            "filename": "scottland-omarchy-0.3.4-1-any.pkg.tar.zst",
-            "sha256": "c25611cd270bbf7dcfb5012a89223029f790e9a645c7bd6794b167dd2bd8f832",
-            "packager": "Unknown Packager",
-            "pkgbuild_sha256": "5c7258994a4c8c780573b29c3659c54061809e80fc1c4345bcb6b68f8195fa14",
-            "wayfire_build": "0.11.0-1",
-            "required_dependency": "scottland=0.3.4-1",
+        "checksums": {
+            "filename": "SHA256SUMS",
+            "sha256": "969be4b5d480e9a762f9434d41dfb50e3b73f80deb50b37f4eb66b2031598e24",
+        },
+        "packages": {
+            "scottland": {
+                "name": "scottland",
+                "version": "0.3.4-1",
+                "architecture": "x86_64",
+                "filename": "scottland-0.3.4-1-x86_64.pkg.tar.zst",
+                "sha256": "e6a1bf08b324ba01a38bbbdb633156827ec7cd6144c0b1dcb120d6b7fc902986",
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "5c7258994a4c8c780573b29c3659c54061809e80fc1c4345bcb6b68f8195fa14",
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "wayfire",
+            },
+            "scottland-omarchy": {
+                "name": "scottland-omarchy",
+                "version": "0.3.4-1",
+                "architecture": "any",
+                "filename": "scottland-omarchy-0.3.4-1-any.pkg.tar.zst",
+                "sha256": "c25611cd270bbf7dcfb5012a89223029f790e9a645c7bd6794b167dd2bd8f832",
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "5c7258994a4c8c780573b29c3659c54061809e80fc1c4345bcb6b68f8195fa14",
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "scottland=0.3.4-1",
+            },
+        },
+    },
+    "v0.3.5": {
+        "source": {
+            "repository": SCOTTLAND_REPOSITORY,
+            "tag": "v0.3.5",
+            "commit": "d3e61d54d4318019678cd57c19b87d5778faab65",
+            "tree": "c433206aaf1da31a8b2d671600ecefe3a66c375e",
+            "release_url": "https://github.com/clickety-clacks/scottland/releases/tag/v0.3.5",
+            "source_pkgbuild_sha256": "aabf2369223c39f8a1f0e90deece23c72eb01612e0c16bd85d01ecdae6ef2f39",
+        },
+        "checksums": {
+            "filename": "SHA256SUMS",
+            "sha256": "1d09803529cf535571030f8e031c05456a7b5c98819e3874f1d2cad235e1cc66",
+        },
+        "packages": {
+            "scottland": {
+                "name": "scottland",
+                "version": "0.3.5-1",
+                "architecture": "x86_64",
+                "filename": "scottland-0.3.5-1-x86_64.pkg.tar.zst",
+                "sha256": "5f99a6b3739210591c8fa8c0118506866bf918ea8637c0c17cd8d1844441444c",
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "9a8c586e509e142bf222b89e6eb8ab300fd7bc0343bc262a7d089b1ad07e4fb6",
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "wayfire",
+            },
+            "scottland-omarchy": {
+                "name": "scottland-omarchy",
+                "version": "0.3.5-1",
+                "architecture": "any",
+                "filename": "scottland-omarchy-0.3.5-1-any.pkg.tar.zst",
+                "sha256": "19ddd59083b0654284e85a7ce23f3862ff94fcec7fc2533dd811b7dff10062bc",
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "9a8c586e509e142bf222b89e6eb8ab300fd7bc0343bc262a7d089b1ad07e4fb6",
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "scottland=0.3.5-1",
+            },
         },
     },
 }
@@ -212,7 +257,7 @@ def package_dependencies(path: Path) -> list[str]:
 
 
 def scottland_pair_manifest_path() -> Path:
-    return Path(__file__).with_name("scottland-v0.3.4-input.json")
+    return Path(__file__).with_name(SCOTTLAND_PAIR_MANIFESTS[DEFAULT_SCOTTLAND_PAIR_TAG])
 
 
 def load_scottland_pair_manifest(path: Path | None = None) -> dict[str, Any]:
@@ -226,19 +271,20 @@ def load_scottland_pair_manifest(path: Path | None = None) -> dict[str, Any]:
         fail("Scottland pair input manifest has invalid fields")
     if manifest["schema"] != SCOTTLAND_PAIR_SCHEMA:
         fail("Scottland pair input manifest has the wrong schema")
-    if (
-        manifest["source"] != SCOTTLAND_PAIR_PIN["source"]
-        or manifest["checksums"] != SCOTTLAND_PAIR_PIN["checksums"]
-    ):
-        fail("Scottland pair input manifest differs from the pinned upstream source or release checksum")
     source = manifest["source"]
+    if not isinstance(source, dict):
+        fail("Scottland source identity has invalid fields")
+    source_tag = source.get("tag")
+    pair_pin = SCOTTLAND_PAIR_PINS.get(source_tag) if isinstance(source_tag, str) else None
+    if pair_pin is None or source != pair_pin["source"] or manifest["checksums"] != pair_pin["checksums"]:
+        fail("Scottland pair input manifest differs from the pinned upstream source or release checksum")
     source_fields = {
         "repository", "tag", "commit", "tree", "release_url", "source_pkgbuild_sha256"
     }
-    if not isinstance(source, dict) or set(source) != source_fields:
+    if set(source) != source_fields:
         fail("Scottland source identity has invalid fields")
-    if source["repository"] != SCOTTLAND_REPOSITORY or source["tag"] != "v0.3.4":
-        fail("Scottland source identity is not the reviewed upstream release")
+    if source["repository"] != SCOTTLAND_REPOSITORY:
+        fail("Scottland source identity is not a reviewed upstream release")
     if (
         not isinstance(source["commit"], str) or not COMMIT_RE.fullmatch(source["commit"])
         or not isinstance(source["tree"], str) or not COMMIT_RE.fullmatch(source["tree"])
@@ -267,15 +313,16 @@ def load_scottland_pair_manifest(path: Path | None = None) -> dict[str, Any]:
         name = package["name"]
         if not isinstance(name, str):
             fail("Scottland package name is invalid")
-        expected = {
-            "scottland": ("0.3.4-1", "x86_64", "wayfire"),
-            "scottland-omarchy": ("0.3.4-1", "any", "scottland=0.3.4-1"),
-        }.get(name)
+        expected = pair_pin["packages"].get(name)
         if expected is None or name in observed:
             fail("Scottland input must contain each pinned package exactly once")
-        if (package["version"], package["architecture"], package["required_dependency"]) != expected:
+        if (
+            package["version"], package["architecture"], package["required_dependency"]
+        ) != (
+            expected["version"], expected["architecture"], expected["required_dependency"]
+        ):
             fail(f"Scottland package identity or dependency pin is invalid for {name}")
-        expected_filename = f"{name}-{expected[0]}-{expected[1]}.pkg.tar.zst"
+        expected_filename = f"{name}-{expected['version']}-{expected['architecture']}.pkg.tar.zst"
         if package["filename"] != expected_filename:
             fail(f"Scottland package filename is invalid for {name}")
         safe_asset_name(package["filename"])
@@ -287,7 +334,7 @@ def load_scottland_pair_manifest(path: Path | None = None) -> dict[str, Any]:
             fail(f"Scottland build recipe hash is invalid for {name}")
         if package["wayfire_build"] != "0.11.0-1":
             fail(f"Scottland build Wayfire identity is invalid for {name}")
-        if package != SCOTTLAND_PAIR_PIN["packages"][name]:
+        if package != expected:
             fail(f"Scottland package metadata differs from the pinned release asset: {name}")
         observed[name] = package
     if set(observed) != SCOTTLAND_PACKAGE_NAMES:
