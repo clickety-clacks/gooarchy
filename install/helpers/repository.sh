@@ -47,13 +47,14 @@ package_is_repository_copy() {
   [[ -n $repository_version && $installed_version == "$repository_version" ]]
 }
 
-# The imported 0.3.4, 0.3.5 and 0.3.6 cores are identified by the upstream Packager value whenever
-# package metadata is available. If package metadata itself is unavailable, keep the no-new-stop
-# behavior for these exact selected-repository versions. When dependency metadata exists, only
-# their unversioned Wayfire dependency avoids comparison; versioned dependencies need an Arch version.
+# The imported 0.3.4, 0.3.5, 0.3.6 and 0.3.7 cores are identified by the upstream Packager value
+# whenever package metadata is available. If package metadata itself is unavailable, keep the
+# no-new-stop behavior for these exact selected-repository versions. When dependency metadata exists,
+# only their unversioned Wayfire dependency avoids comparison; versioned dependencies need an Arch version.
 repository_scottland_is_imported_core() {
   local package_version=$1 packager=$2 metadata_available=$3 override=$4
-  [[ $package_version == 0.3.4-1 || $package_version == 0.3.5-1 || $package_version == 0.3.6-1 ]] || return 1
+  [[ $package_version == 0.3.4-1 || $package_version == 0.3.5-1 \
+    || $package_version == 0.3.6-1 || $package_version == 0.3.7-1 ]] || return 1
   [[ $override != 1 ]] || return 1
   [[ $packager == 'Unknown Packager' || $metadata_available == 0 ]]
 }
