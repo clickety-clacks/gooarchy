@@ -26,8 +26,30 @@ def digest(path: Path) -> str:
 class ScottlandPairTests(unittest.TestCase):
     def test_manifest_binds_exact_release_assets_and_truthful_source_provenance(self) -> None:
         manifest = protocol.load_scottland_pair_manifest()
-        self.assertEqual(protocol.scottland_pair_manifest_path().name, "scottland-v0.3.6-input.json")
+        self.assertEqual(protocol.scottland_pair_manifest_path().name, "scottland-v0.3.7-input.json")
         self.assertEqual(manifest["source"]["repository"], "clickety-clacks/scottland")
+        self.assertEqual(manifest["source"]["tag"], "v0.3.7")
+        self.assertEqual(manifest["source"]["commit"], "60f04ba44bf1b4f0fcf65d7d88ffa19ea0206eef")
+        self.assertEqual(manifest["source"]["tree"], "ed63e6d7bfd24681fdcecc2cfc95130964a19846")
+        self.assertEqual(manifest["checksums"]["sha256"], "168bc958a9a3922e31eb01232b46ea0ed1dedd14b85192952fd6d9d9c775daa1")
+        self.assertEqual(
+            {item["name"]: item["sha256"] for item in manifest["packages"]},
+            {
+                "scottland": "c1ded7cbf7c65fbeb6d722ab1770362ba4c549b1b825fca2a2cf1b2f211a148d",
+                "scottland-omarchy": "59e76c143694e909c368ecf25c8a9b706a34f600eece6c948b3649fe8fcfe3b2",
+            },
+        )
+        self.assertEqual({item["version"] for item in manifest["packages"]}, {"0.3.7-1"})
+        core = next(item for item in manifest["packages"] if item["name"] == "scottland")
+        revision = protocol.scottland_source_revision(manifest, core)
+        self.assertIn("source-PKGBUILD-sha256:25666943", revision)
+        self.assertIn("embedded-BUILDINFO-PKGBUILD-sha256:155579ca", revision)
+        self.assertIn("source-PKGBUILD-matches-BUILDINFO:no", revision)
+        self.assertIn("asset:scottland-0.3.7-1-x86_64.pkg.tar.zst sha256:c1ded7cb", revision)
+
+    def test_previous_0_3_6_pair_remains_pinned(self) -> None:
+        historical = ROOT / "packaging/repository/scottland-v0.3.6-input.json"
+        manifest = protocol.load_scottland_pair_manifest(historical)
         self.assertEqual(manifest["source"]["tag"], "v0.3.6")
         self.assertEqual(manifest["source"]["commit"], "fe4b7283b99348ef560503a54e390d0089fca2df")
         self.assertEqual(manifest["source"]["tree"], "8ef24b0a157021b476cab016ff9e308447e47869")
