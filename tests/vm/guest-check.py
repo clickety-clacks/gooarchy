@@ -246,8 +246,9 @@ def sunlight_no_location_fallback(premise, output, selected_mode, current_mode):
 
 
 def view_rectangle(item):
-    """Return a mapped Wayfire view's visible rectangle when the API supplies one."""
-    if not isinstance(item, dict) or item.get("mapped") is False or item.get("minimized") is True:
+    """Return a mapped, non-background Wayfire view's rectangle when the API supplies one."""
+    if (not isinstance(item, dict) or item.get("mapped") is False or item.get("minimized") is True
+            or item.get("layer") == "background"):
         return None
     for key in ("scene_frame", "frame", "geometry"):
         box = item.get(key)

@@ -127,6 +127,12 @@ expect("wallpaper negative control rejects blank pixels in the uncovered sample"
        region is not None and not g.looks_drawn(black))
 expect("wallpaper sampling refuses a fully covered screen",
        g.uncovered_wallpaper_region(screen, [{"frame": screen}], sample_size=120, step=120) is None)
+background_view = {"layer": "background", "mapped": True, "geometry": screen}
+expect("a full-output background wallpaper layer does not cover its sample",
+       g.uncovered_wallpaper_region(screen, [background_view], sample_size=120, step=120) is not None)
+overlay_view = {"layer": "overlay", "mapped": True, "geometry": screen}
+expect("a full-output overlay remains a covering view",
+       g.uncovered_wallpaper_region(screen, [overlay_view], sample_size=120, step=120) is None)
 expect("night longitude is at local midnight", all(
     abs(((h + g.night_longitude(g.datetime(2026, 1, 1, h, 0, tzinfo=g.timezone.utc)) / 15) % 24)) < 1e-9
     for h in range(24)))
