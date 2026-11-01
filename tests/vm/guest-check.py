@@ -812,9 +812,10 @@ def main():
     check("with Sunlight off, a manual light choice stays", stays and color_scheme() == "prefer-light", color_scheme())
     os.unlink(solar)
 
-    # Paired calibration: choose an uncovered region while windows are mapped, prove wallpaper
-    # is visible there, then sample that same region after removing the wallpaper.
-    calibration_region = uncovered_wallpaper_region(screen, (all_views() or []) + (views() or []))
+    # Paired calibration runs after application windows are open, so sample a small exposed margin
+    # instead of requiring another 240x240 region that may no longer exist.
+    calibration_region = uncovered_wallpaper_region(
+        screen, (all_views() or []) + (views() or []), sample_size=32, step=32)
     calibration_wallpaper = grab_ppm(*calibration_region) if calibration_region else b""
     check("calibration positive control sees wallpaper in an uncovered region",
           calibration_region is not None and looks_drawn(calibration_wallpaper), str(calibration_region))
