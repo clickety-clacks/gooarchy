@@ -134,12 +134,26 @@ expect("a full-output background wallpaper layer does not cover its sample",
 overlay_view = {"layer": "overlay", "mapped": True, "geometry": screen}
 expect("a full-output overlay remains a covering view",
        g.uncovered_wallpaper_region(screen, [overlay_view], sample_size=120, step=120) is None)
+wayfire_focused_views = [{
+    "id": 7,
+    "app-id": "strata",
+    "activated": True,
+    "mapped": True,
+}]
+focused_view = {
+    "id": 7,
+    "app-id": "strata",
+    "activated": True,
+    "mapped": True,
+}
+original_all_views = g.all_views
+g.all_views = lambda: wayfire_focused_views
 settings_presses = []
 
 
 def capture_settings_press(layout, binding):
     context = g.settings_shortcut_context(
-        layout, binding, ["KEY_LEFTMETA"], {"id": 7, "app_id": "strata", "focused": True})
+        layout, binding, ["KEY_LEFTMETA"], g.focused_view_state())
     settings_presses.append(context)
     return context
 
@@ -154,32 +168,38 @@ expect("Settings shortcut evidence captures binding, modifier and focus",
            "binding_option": "command/binding_scottland_settings",
            "active_binding": "<super> KEY_COMMA",
            "modifiers_at_press": ["KEY_LEFTMETA"],
-           "focused_view": {"id": 7, "app_id": "strata", "focused": True},
+           "focused_view": focused_view,
        })
 unsettled_sent, unsettled_context = g.settings_shortcut_after_layout(
     None, "<super> KEY_COMMA", capture_settings_press)
 expect("Settings shortcut is not sent when the layout has not settled",
        not unsettled_sent and unsettled_context is None and len(settings_presses) == 1)
 input_events = []
-original_key, original_focus, original_log = g.key, g.focused_view_state, g.log
+original_key, original_log = g.key, g.log
 g.key = lambda name, down: input_events.append(("key", name, down))
-g.focused_view_state = lambda: {"id": 7, "app_id": "strata", "focused": True}
 g.log = lambda message: input_events.append(("log", message))
 try:
     pressed_context = g.press_settings_shortcut("us", "<super> KEY_COMMA")
 finally:
-    g.key, g.focused_view_state, g.log = original_key, original_focus, original_log
+    g.key, g.log = original_key, original_log
+    g.all_views = original_all_views
 key_events = [event[1:] for event in input_events if event[0] == "key"]
 context_log = next(event[1] for event in input_events if event[0] == "log")
 logged_context = json.loads(context_log.split(": ", 1)[1])
+meta_down = next(i for i, event in enumerate(input_events)
+                 if event == ("key", "KEY_LEFTMETA", True))
+log_position = next(i for i, event in enumerate(input_events) if event[0] == "log")
+comma_down = next(i for i, event in enumerate(input_events)
+                  if event == ("key", "KEY_COMMA", True))
 expect("Settings input context is captured with Super down before comma",
        key_events == [("KEY_LEFTMETA", True), ("KEY_COMMA", True),
                       ("KEY_COMMA", False), ("KEY_LEFTMETA", False)]
+       and meta_down < log_position < comma_down
        and logged_context == pressed_context
        and logged_context["binding_option"] == "command/binding_scottland_settings"
        and logged_context["active_binding"] == "<super> KEY_COMMA"
        and logged_context["modifiers_at_press"] == ["KEY_LEFTMETA"]
-       and logged_context["focused_view"]["app_id"] == "strata")
+       and logged_context["focused_view"] == focused_view)
 expect("night longitude is at local midnight", all(
     abs(((h + g.night_longitude(g.datetime(2026, 1, 1, h, 0, tzinfo=g.timezone.utc)) / 15) % 24)) < 1e-9
     for h in range(24)))

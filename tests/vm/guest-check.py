@@ -158,11 +158,11 @@ def all_views():
 
 
 def focused_view_state():
-    focused = next((item for item in all_views() if item.get("focused")), None)
+    focused = next((item for item in all_views() if item.get("activated")), None)
     if focused is None:
         return None
     state = {field: focused[field] for field in ("id", "app-id", "app_id") if field in focused}
-    state["focused"] = True
+    state["activated"] = True
     state["mapped"] = focused.get("mapped")
     return state
 
