@@ -157,6 +157,57 @@ def all_views():
     return ipc("window-rules/list-views")
 
 
+def focused_view_state():
+    focused = next((item for item in all_views() if item.get("focused")), None)
+    if focused is None:
+        return None
+    state = {field: focused[field] for field in ("id", "app-id", "app_id") if field in focused}
+    state["focused"] = True
+    state["mapped"] = focused.get("mapped")
+    return state
+
+
+def settings_shortcut_context(layout, binding, modifiers, focus):
+    return {
+        "layout": layout,
+        "binding_option": "command/binding_scottland_settings",
+        "active_binding": binding,
+        "modifiers_at_press": list(modifiers),
+        "focused_view": focus,
+    }
+
+
+def settings_shortcut_after_layout(layout, binding, send):
+    """Send the Settings chord only when the keyboard-layout premise is confirmed."""
+    if layout != "us":
+        return False, None
+    return True, send(layout, binding)
+
+
+def press_settings_shortcut(layout, binding):
+    """Capture the input state after Super is down and immediately before comma is sent."""
+    pressed = []
+    context = None
+    try:
+        key("KEY_LEFTMETA", True)
+        pressed.append("KEY_LEFTMETA")
+        time.sleep(0.1)
+        try:
+            focus = focused_view_state()
+        except Exception as error:
+            focus = {"capture_error": str(error)}
+        context = settings_shortcut_context(layout, binding, ["KEY_LEFTMETA"], focus)
+        log(f"Settings shortcut input state at comma press: {json.dumps(context, sort_keys=True)}")
+        key("KEY_COMMA", True)
+        pressed.append("KEY_COMMA")
+        time.sleep(0.1)
+    finally:
+        for name in reversed(pressed):
+            key(name, False)
+            time.sleep(0.1)
+    return context
+
+
 def key(name, down):
     ipc("stipc/feed_key", {"key": name, "state": down})
 
@@ -619,7 +670,14 @@ def main():
     check("the system's keyboard layout (localectl set-x11-keymap de) reaches the session", layout == "de", layout)
     run("sudo", "localectl", "set-x11-keymap", "us")
     run(build)
-    wait_for(lambda: ipc("wayfire/get-config-option", {"option": "input/xkb_layout"}).get("value") == "us", timeout=15)
+    settled_layout = wait_for(lambda: (lambda value: value if value == "us" else None)(
+        ipc("wayfire/get-config-option", {"option": "input/xkb_layout"}).get("value")), timeout=15)
+    observed_layout = settled_layout
+    if settled_layout is None:
+        try:
+            observed_layout = ipc("wayfire/get-config-option", {"option": "input/xkb_layout"}).get("value")
+        except Exception:
+            observed_layout = "unavailable"
 
     # Keys Scottland's shipped config binds.
     rc1, before = run_rc("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@")
@@ -643,14 +701,25 @@ def main():
     with open(dirs, "w") as f:
         f.write(saved)
 
-    # Scottland Settings is a layer-shell overlay, not a window in Scottland's model.
-    press("KEY_LEFTMETA", "KEY_COMMA")
-    settings = wait_for(lambda: [v for v in all_views() if v.get("app-id") == "scottland-settings" and v.get("mapped")],
-                        timeout=30)
-    check("Super+comma opens Scottland Settings", settings, settings and settings[0].get("app-id"))
-    time.sleep(2)
-    shot("09-scottland-settings.png")
-    run("pkill", "-f", "qs -n -p /usr/share/scottland/settings")
+    # Scottland Settings is a layer-shell overlay, not a window in Scottland's model. Only send
+    # the chord after Wayfire confirms the rebuilt US layout, and capture its input context.
+    binding = None
+    if settled_layout == "us":
+        binding = ipc("wayfire/get-config-option", {"option": "command/binding_scottland_settings"}).get("value")
+    shortcut_sent, input_state = settings_shortcut_after_layout(settled_layout, binding, press_settings_shortcut)
+    if not shortcut_sent:
+        check("premise failure: the keyboard layout settles at us before the Settings shortcut",
+              False, f"us was not observed within 15 seconds; current layout={observed_layout!r}; Super+comma was not sent")
+        settings = None
+    else:
+        settings = wait_for(
+            lambda: [v for v in all_views() if v.get("app-id") == "scottland-settings" and v.get("mapped")],
+            timeout=30)
+        check("Super+comma opens Scottland Settings", settings, input_state)
+    if settings:
+        time.sleep(2)
+        shot("09-scottland-settings.png")
+        run("pkill", "-f", "qs -n -p /usr/share/scottland/settings")
 
     # A terminal bell in a window you're not using becomes Scottland attention (what coding agents
     # ring when they need you). The bell rings when the check says so, once the window is unfocused.
