@@ -117,16 +117,24 @@ if ! repository_scottland_is_imported_core 0.3.4-1 'Unknown Packager' 1 0; then
   echo "the previously imported exact upstream package identity was not preserved" >&2
   exit 1
 fi
+if ! repository_scottland_is_imported_core 0.3.6-1 'Unknown Packager' 1 0; then
+  echo "the exact v0.3.6 upstream package identity was not recognized" >&2
+  exit 1
+fi
 if repository_scottland_is_imported_core 0.3.5-1 Gooarchy 1 0; then
   echo "a package sharing the imported version bypassed the upstream Packager identity" >&2
+  exit 1
+fi
+if repository_scottland_is_imported_core 0.3.6-1 Gooarchy 1 0; then
+  echo "the exact v0.3.6 package version bypassed the upstream Packager identity" >&2
   exit 1
 fi
 if ! repository_scottland_is_imported_core 0.3.5-1 "" 0 0; then
   echo "unavailable package metadata became a replacement stop for the exact imported version" >&2
   exit 1
 fi
-if repository_scottland_is_imported_core 0.3.6-1 'Unknown Packager' 1 0; then
-  echo "an unpinned package version was recognized as an imported core" >&2
+if repository_scottland_is_imported_core 0.3.6-2 'Unknown Packager' 1 0; then
+  echo "a different package release was recognized as the imported core" >&2
   exit 1
 fi
 if ! repository_scottland_wayfire_import_exception 0.3.5-1 'Unknown Packager' wayfire 1 0; then
@@ -135,6 +143,10 @@ if ! repository_scottland_wayfire_import_exception 0.3.5-1 'Unknown Packager' wa
 fi
 if ! repository_scottland_wayfire_import_exception 0.3.4-1 'Unknown Packager' wayfire 1 0; then
   echo "the previous imported core's unversioned Wayfire metadata was not preserved" >&2
+  exit 1
+fi
+if ! repository_scottland_wayfire_import_exception 0.3.6-1 'Unknown Packager' wayfire 1 0; then
+  echo "the exact v0.3.6 core's unversioned Wayfire metadata was not exempted" >&2
   exit 1
 fi
 if ! repository_scottland_wayfire_import_exception 0.3.5-1 'Unknown Packager' "" 1 0; then
@@ -157,8 +169,16 @@ if repository_scottland_wayfire_import_exception 0.3.5-1 Gooarchy wayfire 1 0; t
   echo "a different Packager with an unversioned dependency was incorrectly exempted" >&2
   exit 1
 fi
-if repository_scottland_wayfire_import_exception 0.3.6-1 'Unknown Packager' wayfire 1 0; then
-  echo "the unversioned Wayfire exception was broadened to another build" >&2
+if repository_scottland_wayfire_import_exception 0.3.6-2 'Unknown Packager' wayfire 1 0; then
+  echo "the unversioned Wayfire exception was broadened to another package release" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.3.6-1 Gooarchy wayfire 1 0; then
+  echo "the exact v0.3.6 version accepted a different Packager's unversioned dependency" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.3.6-1 'Unknown Packager' wayfire=0.11.0 1 0; then
+  echo "the exact v0.3.6 core exempted a versioned Wayfire dependency" >&2
   exit 1
 fi
 
@@ -179,10 +199,15 @@ repository_scottland_wayfire_allowed 0.3.4-1 "" "" 0 "" 0
 repository_scottland_wayfire_allowed 0.3.5-1 'Unknown Packager' wayfire 1 "$arch_wayfire_version" 0
 repository_scottland_wayfire_allowed 0.3.5-1 'Unknown Packager' wayfire 1 0.13.0 0
 repository_scottland_wayfire_allowed 0.3.5-1 "" "" 0 "" 0
+repository_scottland_wayfire_allowed 0.3.6-1 'Unknown Packager' wayfire 1 "$arch_wayfire_version" 0
+repository_scottland_wayfire_allowed 0.3.6-1 'Unknown Packager' wayfire 1 0.13.0 0
+repository_scottland_wayfire_allowed 0.3.6-1 "" "" 0 "" 0
 repository_scottland_wayfire_allowed 0.3.3-1 Gooarchy wayfire=0.11.0 1 0.11.0 0
 expect_wayfire_status 2 0.3.4-1 Gooarchy wayfire 1 "" 0
 expect_wayfire_status 2 0.3.5-1 Gooarchy wayfire 1 "" 0
-expect_wayfire_status 2 0.3.6-1 'Unknown Packager' wayfire 1 0.11.0 0
+expect_wayfire_status 0 0.3.6-1 'Unknown Packager' wayfire 1 0.11.0 0
+expect_wayfire_status 2 0.3.6-1 Gooarchy wayfire 1 0.11.0 0
+expect_wayfire_status 2 0.3.6-2 'Unknown Packager' wayfire 1 0.11.0 0
 expect_wayfire_status 2 0.3.5-1 'Unknown Packager' wayfire 1 0.11.0 1
 expect_wayfire_status 3 0.3.4-1 "" wayfire=0.11.0 0 "" 0
 expect_wayfire_status 3 0.3.5-1 "" wayfire=0.11.0 0 "" 0
