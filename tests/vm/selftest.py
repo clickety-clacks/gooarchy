@@ -97,6 +97,42 @@ noise = b"P6\n10 10\n255\n" + bytes((i * 37) % 256 for i in range(300))
 expect("a black region isn't a wallpaper", not g.looks_drawn(black))
 expect("a flat gray region isn't a wallpaper", not g.looks_drawn(gray))
 expect("a varied region is", g.looks_drawn(noise))
+expect("Sunlight no-location requires GeoClue absent, IP lookup disabled and no saved coordinates",
+       g.sunlight_no_location_premise(False, False, False))
+expect("Sunlight IP lookup prevents a no-location claim",
+       not g.sunlight_no_location_premise(False, True, False))
+expect("saved coordinates prevent a no-location claim",
+       not g.sunlight_no_location_premise(False, False, True))
+expect("GeoClue prevents a no-location claim",
+       not g.sunlight_no_location_premise(True, False, False))
+expect("Sunlight documented fallback keeps the selected mode when no location exists",
+       g.sunlight_no_location_fallback(
+           True, "set fallback coordinates in Settings", "prefer-light", "prefer-light"))
+expect("Sunlight fallback assertion rejects a location-present mode change",
+       not g.sunlight_no_location_fallback(
+           False, "", "prefer-light", "prefer-dark"))
+screen = {"x": 0, "y": 0, "width": 640, "height": 480}
+mapped_views = [
+    {"frame": {"x": 0, "y": 0, "width": 640, "height": 240}},
+    {"geometry": {"x": 480, "y": 240, "width": 160, "height": 240}},
+]
+region = g.uncovered_wallpaper_region(screen, mapped_views, sample_size=120, step=120)
+expect("wallpaper sampling finds a region outside mapped views",
+       region is not None and not any(g.rectangles_overlap(
+           {"x": region[0], "y": region[1], "width": region[2], "height": region[3]},
+           g.view_rectangle(item)) for item in mapped_views))
+expect("wallpaper positive control recognizes a picture in the uncovered sample",
+       region is not None and g.looks_drawn(noise))
+expect("wallpaper negative control rejects blank pixels in the uncovered sample",
+       region is not None and not g.looks_drawn(black))
+expect("wallpaper sampling refuses a fully covered screen",
+       g.uncovered_wallpaper_region(screen, [{"frame": screen}], sample_size=120, step=120) is None)
+background_view = {"layer": "background", "mapped": True, "geometry": screen}
+expect("a full-output background wallpaper layer does not cover its sample",
+       g.uncovered_wallpaper_region(screen, [background_view], sample_size=120, step=120) is not None)
+overlay_view = {"layer": "overlay", "mapped": True, "geometry": screen}
+expect("a full-output overlay remains a covering view",
+       g.uncovered_wallpaper_region(screen, [overlay_view], sample_size=120, step=120) is None)
 expect("night longitude is at local midnight", all(
     abs(((h + g.night_longitude(g.datetime(2026, 1, 1, h, 0, tzinfo=g.timezone.utc)) / 15) % 24)) < 1e-9
     for h in range(24)))

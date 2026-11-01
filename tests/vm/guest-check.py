@@ -14,6 +14,7 @@ exercise behavior. Observations record what the built system lacks (DEFICIT.md) 
 Writes results.json, screenshots and session logs to OUTDIR, also when something breaks midway;
 exits 1 if a check fails. Every compositor call has a deadline, and so does the whole run.
 """
+import configparser
 import glob
 import json
 import os
@@ -233,6 +234,67 @@ def looks_drawn(ppm):
     return mean > 20 and var > 100
 
 
+def sunlight_no_location_premise(geoclue_available, ip_lookup_allowed, saved_location):
+    """Sunlight has no location only when every configured or automatic source is absent."""
+    return not geoclue_available and not ip_lookup_allowed and not saved_location
+
+
+def sunlight_no_location_fallback(premise, output, selected_mode, current_mode):
+    """The documented fallback reports missing coordinates and preserves the selected mode."""
+    return (premise and "set fallback coordinates in Settings" in output
+            and current_mode == selected_mode)
+
+
+def view_rectangle(item):
+    """Return a mapped, non-background Wayfire view's rectangle when the API supplies one."""
+    if (not isinstance(item, dict) or item.get("mapped") is False or item.get("minimized") is True
+            or item.get("layer") == "background"):
+        return None
+    for key in ("scene_frame", "frame", "geometry"):
+        box = item.get(key)
+        if not isinstance(box, dict):
+            continue
+        try:
+            rect = {name: float(box[name]) for name in ("x", "y", "width", "height")}
+        except (KeyError, TypeError, ValueError):
+            continue
+        if rect["width"] > 0 and rect["height"] > 0:
+            return rect
+    return None
+
+
+def rectangles_overlap(left, right):
+    return (left["x"] < right["x"] + right["width"] and
+            right["x"] < left["x"] + left["width"] and
+            left["y"] < right["y"] + right["height"] and
+            right["y"] < left["y"] + left["height"])
+
+
+def uncovered_wallpaper_region(screen, views, sample_size=240, step=120):
+    """Find a screen sample that does not intersect a mapped window or widget."""
+    try:
+        x0, y0 = int(screen["x"]), int(screen["y"])
+        width, height = int(screen["width"]), int(screen["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if sample_size <= 0 or step <= 0 or width < sample_size or height < sample_size:
+        return None
+    covered = [rect for rect in (view_rectangle(item) for item in views) if rect]
+    xmax, ymax = x0 + width - sample_size, y0 + height - sample_size
+    xs = list(range(x0, xmax + 1, step))
+    ys = list(range(y0, ymax + 1, step))
+    if not xs or xs[-1] != xmax:
+        xs.append(xmax)
+    if not ys or ys[-1] != ymax:
+        ys.append(ymax)
+    for y in ys:
+        for x in xs:
+            candidate = {"x": x, "y": y, "width": sample_size, "height": sample_size}
+            if not any(rectangles_overlap(candidate, rect) for rect in covered):
+                return x, y, sample_size, sample_size
+    return None
+
+
 # ---- parsing helpers (also exercised by tests/vm/selftest.py) -------------------------------
 
 def volume_of(text):
@@ -390,8 +452,10 @@ def main():
     wait_for(lambda: run("pgrep", "-x", "swaybg"), timeout=20)
     time.sleep(2)
     shot("01-desktop.png")
-    corner = grab_ppm(int(screen["x"]) + 20, int(screen["y"]) + 20, 240, 240)
-    check("the wallpaper is visible on screen (sampled, not just a running process)", looks_drawn(corner))
+    wallpaper_region = uncovered_wallpaper_region(screen, (all_views() or []) + (views() or []))
+    wallpaper = grab_ppm(*wallpaper_region) if wallpaper_region else b""
+    check("the wallpaper is visible in an uncovered screen region",
+          wallpaper_region is not None and looks_drawn(wallpaper), str(wallpaper_region))
 
     # A terminal: Super+Enter (Scottland's shipped binding, Ghostty).
     term, note = open_with(("KEY_LEFTMETA", "KEY_ENTER"), "ghostty", 20)
@@ -619,20 +683,54 @@ def main():
           "; ".join(steps) + (f"; lit after {rings} ring(s)" if lit else ""))
     shot("10-bell-attention.png")
 
-    # Scottland's Sunlight schedule, as inherited (README, DEFICIT.md): with no location it leaves
-    # the mode alone; with one, it follows the sun and overrides a manual choice.
-    observe("Sunlight with no location (this guest has no direct internet for its IP lookup)",
-            run("/usr/lib/scottland/libexec/scottland-solar-theme", "once", timeout=30))
-    check("with no location, the color scheme stays as set (light)", color_scheme() == "prefer-light", color_scheme())
+    # Scottland tries GeoClue, saved coordinates, then an opted-in IP lookup. Set the
+    # no-location case explicitly instead of assuming this networked guest cannot reach IP lookup.
     solar = f"{HOME}/.config/scottland/solar.ini"
     os.makedirs(os.path.dirname(solar), exist_ok=True)
     with open(solar, "w") as f:
+        f.write("[solar]\nenabled = true\nallow_ip = false\nlocation_set = false\n")
+    package_rc, installed_packages = run_rc("pacman", "-Qq")
+    bus_rc, bus_names = run_rc("busctl", "--system", "list", "--no-pager")
+    geo_package = "geoclue" in installed_packages.splitlines()
+    geo_service = "org.freedesktop.GeoClue2" in bus_names
+    solar_config = configparser.ConfigParser()
+    solar_config.read(solar)
+    solar_section = solar_config["solar"]
+    no_location = sunlight_no_location_premise(
+        geo_package or geo_service,
+        solar_section.getboolean("allow_ip", fallback=True),
+        solar_section.getboolean("location_set", fallback=False),
+    )
+    check("the no-location premise is established: GeoClue absent, IP lookup disabled, no saved coordinates",
+          package_rc == 0 and bus_rc == 0 and no_location,
+          f"GeoClue package={geo_package}, D-Bus service={geo_service}, "
+          f"allow_ip={solar_section.getboolean('allow_ip', fallback=True)}, "
+          f"location_set={solar_section.getboolean('location_set', fallback=False)}")
+    light_rc, _ = run_rc("gooarchy-theme", "light")
+    light_ready = wait_for(lambda: color_scheme() == "prefer-light", timeout=10)
+    selected_mode = color_scheme()
+    check("the no-location fallback starts from the selected light mode", light_rc == 0 and light_ready,
+          selected_mode)
+    no_location_result = run("/usr/lib/scottland/libexec/scottland-solar-theme", "once", timeout=30)
+    observe("Sunlight no-location fallback result", no_location_result)
+    fallback_mode = color_scheme()
+    check("Sunlight reports its Settings fallback and leaves the selected mode unchanged",
+          sunlight_no_location_fallback(no_location, no_location_result, selected_mode, fallback_mode),
+          f"selected={selected_mode}, current={fallback_mode}, output={no_location_result}")
+
+    # Contrast no location with saved coordinates; network lookup remains disabled.
+    with open(solar, "w") as f:
         f.write(f"[solar]\nenabled = true\nallow_ip = false\nlocation_set = true\nlatitude = 0\n"
                 f"longitude = {night_longitude():.2f}\n")
-    # The schedule re-reads its location when its settings change; asking GeoClue (absent here)
-    # first can take its D-Bus timeout, so allow two minutes.
+    solar_config.read(solar)
+    solar_section = solar_config["solar"]
+    has_saved_location = solar_section.getboolean("location_set", fallback=False)
+    check("the location-present premise uses saved coordinates with IP lookup disabled",
+          has_saved_location and not solar_section.getboolean("allow_ip", fallback=True),
+          f"allow_ip={solar_section.getboolean('allow_ip', fallback=True)}, location_set={has_saved_location}")
+    # The schedule re-reads its location when settings change; allow its next pass.
     dark = wait_for(lambda: color_scheme() == "prefer-dark", timeout=120)
-    check("with a location where it's night, Sunlight switches to dark", dark, color_scheme())
+    check("with saved coordinates where it's night, Sunlight switches to dark", dark, color_scheme())
     shot("11-sunlight-dark.png")
     warning = subprocess.run(["gooarchy-theme", "light"], capture_output=True, text=True).stderr
     check("gooarchy-theme warns that Sunlight is on", "Sunlight" in warning, warning.strip()[:100])
@@ -645,12 +743,18 @@ def main():
     check("with Sunlight off, a manual light choice stays", stays and color_scheme() == "prefer-light", color_scheme())
     os.unlink(solar)
 
-    # Calibration: the wallpaper check must reject a desktop without its wallpaper.
+    # Paired calibration: choose an uncovered region while windows are mapped, prove wallpaper
+    # is visible there, then sample that same region after removing the wallpaper.
+    calibration_region = uncovered_wallpaper_region(screen, (all_views() or []) + (views() or []))
+    calibration_wallpaper = grab_ppm(*calibration_region) if calibration_region else b""
+    check("calibration positive control sees wallpaper in an uncovered region",
+          calibration_region is not None and looks_drawn(calibration_wallpaper), str(calibration_region))
     run("pkill", "-f", "gooarchy-wallpaper")
     run("pkill", "-x", "swaybg")
     time.sleep(2)
-    blank = grab_ppm(int(screen["x"]) + 20, int(screen["y"]) + 20, 240, 240)
-    check("calibration: the wallpaper check rejects a desktop whose wallpaper is gone", not looks_drawn(blank))
+    blank = grab_ppm(*calibration_region) if calibration_region else b""
+    check("calibration negative control rejects a desktop whose wallpaper is gone",
+          calibration_region is not None and not looks_drawn(blank), str(calibration_region))
 
     # The `gooarchy` front command (system-tools/), from the gooarchy package: it lists the
     # gooarchy-* tools installed beside it and runs one with its arguments and exit status.
