@@ -128,6 +128,21 @@ expect("wallpaper negative control rejects blank pixels in the uncovered sample"
        region is not None and not g.looks_drawn(black))
 expect("wallpaper sampling refuses a fully covered screen",
        g.uncovered_wallpaper_region(screen, [{"frame": screen}], sample_size=120, step=120) is None)
+late_screen = {"x": 0, "y": 0, "width": 1280, "height": 800}
+late_app_view = {"mapped": True, "layer": "workspace",
+                 "geometry": {"x": 40, "y": 20, "width": 1224, "height": 760}}
+expect("late desktop has no uncovered 240-pixel sample",
+       g.uncovered_wallpaper_region(late_screen, [late_app_view]) is None)
+late_region = g.uncovered_wallpaper_region(
+    late_screen, [late_app_view], sample_size=32, step=32)
+expect("late wallpaper calibration finds the exposed 32-pixel margin",
+       late_region == (0, 0, 32, 32))
+late_wallpaper = b"P6\n32 32\n255\n" + bytes((i * 37) % 256 for i in range(32 * 32 * 3))
+late_blank = b"P6\n32 32\n255\n" + bytes(32 * 32 * 3)
+expect("late wallpaper positive control recognizes pixels in the exposed sample",
+       late_region is not None and g.looks_drawn(late_wallpaper))
+expect("late wallpaper negative control rejects blank pixels in the same sample",
+       late_region is not None and not g.looks_drawn(late_blank))
 background_view = {"layer": "background", "mapped": True, "geometry": screen}
 expect("a full-output background wallpaper layer does not cover its sample",
        g.uncovered_wallpaper_region(screen, [background_view], sample_size=120, step=120) is not None)
