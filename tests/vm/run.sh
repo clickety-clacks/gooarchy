@@ -463,9 +463,16 @@ running() {
 }
 
 qemu_process_has_exited() {
-  local pid=$1
+  local pid=$1 stat rest state comm
   ! kill -0 "$pid" 2>/dev/null && return 0
-  [[ -r /proc/$pid/cmdline && ! -s /proc/$pid/cmdline ]]
+  [[ -r /proc/$pid/stat ]] || return 1
+  IFS= read -r stat <"/proc/$pid/stat" || return 1
+  comm=${stat#*(}
+  comm=${comm%%)*}
+  rest=${stat##*) }
+  state=${rest%% *}
+  [[ ( $state == Z || $state == X ) &&
+     ( $comm == qemu-system-x86 || $comm == qemu-system-x86_64 ) ]]
 }
 
 wait_guest_channel() {
