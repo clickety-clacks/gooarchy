@@ -1060,7 +1060,7 @@ cmd_check() {
   guest_stdin 'cat >/tmp/gooarchy-check/guest-check.py' <"$here/guest-check.py"
   log "checking the session in the guest"
   local status=0
-  guest "timeout 1500 python3 /tmp/gooarchy-check/guest-check.py /tmp/gooarchy-check/out --gpu $gpu" 2>&1 |
+  guest "timeout 2100 python3 /tmp/gooarchy-check/guest-check.py /tmp/gooarchy-check/out --gpu $gpu" 2>&1 |
     tee "$out/guest-check.log" >&2 || status=$?
   screendump "$relative/vm-display-after-check.png"
   guest 'cd /tmp/gooarchy-check/out && tar -cf - .' | tar -C "$out" -xf - || true

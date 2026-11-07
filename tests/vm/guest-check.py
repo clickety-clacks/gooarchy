@@ -37,7 +37,7 @@ HOME = os.path.expanduser("~")
 WAYFIRE_LOG = f"{HOME}/.local/state/scottland/wayfire.log"
 IPC_TIMEOUT = 10
 IPC_MAX_REPLY = 16 * 1024 * 1024
-RUN_DEADLINE = 1200
+RUN_DEADLINE = 1800
 results = []
 observations = []
 failures = 0
@@ -486,6 +486,8 @@ def software_system_tool_checks():
     webapp_id = None
     server = None
     server_thread = None
+    aur_package_owned = False
+    xterm_restore_required = False
     try:
         gooarchy_rc, gooarchy_package = run_rc("pacman", "-Q", "gooarchy")
         scottland_rc, scottland_package = run_rc("pacman", "-Q", "scottland")
@@ -523,6 +525,29 @@ def software_system_tool_checks():
         aur_rc, aur = software_command("gooarchy", "software", "pkg", "aur", "accessible", timeout=60)
         check("pkg aur accessible reaches the AUR RPC", aur_rc == 0 and "AUR is accessible" in aur, aur)
 
+        def package_choice_number(command, package):
+            rc, listing = run_rc(*command, timeout=60)
+            if rc != 0:
+                return None, listing
+            choices = []
+            seen = set()
+            for line in listing.splitlines():
+                name = line.strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    choices.append(name)
+            try:
+                return choices.index(package) + 1, listing
+            except ValueError:
+                return None, listing
+
+        def displayed_choice_number(listing, package):
+            for line in listing.splitlines():
+                number, separator, name = line.strip().partition(". ")
+                if separator and number.isdigit() and name == package:
+                    return int(number)
+            return None
+
         install_rc, install_picker = software_command(
             "gooarchy", "software", "pkg", "install", input_text="\n"
         )
@@ -536,11 +561,143 @@ def software_system_tool_checks():
               remove_rc == 0 and "Select packages to remove:" in remove_picker
               and "1. " in remove_picker, remove_picker[-500:])
         aur_picker_rc, aur_picker = software_command(
-            "gooarchy", "software", "pkg", "aur", "install", input_text="paru\n\n", timeout=60
+            "gooarchy", "software", "pkg", "aur", "install",
+            input_text="paru-bin\n\n", timeout=60
         )
-        check("pkg aur install lists AUR matches and accepts picker cancellation",
+        aur_picker_index = displayed_choice_number(aur_picker, "paru-bin")
+        check("pkg aur install lists paru-bin and accepts picker cancellation",
               aur_picker_rc == 0 and "Select AUR packages to install:" in aur_picker
-              and "1. " in aur_picker, aur_picker[-500:])
+              and aur_picker_index is not None, aur_picker[-500:])
+
+        xterm_before_rc, xterm_before = software_command(
+            "gooarchy", "software", "pkg", "present", "xterm"
+        )
+        xterm_restore_required = xterm_before_rc == 0
+        remove_picker_index, remove_picker_choices = package_choice_number(
+            ("pacman", "-Qqe"), "xterm"
+        )
+        install_picker_index, install_picker_choices = package_choice_number(
+            ("pacman", "-Slq"), "xterm"
+        )
+        check("the test-only Arch package is installed and listed in both pickers",
+              xterm_before_rc == 0 and remove_picker_index is not None
+              and install_picker_index is not None,
+              f"present={xterm_before}; remove_choice={remove_picker_index}; "
+              f"install_choice={install_picker_index}; "
+              f"remove_list_rc={0 if remove_picker_choices else 1}; "
+              f"install_list_rc={0 if install_picker_choices else 1}")
+
+        if remove_picker_index is not None and install_picker_index is not None:
+            picker_remove_rc, picker_remove = software_command(
+                "gooarchy", "software", "pkg", "remove",
+                input_text=f"{remove_picker_index}\ny\n", timeout=180,
+            )
+            picker_removed_rc, picker_removed = software_command(
+                "gooarchy", "software", "pkg", "missing", "xterm"
+            )
+            check("pkg remove picker removes the selected official package with reason and undo",
+                  picker_remove_rc == 0 and "Remove packages: xterm." in picker_remove
+                  and "Reason:" in picker_remove and "Undo:" in picker_remove
+                  and picker_removed_rc == 0,
+                  f"{picker_remove[-500:]}\nmissing: {picker_removed}")
+
+            picker_install_rc, picker_install = software_command(
+                "gooarchy", "software", "pkg", "install",
+                input_text=f"{install_picker_index}\ny\n", timeout=180,
+            )
+            picker_installed_rc, picker_installed = software_command(
+                "gooarchy", "software", "pkg", "present", "xterm"
+            )
+            check("pkg install picker installs the selected official package with reason and undo",
+                  picker_install_rc == 0 and "Install official packages: xterm." in picker_install
+                  and "Reason:" in picker_install and "Undo:" in picker_install
+                  and picker_installed_rc == 0,
+                  f"{picker_install[-500:]}\npresent: {picker_installed}")
+
+        direct_drop_rc, direct_drop = software_command(
+            "gooarchy", "software", "pkg", "drop", "xterm",
+            input_text="y\n", timeout=180,
+        )
+        direct_missing_rc, direct_missing = software_command(
+            "gooarchy", "software", "pkg", "missing", "xterm"
+        )
+        check("pkg drop removes the official test package and explains undo",
+              direct_drop_rc == 0 and "Remove packages: xterm." in direct_drop
+              and "Reason:" in direct_drop and "Undo:" in direct_drop
+              and direct_missing_rc == 0,
+              f"{direct_drop[-500:]}\nmissing: {direct_missing}")
+
+        direct_add_rc, direct_add = software_command(
+            "gooarchy", "software", "pkg", "add", "xterm",
+            input_text="y\n", timeout=180,
+        )
+        direct_present_rc, direct_present = software_command(
+            "gooarchy", "software", "pkg", "present", "xterm"
+        )
+        check("pkg add installs the official test package and explains undo",
+              direct_add_rc == 0 and "Install official packages: xterm." in direct_add
+              and "Reason:" in direct_add and "Undo:" in direct_add
+              and direct_present_rc == 0,
+              f"{direct_add[-500:]}\npresent: {direct_present}")
+
+        aur_missing_rc, aur_missing = software_command(
+            "gooarchy", "software", "pkg", "missing", "paru-bin"
+        )
+        check("paru-bin is absent before the AUR lifecycle smoke",
+              aur_missing_rc == 0, aur_missing)
+        if aur_missing_rc == 0:
+            aur_add_rc, aur_add = software_command(
+                "gooarchy", "software", "pkg", "aur", "add", "paru-bin", timeout=480
+            )
+            aur_present_rc, aur_present = software_command(
+                "gooarchy", "software", "pkg", "present", "paru-bin"
+            )
+            aur_package_owned = aur_present_rc == 0
+            check("pkg aur add builds and installs paru-bin with reason and undo",
+                  aur_add_rc == 0 and "Build and install AUR packages: paru-bin." in aur_add
+                  and "Reason:" in aur_add and "Undo:" in aur_add
+                  and aur_present_rc == 0,
+                  f"{aur_add[-700:]}\npresent: {aur_present}")
+
+            if aur_package_owned:
+                aur_drop_rc, aur_drop = software_command(
+                    "gooarchy", "software", "pkg", "drop", "paru-bin",
+                    input_text="y\n", timeout=180,
+                )
+                aur_dropped_rc, aur_dropped = software_command(
+                    "gooarchy", "software", "pkg", "missing", "paru-bin"
+                )
+                check("the AUR smoke package is removed before picker installation",
+                      aur_drop_rc == 0 and aur_dropped_rc == 0,
+                      f"{aur_drop[-500:]}\nmissing: {aur_dropped}")
+                aur_package_owned = aur_dropped_rc != 0
+                if aur_dropped_rc == 0 and aur_picker_index is not None:
+                    aur_picker_install_rc, aur_picker_install = software_command(
+                        "gooarchy", "software", "pkg", "aur", "install",
+                        input_text=f"paru-bin\n{aur_picker_index}\n", timeout=480,
+                    )
+                    aur_picker_present_rc, aur_picker_present = software_command(
+                        "gooarchy", "software", "pkg", "present", "paru-bin"
+                    )
+                    aur_package_owned = aur_picker_present_rc == 0
+                    check("AUR picker selection builds and installs paru-bin",
+                          aur_picker_install_rc == 0
+                          and "Build and install AUR packages: paru-bin." in aur_picker_install
+                          and aur_picker_present_rc == 0,
+                          f"{aur_picker_install[-700:]}\npresent: {aur_picker_present}")
+
+                    if aur_package_owned:
+                        aur_picker_drop_rc, aur_picker_drop = software_command(
+                            "gooarchy", "software", "pkg", "drop", "paru-bin",
+                            input_text="y\n", timeout=180,
+                        )
+                        aur_picker_missing_rc, aur_picker_missing = software_command(
+                            "gooarchy", "software", "pkg", "missing", "paru-bin"
+                        )
+                        check("the AUR picker smoke package is removed after selection",
+                              aur_picker_drop_rc == 0 and aur_picker_missing_rc == 0,
+                              f"{aur_picker_drop[-500:]}\nmissing: {aur_picker_missing}")
+                        aur_package_owned = aur_picker_missing_rc != 0
 
         with tempfile.TemporaryDirectory(prefix="gooarchy-software-smoke-") as data_home:
             web_env = os.environ.copy()
@@ -648,6 +805,29 @@ def software_system_tool_checks():
     except Exception as error:
         check("Gooarchy software VM checks complete", False, f"{type(error).__name__}: {error}")
     finally:
+        if aur_package_owned:
+            aur_installed_rc, _ = run_rc("pacman", "-Q", "paru-bin")
+            if aur_installed_rc == 0:
+                cleanup_rc, cleanup = software_command(
+                    "gooarchy", "software", "pkg", "drop", "paru-bin",
+                    input_text="y\n", timeout=180,
+                )
+                cleanup_missing_rc, cleanup_missing = software_command(
+                    "gooarchy", "software", "pkg", "missing", "paru-bin"
+                )
+                check("AUR smoke cleanup removes its temporary package",
+                      cleanup_rc == 0 and cleanup_missing_rc == 0,
+                      f"{cleanup[-500:]}\nmissing: {cleanup_missing}")
+        if xterm_restore_required:
+            xterm_installed_rc, _ = run_rc("pacman", "-Q", "xterm")
+            if xterm_installed_rc != 0:
+                restore_rc, restore = software_command(
+                    "gooarchy", "software", "pkg", "add", "xterm",
+                    input_text="y\n", timeout=180,
+                )
+                check("software smoke restores its preinstalled xterm package",
+                      restore_rc == 0 and run_rc("pacman", "-Q", "xterm")[0] == 0,
+                      restore[-500:])
         if server is not None:
             server.shutdown()
             server.server_close()
