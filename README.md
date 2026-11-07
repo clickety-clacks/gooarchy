@@ -172,6 +172,7 @@ without Gooarchy:
 | `install/sources.conf` | Scottland's final `v0.3.1` tag on main; the 2026.11 test line selects the `0.3` branch |
 | `packaging/arch/xdg-desktop-portal-wlr/` | Gooarchy's screen-sharing backend, built from our own fork ([docs/xdg-desktop-portal-wlr.md](docs/xdg-desktop-portal-wlr.md)) |
 | `packaging/arch/PKGBUILD` | Builds `gooarchy` (the session start; depends on `gooarchy-flavorings`) from this checkout |
+| `packaging/arch/agentd/PKGBUILD` | Builds the `agentd` and optional `agentd-attention` packages from the pinned upstream v0.3.4 release; installing the bridge package does not enable its service |
 | `packaging/gooarchy-flavorings/PKGBUILD` | Builds `gooarchy-flavorings` from the separate repository at its final version tag; its combined theme variants install under `/usr/share/gooarchy-flavorings/themes/<name>/` |
 | `session/` | The tty1 session start (`/etc/profile.d/gooarchy-session.sh`), its cleanup helper, keyboard-layout config fragment, and Gooarchy's Super+L lock binding |
 | `packaging/linux-gooarchy/` | Gooarchy's optional kernel package, built from Omarchy's pinned linux-omarchy sources. `./install.sh --kernel` installs it alongside the existing default kernel; messages-only VM acceptance and real-hardware validation are pending ([its README](packaging/linux-gooarchy/README.md)) |
