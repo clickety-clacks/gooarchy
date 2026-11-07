@@ -1,6 +1,6 @@
 pkgbase=agentd
 pkgname=('agentd' 'agentd-attention')
-pkgver=0.3.4
+pkgver=0.3.5
 pkgrel=1
 pkgdesc='Truthful local coding-agent registry and event stream'
 arch=('x86_64')
@@ -8,7 +8,7 @@ url='https://github.com/clickety-clacks/agentd'
 license=('MIT')
 
 _release_dir="${pkgbase}-${pkgver}-x86_64-unknown-linux-gnu"
-_readme_commit='247d5adf7d86b4b50cb01213cdcf3292325f802f'
+_readme_commit='4549754e2bada5b6ca2f5ff9f92ea0f5066b4fab'
 _readme_source="agentd-README-${_readme_commit}.md"
 _license_commit='d4227bc69ceb5fb29f41b7f12692569ee75d3619'
 _license_source="agentd-LICENSE-${_license_commit}.txt"
@@ -21,8 +21,8 @@ source=(
   'agentd-attention.service'
 )
 sha256sums=(
-  'd62b47d23fa7d5bc71bbe69c1364f01b14bd12d6d189b5303ae8395638adbd0b'
-  '5b0906f0a0929964276a2d2955025ab18fde7dc094f96c3887f4556af22f1eed'
+  'dc1fe4109c5596d4f69c79c5f60b8e39277446fcef45b731e66c44d327050387'
+  'a8fa5098ca56f4b40c086edd41dfe456366567f4b43d50b2f20e62adfecafdc0'
   'b1ed28e369c287a7b3dd0c94ba46a5c9a090c8164c32244f5cc63c4d0fa3631d'
   '4b021e482ba503d94630da8a4874898204e1d0f62224ad81588f7cd1371e80d2'
   'f05b90f7d0f9b6231a32730c6809d6ecc08d7a3c1cde0a6039230666a084c3ad'
