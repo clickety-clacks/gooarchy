@@ -16,6 +16,7 @@ exits 1 if a check fails. Every compositor call has a deadline, and so does the 
 """
 import configparser
 import glob
+import http.server
 import json
 import os
 import shutil
@@ -24,6 +25,8 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -39,6 +42,7 @@ results = []
 observations = []
 failures = 0
 screenshots_failed = []
+software_command_results = []
 
 
 class Deadline(Exception):
@@ -77,6 +81,26 @@ def run_rc(*command, timeout=20):
         return r.returncode, r.stdout.strip()
     except Exception as error:
         return -1, f"({error})"
+
+
+def software_command(*command, input_text=None, env=None, timeout=60):
+    """Run one Gooarchy software command and preserve its output in the VM evidence."""
+    try:
+        result = subprocess.run(
+            command, input=input_text, capture_output=True, text=True, timeout=timeout, env=env
+        )
+        output = (result.stdout + result.stderr).strip()
+        record = {
+            "command": list(command),
+            "exit_code": result.returncode,
+            "output": output if len(output) <= 12000 else output[:6000] + "\n... output truncated ...\n" + output[-6000:],
+        }
+        software_command_results.append(record)
+        return result.returncode, output
+    except Exception as error:
+        detail = f"{type(error).__name__}: {error}"
+        software_command_results.append({"command": list(command), "error": detail})
+        return -1, detail
 
 
 def wait_for(predicate, timeout=30, interval=0.25):
@@ -457,6 +481,200 @@ def save_session_log(name):
 
 # ---- the checks -----------------------------------------------------------------------------
 
+def software_system_tool_checks():
+    """Exercise the installed software tool in the live Scottland user session."""
+    webapp_id = None
+    server = None
+    server_thread = None
+    try:
+        gooarchy_rc, gooarchy_package = run_rc("pacman", "-Q", "gooarchy")
+        scottland_rc, scottland_package = run_rc("pacman", "-Q", "scottland")
+        version_rc, version = software_command("gooarchy", "software", "version")
+        check(
+            "gooarchy software version reports installed Gooarchy and Scottland packages",
+            gooarchy_rc == 0 and scottland_rc == 0 and version_rc == 0
+            and f"Gooarchy: {gooarchy_package} (commit " in version
+            and f"Scottland: {scottland_package}" in version,
+            version,
+        )
+        alias_rc, alias = software_command("gooarchy", "version")
+        check("gooarchy version reports the same installed software versions",
+              alias_rc == 0 and alias == version, alias)
+
+        source_rc, source_status = software_command("gooarchy-source", "status")
+        check(
+            "the installed Gooarchy source bundle is adopted through Scottland's source mechanism",
+            source_rc == 0 and "release:" in source_status and "installed:" in source_status
+            and "running source: clean" in source_status,
+            source_status,
+        )
+
+        present_rc, present = software_command("gooarchy", "software", "pkg", "present", "gooarchy")
+        check("pkg present recognizes the installed Gooarchy package", present_rc == 0, present)
+        missing_name = f"gooarchy-wi026-missing-{os.getpid()}"
+        missing_rc, missing = software_command("gooarchy", "software", "pkg", "missing", missing_name)
+        check("pkg missing recognizes a package absent from the fresh guest", missing_rc == 0, missing)
+
+        for action in ("add", "drop"):
+            usage_rc, usage = software_command("gooarchy", "software", "pkg", action)
+            check(f"pkg {action} requires an explicit package name",
+                  usage_rc == 2 and "PACKAGE" in usage, usage)
+
+        aur_rc, aur = software_command("gooarchy", "software", "pkg", "aur", "accessible", timeout=60)
+        check("pkg aur accessible reaches the AUR RPC", aur_rc == 0 and "AUR is accessible" in aur, aur)
+
+        install_rc, install_picker = software_command(
+            "gooarchy", "software", "pkg", "install", input_text="\n"
+        )
+        check("pkg install lists official packages and accepts picker cancellation",
+              install_rc == 0 and "Select packages to install:" in install_picker
+              and "1. " in install_picker, install_picker[-500:])
+        remove_rc, remove_picker = software_command(
+            "gooarchy", "software", "pkg", "remove", input_text="\n"
+        )
+        check("pkg remove lists installed packages and accepts picker cancellation",
+              remove_rc == 0 and "Select packages to remove:" in remove_picker
+              and "1. " in remove_picker, remove_picker[-500:])
+        aur_picker_rc, aur_picker = software_command(
+            "gooarchy", "software", "pkg", "aur", "install", input_text="paru\n\n", timeout=60
+        )
+        check("pkg aur install lists AUR matches and accepts picker cancellation",
+              aur_picker_rc == 0 and "Select AUR packages to install:" in aur_picker
+              and "1. " in aur_picker, aur_picker[-500:])
+
+        with tempfile.TemporaryDirectory(prefix="gooarchy-software-smoke-") as data_home:
+            web_env = os.environ.copy()
+            web_env["XDG_DATA_HOME"] = data_home
+            applications = os.path.join(data_home, "applications")
+            os.makedirs(applications, exist_ok=True)
+
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    body = b"<!doctype html><title>Gooarchy software check</title>ok"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *_args):
+                    pass
+
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+            url = f"http://127.0.0.1:{server.server_address[1]}/"
+            suffix = str(os.getpid())
+            launch_name = f"WI026 Smoke {suffix}"
+            launch_id = f"gooarchy-webapp-wi026-smoke-{suffix}"
+            webapp_id = launch_id
+            launch_path = os.path.join(applications, f"{launch_id}.desktop")
+            install_app_rc, install_app = software_command(
+                "gooarchy", "software", "webapp", "install", launch_name, url, env=web_env
+            )
+            check("webapp install writes a Gooarchy launcher in the user's XDG applications directory",
+                  install_app_rc == 0 and os.path.isfile(launch_path)
+                  and "X-Gooarchy-WebApp=true" in open(launch_path, errors="replace").read(), install_app)
+
+            first_launch_rc, first_launch = software_command(
+                "gooarchy", "software", "webapp", "launch", "--focus", launch_id, url, env=web_env
+            )
+
+            def app_window_ids():
+                rc, windows = run_rc("scottland-ctl", "windows")
+                if rc != 0:
+                    return []
+                found = []
+                for line in windows.splitlines():
+                    fields = line.split()
+                    if len(fields) >= 2 and fields[1] == launch_id and fields[0].isdigit():
+                        found.append(fields[0])
+                return found
+
+            first_window = wait_for(lambda: app_window_ids(), timeout=45)
+            check("webapp launch opens Chromium in app mode",
+                  first_launch_rc == 0 and "Opened " in first_launch and first_window
+                  and len(first_window) == 1, first_launch)
+
+            focus_rc, focus = software_command(
+                "gooarchy", "software", "webapp", "launch", "--focus", launch_id, url, env=web_env
+            )
+            after_focus = wait_for(lambda: (lambda ids: ids if len(ids) == 1 else None)(app_window_ids()), timeout=20)
+            check("webapp focus presents the existing Scottland Chromium window",
+                  focus_rc == 0 and "Focused the existing Chromium app window" in focus
+                  and after_focus == first_window, focus)
+
+            remove_app_rc, remove_app = software_command(
+                "gooarchy", "software", "webapp", "remove", launch_name, env=web_env
+            )
+            remains_after_remove = app_window_ids()
+            check("webapp remove deletes its launcher and leaves the running window open",
+                  remove_app_rc == 0 and not os.path.exists(launch_path)
+                  and remains_after_remove == first_window, remove_app)
+
+            picker_name = f"WI026 Picker {suffix}"
+            picker_id = f"gooarchy-webapp-wi026-picker-{suffix}"
+            picker_path = os.path.join(applications, f"{picker_id}.desktop")
+            picker_install_rc, picker_install = software_command(
+                "gooarchy", "software", "webapp", "install", picker_name, url, env=web_env
+            )
+            picker_remove_rc, picker_remove = software_command(
+                "gooarchy", "software", "webapp", "remove", input_text="1\n", env=web_env
+            )
+            check("webapp remove picker removes the selected Gooarchy launcher",
+                  picker_install_rc == 0 and os.path.isfile(picker_path)
+                  and picker_remove_rc == 0 and "Select a web app to remove:" in picker_remove
+                  and not os.path.exists(picker_path), picker_remove)
+
+            all_name = f"WI026 Remove All {suffix}"
+            all_id = f"gooarchy-webapp-wi026-remove-all-{suffix}"
+            all_path = os.path.join(applications, f"{all_id}.desktop")
+            all_install_rc, all_install = software_command(
+                "gooarchy", "software", "webapp", "install", all_name, url, env=web_env
+            )
+            unmanaged_path = os.path.join(applications, "wi026-unmanaged.desktop")
+            with open(unmanaged_path, "w") as unmanaged:
+                unmanaged.write("[Desktop Entry]\nType=Application\nName=Unmanaged test entry\n")
+            remove_all_rc, remove_all = software_command(
+                "gooarchy", "software", "webapp", "remove-all", env=web_env
+            )
+            check("webapp remove-all removes Gooarchy launchers and preserves other launchers",
+                  all_install_rc == 0 and os.path.isfile(all_path) and remove_all_rc == 0
+                  and not os.path.exists(all_path) and os.path.isfile(unmanaged_path), remove_all)
+
+    except Exception as error:
+        check("Gooarchy software VM checks complete", False, f"{type(error).__name__}: {error}")
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if server_thread is not None:
+            server_thread.join(timeout=5)
+        if webapp_id:
+            def app_window_ids():
+                rc, windows = run_rc("scottland-ctl", "windows")
+                if rc != 0:
+                    return []
+                return [
+                    fields[0] for line in windows.splitlines()
+                    if len(fields := line.split()) >= 2
+                    and fields[1] == webapp_id and fields[0].isdigit()
+                ]
+
+            try:
+                for window in app_window_ids():
+                    present_rc, _ = run_rc("scottland-ctl", "present", window)
+                    if present_rc == 0:
+                        press("KEY_LEFTALT", "KEY_F4")
+                closed = wait_for(lambda: not app_window_ids(), timeout=15) is not None
+            except Exception as error:
+                closed = False
+                log(f"temporary Chromium app cleanup failed: {type(error).__name__}: {error}")
+            check("software smoke closes its temporary Chromium app window", closed,
+                  "window closed" if closed else "temporary web-app window remains open")
+        with open(os.path.join(OUT, "software-tool-results.json"), "w") as evidence:
+            json.dump(software_command_results, evidence, indent=1)
+
 def main():
     portal_info = run("pacman", "-Qi", "xdg-desktop-portal-wlr-gooarchy")
     check("the Gooarchy portal provider is installed from the signed repository",
@@ -561,6 +779,11 @@ def main():
     frame = wait_for(lambda: json.load(open(prefs)).get("browser", {}).get("custom_chrome_frame", "unset") is False
                      and "false", timeout=15)
     check("config: Chromium prefers the system title bar (browser.custom_chrome_frame = false)", frame)
+
+    # Exercise the software commands installed by the Gooarchy package in this real session. The
+    # web-app checks use a temporary XDG data directory and a loopback-only page, then remove their
+    # launcher files and close their temporary Chromium app window.
+    software_system_tool_checks()
 
     # The periphery: the window dragged away from the center scales down (that window, by id).
     if chromium:
