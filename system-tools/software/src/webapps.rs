@@ -16,6 +16,7 @@ struct AppEntry {
     path: PathBuf,
     id: String,
     name: String,
+    url: String,
 }
 
 pub fn dispatch(
@@ -51,7 +52,7 @@ pub fn dispatch(
                     ));
                 }
             };
-            launch(runner, focus_id, url)?;
+            launch(runner, focus_id, url, output)?;
             Ok(ExitCode::SUCCESS)
         }
         [command] if command == "remove" => {
@@ -113,6 +114,17 @@ fn install(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
+    writeln!(output, "Install web-app launcher {name} for {url}.")?;
+    writeln!(
+        output,
+        "Reason: add the site to this user's app launcher and open it in Chromium app mode."
+    )?;
+    writeln!(
+        output,
+        "Undo: gooarchy software webapp remove {}",
+        shell_quote(name)
+    )?;
+    output.flush()?;
     let desktop = desktop_entry(name, &id, &url);
     fs::write(&path, desktop)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
@@ -221,7 +233,12 @@ fn desktop_exec_arg(value: &str) -> String {
     escaped
 }
 
-fn launch(runner: &Runner, focus_id: Option<&str>, raw_url: &str) -> Result<(), Failure> {
+fn launch(
+    runner: &Runner,
+    focus_id: Option<&str>,
+    raw_url: &str,
+    output: &mut impl Write,
+) -> Result<(), Failure> {
     let url = normalize_url(raw_url)?;
     if let Some(id) = focus_id {
         if !id.starts_with("gooarchy-webapp-")
@@ -237,6 +254,11 @@ fn launch(runner: &Runner, focus_id: Option<&str>, raw_url: &str) -> Result<(), 
         }
         if let Some(window_id) = window_for_app(&output_text(&windows), id) {
             runner.status("scottland-ctl", &args(&["present", &window_id]))?;
+            writeln!(
+                output,
+                "Focused the existing Chromium app window for {url}."
+            )?;
+            writeln!(output, "Undo: close the Chromium window.")?;
             return Ok(());
         }
     }
@@ -245,7 +267,10 @@ fn launch(runner: &Runner, focus_id: Option<&str>, raw_url: &str) -> Result<(), 
     if let Some(id) = focus_id {
         browser_args.push(OsString::from(format!("--class={id}")));
     }
-    runner.spawn("chromium", &browser_args)
+    runner.spawn("chromium", &browser_args)?;
+    writeln!(output, "Opened {url} in a Chromium app window.")?;
+    writeln!(output, "Undo: close the Chromium window.")?;
+    Ok(())
 }
 
 fn window_for_app(windows: &str, app_id: &str) -> Option<String> {
@@ -286,7 +311,17 @@ fn entries(applications: &Path) -> Result<Vec<AppEntry>, Failure> {
             .find_map(|line| line.strip_prefix("Name="))
             .map(desktop_string_unescape)
             .unwrap_or_else(|| id.clone());
-        found.push(AppEntry { path, id, name });
+        let url = contents
+            .lines()
+            .find_map(|line| line.strip_prefix("X-Gooarchy-WebApp-URL="))
+            .map(desktop_string_unescape)
+            .unwrap_or_default();
+        found.push(AppEntry {
+            path,
+            id,
+            name,
+            url,
+        });
     }
     found.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(found)
@@ -355,6 +390,29 @@ fn remove(
             .find(|entry| &entry.id == id)
             .ok_or_else(|| Failure::new("selected web app is no longer available"))?
     };
+    writeln!(
+        output,
+        "Remove the Gooarchy launcher for {}. A running Chromium window will stay open.",
+        selected.name
+    )?;
+    writeln!(
+        output,
+        "Reason: remove this web app from the user's app launcher."
+    )?;
+    if selected.url.is_empty() {
+        writeln!(
+            output,
+            "Undo: reinstall the launcher with gooarchy software webapp install NAME URL."
+        )?;
+    } else {
+        writeln!(
+            output,
+            "Undo: gooarchy software webapp install {} {}",
+            shell_quote(&selected.name),
+            shell_quote(&selected.url)
+        )?;
+    }
+    output.flush()?;
     fs::remove_file(&selected.path)?;
     writeln!(output, "Removed web app {}", selected.name)?;
     Ok(())
@@ -362,6 +420,35 @@ fn remove(
 
 fn remove_all(applications: &Path, output: &mut impl Write) -> Result<(), Failure> {
     let found = entries(applications)?;
+    if !found.is_empty() {
+        writeln!(
+            output,
+            "Remove {} Gooarchy web-app launcher(s). Running Chromium windows will stay open.",
+            found.len()
+        )?;
+        writeln!(
+            output,
+            "Reason: remove all Gooarchy web apps from this user's app launcher."
+        )?;
+        for entry in &found {
+            if entry.url.is_empty() {
+                writeln!(
+                    output,
+                    "Undo {}: reinstall with gooarchy software webapp install NAME URL.",
+                    entry.name
+                )?;
+            } else {
+                writeln!(
+                    output,
+                    "Undo {}: gooarchy software webapp install {} {}",
+                    entry.name,
+                    shell_quote(&entry.name),
+                    shell_quote(&entry.url)
+                )?;
+            }
+        }
+        output.flush()?;
+    }
     for entry in &found {
         fs::remove_file(&entry.path)?;
     }
@@ -373,9 +460,14 @@ fn remove_all(applications: &Path, output: &mut impl Write) -> Result<(), Failur
     Ok(())
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct Fixture(PathBuf);
@@ -392,6 +484,12 @@ mod tests {
             ));
             fs::create_dir_all(&path).unwrap();
             Fixture(path)
+        }
+
+        fn command(&self, name: &str, source: &str) {
+            let path = self.0.join(name);
+            fs::write(&path, format!("#!/bin/sh\n{source}\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
 
@@ -419,6 +517,9 @@ mod tests {
             "Exec=gooarchy software webapp launch --focus gooarchy-webapp-my-favorite-app"
         ));
         assert!(file.contains("\"https://example.com/path?a=1&b=two%%20words\""));
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Reason: add the site to this user's app launcher"));
+        assert!(output.contains("Undo: gooarchy software webapp remove 'My Favorite App'"));
         assert_ne!(
             fs::metadata(fixture.0.join("gooarchy-webapp-my-favorite-app.desktop"))
                 .unwrap()
@@ -466,6 +567,51 @@ mod tests {
     }
 
     #[test]
+    fn launch_focus_presents_the_existing_scottland_window() {
+        let fixture = Fixture::new();
+        let presented = fixture.0.join("presented-window");
+        fixture.command(
+            "scottland-ctl",
+            &format!(
+                "if [ \"$1\" = windows ]; then echo '42 gooarchy-webapp-calendar'; else echo \"$2\" > {}; fi",
+                shell_quote(&presented.to_string_lossy())
+            ),
+        );
+        let runner = Runner::in_path(fixture.0.clone());
+        let mut output = Vec::new();
+        launch(
+            &runner,
+            Some("gooarchy-webapp-calendar"),
+            "calendar.example",
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(presented).unwrap(), "42\n");
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Focused the existing Chromium app window"));
+        assert!(output.contains("Undo: close the Chromium window."));
+    }
+
+    #[test]
+    fn removing_one_launcher_prints_a_reason_and_restore_command() {
+        let fixture = Fixture::new();
+        install(&fixture.0, "One", "one.example", &mut Vec::new()).unwrap();
+        let mut output = Vec::new();
+        remove(
+            &fixture.0,
+            Some("One"),
+            &mut std::io::Cursor::new(Vec::<u8>::new()),
+            &mut output,
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Reason: remove this web app from the user's app launcher."));
+        assert!(
+            output.contains("Undo: gooarchy software webapp install 'One' 'https://one.example'")
+        );
+    }
+
+    #[test]
     fn remove_all_only_removes_entries_created_by_gooarchy() {
         let fixture = Fixture::new();
         install(&fixture.0, "One", "one.example", &mut Vec::new()).unwrap();
@@ -474,7 +620,14 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=Other\nExec=other\n",
         )
         .unwrap();
-        remove_all(&fixture.0, &mut Vec::new()).unwrap();
+        let mut output = Vec::new();
+        remove_all(&fixture.0, &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Reason: remove all Gooarchy web apps"));
+        assert!(
+            output
+                .contains("Undo One: gooarchy software webapp install 'One' 'https://one.example'")
+        );
         assert!(!fixture.0.join("gooarchy-webapp-one.desktop").exists());
         assert!(fixture.0.join("other.desktop").exists());
     }

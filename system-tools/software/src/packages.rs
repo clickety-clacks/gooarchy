@@ -21,12 +21,12 @@ pub fn dispatch(
     match args {
         [command, packages @ ..] if command == "add" => {
             require_packages(packages, "pkg add PACKAGE...")?;
-            install_official(packages, runner)?;
+            install_official(packages, runner, output)?;
             Ok(ExitCode::SUCCESS)
         }
         [command, packages @ ..] if command == "drop" => {
             require_packages(packages, "pkg drop PACKAGE...")?;
-            remove_packages(packages, runner)?;
+            remove_packages(packages, runner, output)?;
             Ok(ExitCode::SUCCESS)
         }
         [command, packages @ ..] if command == "present" || command == "missing" => {
@@ -54,7 +54,7 @@ pub fn dispatch(
             let choices = listed_packages(runner, "pacman", &command_args(&["-Slq"]))?;
             let selected = pick_packages(input, output, &choices, "Select packages to install: ")?;
             if !selected.is_empty() {
-                install_official(&selected, runner)?;
+                install_official(&selected, runner, output)?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -62,7 +62,7 @@ pub fn dispatch(
             let choices = listed_packages(runner, "pacman", &command_args(&["-Qqe"]))?;
             let selected = pick_packages(input, output, &choices, "Select packages to remove: ")?;
             if !selected.is_empty() {
-                remove_packages(&selected, runner)?;
+                remove_packages(&selected, runner, output)?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -86,7 +86,7 @@ fn aur_dispatch(
         }
         [command, packages @ ..] if command == "add" => {
             require_packages(packages, "pkg aur add PACKAGE...")?;
-            install_aur(packages, runner)?;
+            install_aur(packages, runner, output)?;
             Ok(ExitCode::SUCCESS)
         }
         [command] if command == "install" => {
@@ -102,7 +102,7 @@ fn aur_dispatch(
             let selected =
                 pick_packages(input, output, &choices, "Select AUR packages to install: ")?;
             if !selected.is_empty() {
-                install_aur(&selected, runner)?;
+                install_aur(&selected, runner, output)?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -129,8 +129,18 @@ fn all_installed(packages: &[String], runner: &Runner) -> Result<bool, Failure> 
     Ok(true)
 }
 
-fn install_official(packages: &[String], runner: &Runner) -> Result<(), Failure> {
-    let mut install_args = command_args(&["pacman", "-S", "--noconfirm", "--needed", "--"]);
+fn install_official(
+    packages: &[String],
+    runner: &Runner,
+    output: &mut impl Write,
+) -> Result<(), Failure> {
+    announce_change(
+        output,
+        format!("Install official packages: {}.", packages.join(", ")),
+        "these packages were selected from the Arch repositories; pacman resolves their dependencies.",
+        format!("gooarchy software pkg drop {}", package_args(packages)),
+    )?;
+    let mut install_args = command_args(&["pacman", "-S", "--needed", "--"]);
     install_args.extend(strings(packages));
     runner.status("sudo", &install_args)?;
     if !all_installed(packages, runner)? {
@@ -139,7 +149,11 @@ fn install_official(packages: &[String], runner: &Runner) -> Result<(), Failure>
     Ok(())
 }
 
-fn remove_packages(packages: &[String], runner: &Runner) -> Result<(), Failure> {
+fn remove_packages(
+    packages: &[String],
+    runner: &Runner,
+    output: &mut impl Write,
+) -> Result<(), Failure> {
     let mut installed = Vec::new();
     for package in packages {
         if all_installed(std::slice::from_ref(package), runner)? {
@@ -147,11 +161,43 @@ fn remove_packages(packages: &[String], runner: &Runner) -> Result<(), Failure> 
         }
     }
     if installed.is_empty() {
+        writeln!(output, "None of the requested packages is installed.")?;
         return Ok(());
     }
-    let mut remove_args = command_args(&["pacman", "-Rns", "--noconfirm", "--"]);
+    announce_change(
+        output,
+        format!("Remove packages: {}.", installed.join(", ")),
+        "pacman will remove the requested packages and dependencies no longer required by any installed package.",
+        format!(
+            "Arch: gooarchy software pkg add {}; AUR: gooarchy software pkg aur add {}",
+            package_args(&installed),
+            package_args(&installed)
+        ),
+    )?;
+    let mut remove_args = command_args(&["pacman", "-Rns", "--"]);
     remove_args.extend(strings(&installed));
     runner.status("sudo", &remove_args)
+}
+
+fn announce_change(
+    output: &mut impl Write,
+    change: impl AsRef<str>,
+    reason: impl AsRef<str>,
+    undo: impl AsRef<str>,
+) -> Result<(), Failure> {
+    writeln!(output, "{}", change.as_ref())?;
+    writeln!(output, "Reason: {}", reason.as_ref())?;
+    writeln!(output, "Undo: {}", undo.as_ref())?;
+    output.flush()?;
+    Ok(())
+}
+
+fn package_args(packages: &[String]) -> String {
+    packages
+        .iter()
+        .map(|package| format!("'{}'", package.replace('\'', "'\\''")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn listed_packages(
@@ -247,9 +293,14 @@ fn search_aur(runner: &Runner, query: &str) -> Result<Vec<(String, String)>, Fai
         .collect())
 }
 
-fn install_aur(packages: &[String], runner: &Runner) -> Result<(), Failure> {
+fn install_aur(
+    packages: &[String],
+    runner: &Runner,
+    output: &mut impl Write,
+) -> Result<(), Failure> {
     let missing = missing_packages(packages, runner)?;
     if missing.is_empty() {
+        writeln!(output, "All requested AUR packages are already installed.")?;
         return Ok(());
     }
     if !runner.exists("git") {
@@ -258,6 +309,13 @@ fn install_aur(packages: &[String], runner: &Runner) -> Result<(), Failure> {
     if !runner.exists("makepkg") {
         return Err(Failure::new("makepkg is required to install AUR packages"));
     }
+
+    announce_change(
+        output,
+        format!("Build and install AUR packages: {}.", missing.join(", ")),
+        "the selected packages are built locally with makepkg, using the same dependency flow as Strata.",
+        format!("gooarchy software pkg drop {}", package_args(&missing)),
+    )?;
 
     let mut bases: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for package in &missing {
@@ -476,6 +534,26 @@ mod tests {
         assert!(valid_package_name("example-plus_1.2@repo"));
         assert!(!valid_package_name("../example"));
         assert!(!valid_package_name(""));
+    }
+
+    #[test]
+    fn package_change_message_explains_reason_and_undo() {
+        let mut output = Vec::new();
+        announce_change(
+            &mut output,
+            "Install package: example.",
+            "selected from the Arch repositories.",
+            "gooarchy software pkg drop 'example'",
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Install package: example."));
+        assert!(output.contains("Reason: selected from the Arch repositories."));
+        assert!(output.contains("Undo: gooarchy software pkg drop 'example'"));
+        assert_eq!(
+            package_args(&["example".into(), "two words".into()]),
+            "'example' 'two words'"
+        );
     }
 
     #[test]

@@ -21,6 +21,9 @@ gooarchy software pkg aur accessible
 `present` exits successfully when every named package is installed. `missing` exits successfully
 when at least one is absent. `pkg install`, `pkg remove` and `pkg aur install` show a terminal list;
 enter one or more displayed numbers separated by spaces or commas, or press Return to cancel.
+Package changes print what will change, why it changes, and a command to undo it before running the
+package operation. Pacman presents its normal confirmation for official package installs and
+removals; AUR builds use the same `makepkg` dependency flow as Strata.
 
 AUR packages are fetched from their AUR Git repository, built with `makepkg` and installed through
 `pacman`, using the same build flags as Gooarchy's Strata package path. AUR commands need `curl`,
@@ -41,3 +44,5 @@ Without `NAME URL`, `webapp install` asks for them in the terminal. A missing UR
 as `https`; explicit URLs must use HTTP or HTTPS. Launchers live in the user's XDG applications
 directory and open Chromium in app mode. A focused launch brings the existing Scottland window for
 that launcher forward. Remove operations act only on launchers created by Gooarchy.
+Install, launch and remove commands explain their effect. Install and remove commands print a
+matching undo command; removing a launcher leaves its running Chromium window open.

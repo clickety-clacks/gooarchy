@@ -227,6 +227,8 @@ awk -F '\t' '$1 == "gooarchy" && $3 == "unknown" { found=1 } END { exit !found }
   srcdir=$tmp/src
   startdir=$fixture/packaging/arch
   source "$fixture/packaging/arch/PKGBUILD"
+  # package() uses jq; verify the build dependency before the fixture provides its mock.
+  [[ " ${makedepends[*]} " == *' jq '* ]]
   package
 )
 grep -Fqx 'source 0123456789abcdef0123456789abcdef01234567' \
