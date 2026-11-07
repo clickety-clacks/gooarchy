@@ -72,7 +72,7 @@ VENDOR_FIXTURES = {
         "private IPv4 (192.168.x)": r"192[.]168[.]1[.]1",
     },
     "system-tools/vendor/winnow/examples/ndjson/example.ndjson": {
-        "home directory path": r"/home/epage",
+        "home directory path": r"/home/" + r"epage",
     },
 }
 IMAGE_EXT = (".png", ".webp", ".jpg", ".jpeg", ".gif")
