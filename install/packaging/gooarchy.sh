@@ -40,6 +40,7 @@ if ((GOOARCHY_BUILD_LOCAL_GOOARCHY)); then
   rm -rf -- "$dir"
   mkdir -p "$dir"
   cp "$GOOARCHY_PATH/packaging/arch/PKGBUILD" "$dir/"
+  cp "$GOOARCHY_PATH/packaging/arch/gooarchy.install" "$dir/"
   GOOARCHY_PATH=$GOOARCHY_PATH build_package "$dir"
 
   if [[ -f $flavorings_recipe ]]; then

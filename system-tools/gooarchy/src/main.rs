@@ -57,12 +57,16 @@ fn front() -> Result<(), Failure> {
         }
         Some(name) => name,
     };
-    let tool = name.and_then(|name| tool_path(&dir, name));
+    let (routed_name, version_alias) = name.map(route_name).unwrap_or(("", false));
+    let tool = tool_path(&dir, routed_name);
     let Some(tool) = tool else {
         let shown = first.unwrap_or_default().to_string_lossy().into_owned();
         return Err(unknown(&shown, &tools(&dir)));
     };
-    let rest: Vec<OsString> = args.collect();
+    let mut rest: Vec<OsString> = args.collect();
+    if version_alias {
+        rest.insert(0, OsString::from("version"));
+    }
     let error = Command::new(&tool).args(rest).exec();
     Err(Failure::with_code(
         126,
@@ -85,6 +89,14 @@ fn tool_path(dir: &Path, name: &str) -> Option<PathBuf> {
     }
     let path = dir.join(format!("{PREFIX}{name}"));
     common::command::is_executable(&path).then_some(path)
+}
+
+fn route_name(name: &str) -> (&str, bool) {
+    if name == "version" {
+        ("software", true)
+    } else {
+        (name, false)
+    }
 }
 
 /// The tools in `dir`, by the name `gooarchy` runs them with, sorted.
@@ -113,6 +125,9 @@ fn help(dir: &Path, tools: &[String]) -> String {
         for tool in tools {
             text.push_str(&format!("  {tool}\n"));
         }
+    }
+    if tools.iter().any(|tool| tool == "software") {
+        text.push_str("\nAliases:\n  version  Show installed Gooarchy and Scottland versions\n");
     }
     text
 }
@@ -170,5 +185,13 @@ mod tests {
         assert!(listed.contains("Runs gooarchy-<tool> from /usr/bin."));
         assert!(listed.contains("\n  boot\n  update\n"));
         assert!(help(dir, &[]).contains("No tools are installed there."));
+    }
+
+    #[test]
+    fn version_is_a_public_alias_for_the_software_tool() {
+        let listed = help(Path::new("/usr/bin"), &names(&["software"]));
+        assert!(listed.contains("version  Show installed Gooarchy and Scottland versions"));
+        assert_eq!(route_name("version"), ("software", true));
+        assert_eq!(route_name("software"), ("software", false));
     }
 }

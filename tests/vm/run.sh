@@ -1003,7 +1003,7 @@ cmd_no_toolchain() {
   hcheck "without a Rust toolchain, the built gooarchy package installs without pulling one in" "$ok" \
     "exit $status; toolchain before: ${left:-none}, after: ${after:-none}"
   local built head
-  built=$(guest 'sed -n "s/^checkout \([0-9a-f]*\).*/\1/p" /usr/share/gooarchy/build-info')
+  built=$(guest 'sed -n "s/^source \([0-9a-f]\{40\}\)$/\1/p" /usr/share/gooarchy/build-info')
   head=$(guest 'git -C ~/gooarchy rev-parse HEAD')
   hcheck "the installed package is built from the checkout under test" "$([[ -n $head && $built == "$head" ]] && echo 1 || echo 0)" \
     "build-info: $built; checkout: $head"
@@ -1060,7 +1060,7 @@ cmd_check() {
   guest_stdin 'cat >/tmp/gooarchy-check/guest-check.py' <"$here/guest-check.py"
   log "checking the session in the guest"
   local status=0
-  guest "timeout 1500 python3 /tmp/gooarchy-check/guest-check.py /tmp/gooarchy-check/out --gpu $gpu" 2>&1 |
+  guest "timeout 2100 python3 /tmp/gooarchy-check/guest-check.py /tmp/gooarchy-check/out --gpu $gpu" 2>&1 |
     tee "$out/guest-check.log" >&2 || status=$?
   screendump "$relative/vm-display-after-check.png"
   guest 'cd /tmp/gooarchy-check/out && tar -cf - .' | tar -C "$out" -xf - || true

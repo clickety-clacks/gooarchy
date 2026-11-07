@@ -21,7 +21,9 @@ for relative in \
   install/helpers/repository-url.sh \
   install/packaging/repository.sh \
   install/packaging/gooarchy.sh \
+  LICENSE \
   packaging/arch/PKGBUILD \
+  packaging/arch/gooarchy.install \
   packaging/gooarchy-flavorings/PKGBUILD; do
   copy_file "$relative"
 done
@@ -44,10 +46,19 @@ for relative in \
   mkdir -p "$fixture/$(dirname "$relative")"
   : >"$fixture/$relative"
 done
-for binary in gooarchy gooarchy-look gooarchy-lock; do
+for binary in gooarchy gooarchy-look gooarchy-lock gooarchy-software gooarchy-source; do
   : >"$fixture/system-tools/target/release/$binary"
   : >"$tmp/src/target/release/$binary"
 done
+mkdir -p "$tmp/src/gooarchy-source" "$tmp/src/tools/base" "$tmp/scottland-source"
+cp -a "$fixture/." "$tmp/src/gooarchy-source/"
+printf '0123456789abcdef0123456789abcdef01234567\n' >"$tmp/src/build-commit"
+: >"$tmp/src/base.bundle"
+for binary in gooarchy gooarchy-look gooarchy-lock gooarchy-software gooarchy-source; do
+  : >"$tmp/src/tools/base/$binary"
+done
+printf 'MIT license fixture\n' >"$tmp/scottland-source/LICENSE"
+printf '[package]\nname = "scottland-source"\n' >"$tmp/scottland-source/Cargo.toml"
 
 cat >"$tmp/bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -174,6 +185,14 @@ else
   : >"$archive"
 fi
 EOF
+cat >"$tmp/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf '{"packages":[{"name":"scottland-source","manifest_path":"%s"}]}\n' "$TEST_SOURCE_MANIFEST"
+EOF
+cat >"$tmp/bin/jq" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$TEST_SOURCE_MANIFEST"
+EOF
 chmod +x "$tmp"/bin/*
 
 export PATH="$tmp/bin:$PATH"
@@ -184,6 +203,7 @@ export GOOARCHY_STATE=$tmp/state
 export GOOARCHY_INSTALL_LOG_FILE=$tmp/install.log
 export TEST_BUILD_CALLS=$tmp/build-calls.log
 export TEST_TMPDIR=$tmp
+export TEST_SOURCE_MANIFEST=$tmp/scottland-source/Cargo.toml
 : >"$TEST_BUILD_CALLS"
 : >"$GOOARCHY_INSTALL_LOG_FILE"
 
@@ -207,8 +227,13 @@ awk -F '\t' '$1 == "gooarchy" && $3 == "unknown" { found=1 } END { exit !found }
   srcdir=$tmp/src
   startdir=$fixture/packaging/arch
   source "$fixture/packaging/arch/PKGBUILD"
+  # package() uses jq; verify the build dependency before the fixture provides its mock.
+  [[ " ${makedepends[*]} " == *' jq '* ]]
   package
 )
-grep -Fqx 'checkout unknown' "$tmp/package-root/usr/share/gooarchy/build-info"
+grep -Fqx 'source 0123456789abcdef0123456789abcdef01234567' \
+  "$tmp/package-root/usr/share/gooarchy/build-info"
+[[ -x $tmp/package-root/usr/lib/gooarchy/tools/base/gooarchy-software ]]
+[[ -f $tmp/package-root/usr/share/licenses/gooarchy/scottland-source/LICENSE ]]
 
 printf 'Unreadable checkout commit local-build check passed.\n'

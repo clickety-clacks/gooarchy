@@ -55,6 +55,25 @@ VENDOR_FIXTURES = {
     "system-tools/vendor/windows-sys/src/Windows/Win32/Security/Cryptography/mod.rs": {
         "private IPv4 (10.x, not QEMU's 10.0.2.x)": r"10[.]3[.][345][.]1",
     },
+    "system-tools/vendor/toml/src/ser/mod.rs": {
+        "private IPv4 (192.168.x)": r"192[.]168[.]1[.]1",
+    },
+    "system-tools/vendor/toml/src/ser/ser_value/mod.rs": {
+        "private IPv4 (192.168.x)": r"192[.]168[.]1[.]1",
+    },
+    "system-tools/vendor/toml_edit/src/parser/mod.rs": {
+        "private IPv4 (192.168.x)": r"192[.]168[.]1[.]1",
+        "private IPv4 (10.x, not QEMU's 10.0.2.x)": r"10[.]0[.]0[.][12]",
+    },
+    "system-tools/vendor/toml_edit/src/ser/mod.rs": {
+        "private IPv4 (192.168.x)": r"192[.]168[.]1[.]1",
+    },
+    "system-tools/vendor/toml_edit/src/ser/value.rs": {
+        "private IPv4 (192.168.x)": r"192[.]168[.]1[.]1",
+    },
+    "system-tools/vendor/winnow/examples/ndjson/example.ndjson": {
+        "home directory path": r"/home/" + r"epage",
+    },
 }
 IMAGE_EXT = (".png", ".webp", ".jpg", ".jpeg", ".gif")
 TRAILER = re.compile(r"^(Co-Authored-By|Signed-off-by):", re.I | re.M)

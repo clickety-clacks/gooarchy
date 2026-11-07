@@ -16,14 +16,18 @@ exits 1 if a check fails. Every compositor call has a deadline, and so does the 
 """
 import configparser
 import glob
+import http.server
 import json
 import os
+import select
 import shutil
 import signal
 import socket
 import struct
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -34,11 +38,12 @@ HOME = os.path.expanduser("~")
 WAYFIRE_LOG = f"{HOME}/.local/state/scottland/wayfire.log"
 IPC_TIMEOUT = 10
 IPC_MAX_REPLY = 16 * 1024 * 1024
-RUN_DEADLINE = 1200
+RUN_DEADLINE = 1800
 results = []
 observations = []
 failures = 0
 screenshots_failed = []
+software_command_results = []
 
 
 class Deadline(Exception):
@@ -77,6 +82,91 @@ def run_rc(*command, timeout=20):
         return r.returncode, r.stdout.strip()
     except Exception as error:
         return -1, f"({error})"
+
+
+def software_command(*command, input_text=None, env=None, timeout=60):
+    """Run one Gooarchy software command and preserve its output in the VM evidence."""
+    try:
+        result = subprocess.run(
+            command, input=input_text, capture_output=True, text=True, timeout=timeout, env=env
+        )
+        output = (result.stdout + result.stderr).strip()
+        record = {
+            "command": list(command),
+            "exit_code": result.returncode,
+            "output": output if len(output) <= 12000 else output[:6000] + "\n... output truncated ...\n" + output[-6000:],
+        }
+        software_command_results.append(record)
+        return result.returncode, output
+    except Exception as error:
+        detail = f"{type(error).__name__}: {error}"
+        software_command_results.append({"command": list(command), "error": detail})
+        return -1, detail
+
+
+def software_picker_command(*command, selection, timeout=180):
+    """Choose a package first, then answer pacman after its confirmation appears."""
+    process = None
+    output = bytearray()
+    try:
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        process.stdin.write(f"{selection}\n".encode())
+        process.stdin.flush()
+
+        deadline = time.monotonic() + timeout
+        confirmation_sent = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            ready, _, _ = select.select([process.stdout], [], [], min(remaining, 0.25))
+            if ready:
+                chunk = os.read(process.stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if not confirmation_sent and b"[Y/n]" in output:
+                    process.stdin.write(b"y\n")
+                    process.stdin.flush()
+                    process.stdin.close()
+                    confirmation_sent = True
+            if process.poll() is not None and not ready:
+                break
+
+        process.wait(timeout=max(0, deadline - time.monotonic()))
+        while select.select([process.stdout], [], [], 0)[0]:
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            output.extend(chunk)
+        rendered = output.decode("utf-8", errors="replace").strip()
+        stored_output = (
+            rendered
+            if len(rendered) <= 12000
+            else rendered[:6000] + "\n... output truncated ...\n" + rendered[-6000:]
+        )
+        software_command_results.append({
+            "command": list(command),
+            "exit_code": process.returncode,
+            "output": stored_output,
+        })
+        return process.returncode, rendered
+    except Exception as error:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        detail = f"{type(error).__name__}: {error}\n{output.decode('utf-8', errors='replace')}"
+        software_command_results.append({"command": list(command), "error": detail})
+        return -1, detail
+    finally:
+        if process is not None:
+            if process.stdin and not process.stdin.closed:
+                process.stdin.close()
+            if process.stdout:
+                process.stdout.close()
 
 
 def wait_for(predicate, timeout=30, interval=0.25):
@@ -457,6 +547,383 @@ def save_session_log(name):
 
 # ---- the checks -----------------------------------------------------------------------------
 
+def software_system_tool_checks():
+    """Exercise the installed software tool in the live Scottland user session."""
+    webapp_id = None
+    server = None
+    server_thread = None
+    aur_package_owned = False
+    xterm_restore_required = False
+    try:
+        gooarchy_rc, gooarchy_package = run_rc("pacman", "-Q", "gooarchy")
+        scottland_rc, scottland_package = run_rc("pacman", "-Q", "scottland")
+        version_rc, version = software_command("gooarchy", "software", "version")
+        check(
+            "gooarchy software version reports installed Gooarchy and Scottland packages",
+            gooarchy_rc == 0 and scottland_rc == 0 and version_rc == 0
+            and f"Gooarchy: {gooarchy_package} (commit " in version
+            and f"Scottland: {scottland_package}" in version,
+            version,
+        )
+        alias_rc, alias = software_command("gooarchy", "version")
+        check("gooarchy version reports the same installed software versions",
+              alias_rc == 0 and alias == version, alias)
+
+        source_rc, source_status = software_command("gooarchy-source", "status")
+        check(
+            "the installed Gooarchy source bundle is adopted through Scottland's source mechanism",
+            source_rc == 0 and "release:" in source_status and "installed:" in source_status
+            and "running source: clean" in source_status,
+            source_status,
+        )
+
+        present_rc, present = software_command("gooarchy", "software", "pkg", "present", "gooarchy")
+        check("pkg present recognizes the installed Gooarchy package", present_rc == 0, present)
+        missing_name = f"gooarchy-wi026-missing-{os.getpid()}"
+        missing_rc, missing = software_command("gooarchy", "software", "pkg", "missing", missing_name)
+        check("pkg missing recognizes a package absent from the fresh guest", missing_rc == 0, missing)
+
+        for action in ("add", "drop"):
+            usage_rc, usage = software_command("gooarchy", "software", "pkg", action)
+            check(f"pkg {action} requires an explicit package name",
+                  usage_rc == 2 and "PACKAGE" in usage, usage)
+
+        aur_rc, aur = software_command("gooarchy", "software", "pkg", "aur", "accessible", timeout=60)
+        check("pkg aur accessible reaches the AUR RPC", aur_rc == 0 and "AUR is accessible" in aur, aur)
+
+        def package_choice_number(command, package):
+            rc, listing = run_rc(*command, timeout=60)
+            if rc != 0:
+                return None, listing
+            choices = []
+            seen = set()
+            for line in listing.splitlines():
+                name = line.strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    choices.append(name)
+            try:
+                return choices.index(package) + 1, listing
+            except ValueError:
+                return None, listing
+
+        def displayed_choice_number(listing, package):
+            for line in listing.splitlines():
+                number, separator, name = line.strip().partition(". ")
+                if separator and number.isdigit() and name == package:
+                    return int(number)
+            return None
+
+        install_rc, install_picker = software_command(
+            "gooarchy", "software", "pkg", "install", input_text="\n"
+        )
+        check("pkg install lists official packages and accepts picker cancellation",
+              install_rc == 0 and "Select packages to install:" in install_picker
+              and "1. " in install_picker, install_picker[-500:])
+        remove_rc, remove_picker = software_command(
+            "gooarchy", "software", "pkg", "remove", input_text="\n"
+        )
+        check("pkg remove lists installed packages and accepts picker cancellation",
+              remove_rc == 0 and "Select packages to remove:" in remove_picker
+              and "1. " in remove_picker, remove_picker[-500:])
+        aur_picker_rc, aur_picker = software_command(
+            "gooarchy", "software", "pkg", "aur", "install",
+            input_text="paru-bin\n\n", timeout=60
+        )
+        aur_picker_index = displayed_choice_number(aur_picker, "paru-bin")
+        check("pkg aur install lists paru-bin and accepts picker cancellation",
+              aur_picker_rc == 0 and "Select AUR packages to install:" in aur_picker
+              and aur_picker_index is not None, aur_picker[-500:])
+
+        xterm_before_rc, xterm_before = software_command(
+            "gooarchy", "software", "pkg", "present", "xterm"
+        )
+        xterm_restore_required = xterm_before_rc == 0
+        remove_picker_index, remove_picker_choices = package_choice_number(
+            ("pacman", "-Qqe"), "xterm"
+        )
+        install_picker_index, install_picker_choices = package_choice_number(
+            ("pacman", "-Slq"), "xterm"
+        )
+        check("the test-only Arch package is installed and listed in both pickers",
+              xterm_before_rc == 0 and remove_picker_index is not None
+              and install_picker_index is not None,
+              f"present={xterm_before}; remove_choice={remove_picker_index}; "
+              f"install_choice={install_picker_index}; "
+              f"remove_list_rc={0 if remove_picker_choices else 1}; "
+              f"install_list_rc={0 if install_picker_choices else 1}")
+
+        if remove_picker_index is not None and install_picker_index is not None:
+            picker_remove_rc, picker_remove = software_picker_command(
+                "gooarchy", "software", "pkg", "remove",
+                selection=str(remove_picker_index), timeout=180,
+            )
+            picker_removed_rc, picker_removed = software_command(
+                "gooarchy", "software", "pkg", "missing", "xterm"
+            )
+            check("pkg remove picker removes the selected official package with reason and undo",
+                  picker_remove_rc == 0 and "Remove packages: xterm." in picker_remove
+                  and "Reason:" in picker_remove and "Undo:" in picker_remove
+                  and picker_removed_rc == 0,
+                  f"{picker_remove[-500:]}\nmissing: {picker_removed}")
+
+            picker_install_rc, picker_install = software_picker_command(
+                "gooarchy", "software", "pkg", "install",
+                selection=str(install_picker_index), timeout=180,
+            )
+            picker_installed_rc, picker_installed = software_command(
+                "gooarchy", "software", "pkg", "present", "xterm"
+            )
+            check("pkg install picker installs the selected official package with reason and undo",
+                  picker_install_rc == 0 and "Install official packages: xterm." in picker_install
+                  and "Reason:" in picker_install and "Undo:" in picker_install
+                  and picker_installed_rc == 0,
+                  f"{picker_install[-500:]}\npresent: {picker_installed}")
+
+        direct_drop_rc, direct_drop = software_command(
+            "gooarchy", "software", "pkg", "drop", "xterm",
+            input_text="y\n", timeout=180,
+        )
+        direct_missing_rc, direct_missing = software_command(
+            "gooarchy", "software", "pkg", "missing", "xterm"
+        )
+        check("pkg drop removes the official test package and explains undo",
+              direct_drop_rc == 0 and "Remove packages: xterm." in direct_drop
+              and "Reason:" in direct_drop and "Undo:" in direct_drop
+              and direct_missing_rc == 0,
+              f"{direct_drop[-500:]}\nmissing: {direct_missing}")
+
+        direct_add_rc, direct_add = software_command(
+            "gooarchy", "software", "pkg", "add", "xterm",
+            input_text="y\n", timeout=180,
+        )
+        direct_present_rc, direct_present = software_command(
+            "gooarchy", "software", "pkg", "present", "xterm"
+        )
+        check("pkg add installs the official test package and explains undo",
+              direct_add_rc == 0 and "Install official packages: xterm." in direct_add
+              and "Reason:" in direct_add and "Undo:" in direct_add
+              and direct_present_rc == 0,
+              f"{direct_add[-500:]}\npresent: {direct_present}")
+
+        aur_missing_rc, aur_missing = software_command(
+            "gooarchy", "software", "pkg", "missing", "paru-bin"
+        )
+        check("paru-bin is absent before the AUR lifecycle smoke",
+              aur_missing_rc == 0, aur_missing)
+        if aur_missing_rc == 0:
+            aur_add_rc, aur_add = software_command(
+                "gooarchy", "software", "pkg", "aur", "add", "paru-bin", timeout=480
+            )
+            aur_present_rc, aur_present = software_command(
+                "gooarchy", "software", "pkg", "present", "paru-bin"
+            )
+            aur_package_owned = aur_present_rc == 0
+            check("pkg aur add builds and installs paru-bin with reason and undo",
+                  aur_add_rc == 0 and "Build and install AUR packages: paru-bin." in aur_add
+                  and "Reason:" in aur_add and "Undo:" in aur_add
+                  and aur_present_rc == 0,
+                  f"{aur_add[-700:]}\npresent: {aur_present}")
+
+            if aur_package_owned:
+                aur_drop_rc, aur_drop = software_command(
+                    "gooarchy", "software", "pkg", "drop", "paru-bin",
+                    input_text="y\n", timeout=180,
+                )
+                aur_dropped_rc, aur_dropped = software_command(
+                    "gooarchy", "software", "pkg", "missing", "paru-bin"
+                )
+                check("the AUR smoke package is removed before picker installation",
+                      aur_drop_rc == 0 and aur_dropped_rc == 0,
+                      f"{aur_drop[-500:]}\nmissing: {aur_dropped}")
+                aur_package_owned = aur_dropped_rc != 0
+                if aur_dropped_rc == 0 and aur_picker_index is not None:
+                    aur_picker_install_rc, aur_picker_install = software_command(
+                        "gooarchy", "software", "pkg", "aur", "install",
+                        input_text=f"paru-bin\n{aur_picker_index}\n", timeout=480,
+                    )
+                    aur_picker_present_rc, aur_picker_present = software_command(
+                        "gooarchy", "software", "pkg", "present", "paru-bin"
+                    )
+                    aur_package_owned = aur_picker_present_rc == 0
+                    check("AUR picker selection builds and installs paru-bin",
+                          aur_picker_install_rc == 0
+                          and "Build and install AUR packages: paru-bin." in aur_picker_install
+                          and aur_picker_present_rc == 0,
+                          f"{aur_picker_install[-700:]}\npresent: {aur_picker_present}")
+
+                    if aur_package_owned:
+                        aur_picker_drop_rc, aur_picker_drop = software_command(
+                            "gooarchy", "software", "pkg", "drop", "paru-bin",
+                            input_text="y\n", timeout=180,
+                        )
+                        aur_picker_missing_rc, aur_picker_missing = software_command(
+                            "gooarchy", "software", "pkg", "missing", "paru-bin"
+                        )
+                        check("the AUR picker smoke package is removed after selection",
+                              aur_picker_drop_rc == 0 and aur_picker_missing_rc == 0,
+                              f"{aur_picker_drop[-500:]}\nmissing: {aur_picker_missing}")
+                        aur_package_owned = aur_picker_missing_rc != 0
+
+        with tempfile.TemporaryDirectory(prefix="gooarchy-software-smoke-") as data_home:
+            web_env = os.environ.copy()
+            web_env["XDG_DATA_HOME"] = data_home
+            applications = os.path.join(data_home, "applications")
+            os.makedirs(applications, exist_ok=True)
+
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    body = b"<!doctype html><title>Gooarchy software check</title>ok"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *_args):
+                    pass
+
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+            url = f"http://127.0.0.1:{server.server_address[1]}/"
+            suffix = str(os.getpid())
+            launch_name = f"WI026 Smoke {suffix}"
+            launch_id = f"gooarchy-webapp-wi026-smoke-{suffix}"
+            webapp_id = launch_id
+            launch_path = os.path.join(applications, f"{launch_id}.desktop")
+            install_app_rc, install_app = software_command(
+                "gooarchy", "software", "webapp", "install", launch_name, url, env=web_env
+            )
+            check("webapp install writes a Gooarchy launcher in the user's XDG applications directory",
+                  install_app_rc == 0 and os.path.isfile(launch_path)
+                  and "X-Gooarchy-WebApp=true" in open(launch_path, errors="replace").read(), install_app)
+
+            first_launch_rc, first_launch = software_command(
+                "gooarchy", "software", "webapp", "launch", "--focus", launch_id, url, env=web_env
+            )
+
+            def app_window_ids():
+                rc, windows = run_rc("scottland-ctl", "windows")
+                if rc != 0:
+                    return []
+                found = []
+                for line in windows.splitlines():
+                    fields = line.split()
+                    if len(fields) >= 2 and fields[1] == launch_id and fields[0].isdigit():
+                        found.append(fields[0])
+                return found
+
+            first_window = wait_for(lambda: app_window_ids(), timeout=45)
+            check("webapp launch opens Chromium in app mode",
+                  first_launch_rc == 0 and "Opened " in first_launch and first_window
+                  and len(first_window) == 1, first_launch)
+
+            focus_rc, focus = software_command(
+                "gooarchy", "software", "webapp", "launch", "--focus", launch_id, url, env=web_env
+            )
+            after_focus = wait_for(lambda: (lambda ids: ids if len(ids) == 1 else None)(app_window_ids()), timeout=20)
+            check("webapp focus presents the existing Scottland Chromium window",
+                  focus_rc == 0 and "Focused the existing Chromium app window" in focus
+                  and after_focus == first_window, focus)
+
+            launch_present_before_remove = os.path.isfile(launch_path)
+            remove_app_rc, remove_app = software_command(
+                "gooarchy", "software", "webapp", "remove", launch_name, env=web_env
+            )
+            remains_after_remove = app_window_ids()
+            check("webapp remove deletes its launcher and leaves the running window open",
+                  remove_app_rc == 0 and launch_present_before_remove and not os.path.exists(launch_path)
+                  and remains_after_remove == first_window, remove_app)
+
+            picker_name = f"WI026 Picker {suffix}"
+            picker_id = f"gooarchy-webapp-wi026-picker-{suffix}"
+            picker_path = os.path.join(applications, f"{picker_id}.desktop")
+            picker_install_rc, picker_install = software_command(
+                "gooarchy", "software", "webapp", "install", picker_name, url, env=web_env
+            )
+            picker_present_before_remove = os.path.isfile(picker_path)
+            picker_remove_rc, picker_remove = software_command(
+                "gooarchy", "software", "webapp", "remove", input_text="1\n", env=web_env
+            )
+            check("webapp remove picker removes the selected Gooarchy launcher",
+                  picker_install_rc == 0 and picker_present_before_remove
+                  and picker_remove_rc == 0 and "Select a web app to remove:" in picker_remove
+                  and not os.path.exists(picker_path), picker_remove)
+
+            all_name = f"WI026 Remove All {suffix}"
+            all_id = f"gooarchy-webapp-wi026-remove-all-{suffix}"
+            all_path = os.path.join(applications, f"{all_id}.desktop")
+            all_install_rc, all_install = software_command(
+                "gooarchy", "software", "webapp", "install", all_name, url, env=web_env
+            )
+            all_present_before_remove = os.path.isfile(all_path)
+            unmanaged_path = os.path.join(applications, "wi026-unmanaged.desktop")
+            with open(unmanaged_path, "w") as unmanaged:
+                unmanaged.write("[Desktop Entry]\nType=Application\nName=Unmanaged test entry\n")
+            remove_all_rc, remove_all = software_command(
+                "gooarchy", "software", "webapp", "remove-all", env=web_env
+            )
+            check("webapp remove-all removes Gooarchy launchers and preserves other launchers",
+                  all_install_rc == 0 and all_present_before_remove and remove_all_rc == 0
+                  and not os.path.exists(all_path) and os.path.isfile(unmanaged_path), remove_all)
+
+    except Exception as error:
+        check("Gooarchy software VM checks complete", False, f"{type(error).__name__}: {error}")
+    finally:
+        if aur_package_owned:
+            aur_installed_rc, _ = run_rc("pacman", "-Q", "paru-bin")
+            if aur_installed_rc == 0:
+                cleanup_rc, cleanup = software_command(
+                    "gooarchy", "software", "pkg", "drop", "paru-bin",
+                    input_text="y\n", timeout=180,
+                )
+                cleanup_missing_rc, cleanup_missing = software_command(
+                    "gooarchy", "software", "pkg", "missing", "paru-bin"
+                )
+                check("AUR smoke cleanup removes its temporary package",
+                      cleanup_rc == 0 and cleanup_missing_rc == 0,
+                      f"{cleanup[-500:]}\nmissing: {cleanup_missing}")
+        if xterm_restore_required:
+            xterm_installed_rc, _ = run_rc("pacman", "-Q", "xterm")
+            if xterm_installed_rc != 0:
+                restore_rc, restore = software_command(
+                    "gooarchy", "software", "pkg", "add", "xterm",
+                    input_text="y\n", timeout=180,
+                )
+                check("software smoke restores its preinstalled xterm package",
+                      restore_rc == 0 and run_rc("pacman", "-Q", "xterm")[0] == 0,
+                      restore[-500:])
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if server_thread is not None:
+            server_thread.join(timeout=5)
+        if webapp_id:
+            def app_window_ids():
+                rc, windows = run_rc("scottland-ctl", "windows")
+                if rc != 0:
+                    return []
+                return [
+                    fields[0] for line in windows.splitlines()
+                    if len(fields := line.split()) >= 2
+                    and fields[1] == webapp_id and fields[0].isdigit()
+                ]
+
+            try:
+                for window in app_window_ids():
+                    present_rc, _ = run_rc("scottland-ctl", "present", window)
+                    if present_rc == 0:
+                        press("KEY_LEFTALT", "KEY_F4")
+                closed = wait_for(lambda: not app_window_ids(), timeout=15) is not None
+            except Exception as error:
+                closed = False
+                log(f"temporary Chromium app cleanup failed: {type(error).__name__}: {error}")
+            check("software smoke closes its temporary Chromium app window", closed,
+                  "window closed" if closed else "temporary web-app window remains open")
+        with open(os.path.join(OUT, "software-tool-results.json"), "w") as evidence:
+            json.dump(software_command_results, evidence, indent=1)
+
 def main():
     portal_info = run("pacman", "-Qi", "xdg-desktop-portal-wlr-gooarchy")
     check("the Gooarchy portal provider is installed from the signed repository",
@@ -561,6 +1028,11 @@ def main():
     frame = wait_for(lambda: json.load(open(prefs)).get("browser", {}).get("custom_chrome_frame", "unset") is False
                      and "false", timeout=15)
     check("config: Chromium prefers the system title bar (browser.custom_chrome_frame = false)", frame)
+
+    # Exercise the software commands installed by the Gooarchy package in this real session. The
+    # web-app checks use a temporary XDG data directory and a loopback-only page, then remove their
+    # launcher files and close their temporary Chromium app window.
+    software_system_tool_checks()
 
     # The periphery: the window dragged away from the center scales down (that window, by id).
     if chromium:
