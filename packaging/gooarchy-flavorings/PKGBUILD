@@ -20,7 +20,7 @@ url="https://github.com/clickety-clacks/gooarchy-flavorings.git"
 license=('MIT')
 # Runtime needs of what it installs. Building needs only git and Python (and base-devel), not
 # Scottland: on a machine without Scottland yet, build with makepkg --nodeps (see the README).
-depends=('scottland' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
+depends=('scottland' 'agentd' 'agentd-attention' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
          'xdg-user-dirs' 'grim' 'slurp')
 optdepends=('ghostty: themed terminal' 'chromium: browser (system title bar)'
             'strata-bin: file manager' 'tmux: titled terminal sessions')
