@@ -110,7 +110,9 @@ chmod 755 "$transfer_tmp"
 mkdir -m 755 "$transfer_tmp/payload"
 cleanup() {
   rm -rf -- "$work_dir"
-  [[ -d $transfer_tmp ]] && rm -rf -- "$transfer_tmp"
+  if [[ -d $transfer_tmp ]]; then
+    rm -rf -- "$transfer_tmp"
+  fi
 }
 trap cleanup EXIT
 
