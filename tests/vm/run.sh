@@ -593,7 +593,8 @@ start_qemu() {
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
-  # Keep QEMU in this process group so a test runner can clean it up with the wrapper.
+  # QEMU remains a child of this runner; its verified stop path owns guest cleanup. Timeout callers
+  # use --foreground so the timeout wrapper does not signal this process group.
   # NoCloud reads the local CIDATA volume before network setup, so seed delivery needs no host route.
   # Prefer the guest root disk explicitly; firmware priority among unindexed disks is unspecified.
   "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
@@ -1379,8 +1380,7 @@ cmd_stop() {
 }
 
 # A successful boot/start invocation deliberately leaves the guest running for later wrapper
-# commands. Failed or interrupted invocations stop it; pool callers also own all descendants in
-# this process group and can reap them when their job exits.
+# commands. Failed or interrupted invocations use this runner's verified QEMU stop path.
 cleanup_failed_invocation() {
   local status=$?
   trap - EXIT
