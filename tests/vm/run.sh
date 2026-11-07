@@ -44,7 +44,7 @@
 #                           disk's GRUB menu and check that the ordinary kernel still boots from
 #                           it by default.
 #   GOOARCHY_VM_KERNEL_JOBS kernel build parallelism (default 2; use 1 on a shared host)
-#   GOOARCHY_VM_DIR         private work directory (default ~/.cache/gooarchy-vm-test): image, disk, logs
+#   GOOARCHY_VM_DIR         work directory (default ~/.cache/gooarchy-vm-test): image, disk, logs
 #   GOOARCHY_VM_IMAGE_URL   Arch cloud image (default: the latest official one; to repeat a run,
 #                           use the dated image named in its manifest.json)
 #   GOOARCHY_VM_IMAGE_SHA256  expected checksum of that image (checked on every run when set)
@@ -86,15 +86,8 @@ kernel_jobs=${GOOARCHY_VM_KERNEL_JOBS:-2}
 [[ $kernel_jobs =~ ^[1-9][0-9]*$ ]] || { echo "invalid GOOARCHY_VM_KERNEL_JOBS" >&2; exit 2; }
 port=${GOOARCHY_VM_SSH_PORT:-2222}
 proxy=${GOOARCHY_VM_PROXY:-}
-[[ $dir != / && ! -L $dir && ! -L $dir/run ]] || {
-  echo "GOOARCHY_VM_DIR and its run directory must not be symlinks or the filesystem root" >&2
-  exit 2
-}
-umask 077
-mkdir -p "$dir/images" "$dir/run" "$dir/artifacts"
-dir=$(cd -- "$dir" && pwd -P)
 run=$dir/run
-chmod 0700 "$dir" "$run"
+mkdir -p "$dir/images" "$run" "$dir/artifacts"
 
 qemu_bin=${GOOARCHY_VM_QEMU_BIN:-}
 [[ -z $qemu_bin && -x $dir/qemu/bin/qemu-system-x86_64 ]] && qemu_bin=$dir/qemu/bin
@@ -429,50 +422,20 @@ stop_seed() {
   rm -f "$run/seed-http.pid"
 }
 
-owned_qemu_pid() {
-  # Both records must identify the direct QEMU child launched by this run. Verify all three
-  # run-specific arguments before using the QMP socket or signalling the process.
-  local pid launch_pid i has_disk=0 has_qmp=0 has_pidfile=0
+running() {
+  # A PID file can survive a host restart; verify the process before stop/kill uses it.
+  local pid arg
   local -a args
-  [[ -r $run/qemu.pid && -r $run/qemu.launch.pid ]] || return 1
-  pid=$(cat -- "$run/qemu.pid")
-  launch_pid=$(cat -- "$run/qemu.launch.pid")
-  [[ $pid =~ ^[0-9]+$ && $pid == "$launch_pid" ]] || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
+  [[ -f $run/qemu.pid ]] || return 1
+  pid=$(cat "$run/qemu.pid")
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
   mapfile -d '' -t args 2>/dev/null <"/proc/$pid/cmdline" || return 1
   [[ ${args[0]:-} == */qemu-system-x86_64 || ${args[0]:-} == qemu-system-x86_64 ]] || return 1
-  for ((i = 0; i < ${#args[@]}; i++)); do
-    case ${args[i]} in
-      -drive)
-        [[ ${args[i + 1]:-} == "file=$run/disk.qcow2,if=none,id=gooarchy_vm_root,discard=unmap" ]] && has_disk=1
-        ;;
-      -qmp)
-        [[ ${args[i + 1]:-} == "unix:$run/qmp.sock,server,nowait" ]] && has_qmp=1
-        ;;
-      -pidfile)
-        [[ ${args[i + 1]:-} == "$run/qemu.pid" ]] && has_pidfile=1
-        ;;
-    esac
+  for arg in "${args[@]}"; do
+    [[ $arg == "file=$run/disk.qcow2,if=virtio,discard=unmap" ||
+       $arg == "file=$run/disk.qcow2,if=none,id=gooarchy_vm_root,discard=unmap" ]] && return 0
   done
-  (( has_disk && has_qmp && has_pidfile )) || return 1
-  printf '%s\n' "$pid"
-}
-
-running() {
-  owned_qemu_pid >/dev/null
-}
-
-qemu_process_has_exited() {
-  local pid=$1 stat rest state comm
-  ! kill -0 "$pid" 2>/dev/null && return 0
-  [[ -r /proc/$pid/stat ]] || return 1
-  IFS= read -r stat <"/proc/$pid/stat" || return 1
-  comm=${stat#*(}
-  comm=${comm%%)*}
-  rest=${stat##*) }
-  state=${rest%% *}
-  [[ ( $state == Z || $state == X ) &&
-     ( $comm == qemu-system-x86 || $comm == qemu-system-x86_64 ) ]]
+  return 1
 }
 
 wait_guest_channel() {
@@ -551,11 +514,9 @@ screendump() {
 
 cmd_boot() {
   cmd_stop
-  rm -f -- "$run/artifacts"
-  artifacts >/dev/null
   local image
   image=$(fetch_image)
-  rm -rf "$run/disk.qcow2" "$run/seed"
+  rm -rf "$run/disk.qcow2" "$run/artifacts" "$run/seed"
   python3 -c 'import uuid; print(uuid.uuid4().hex)' >"$run/nvidia-test-stamp"
   # Never smaller than the image (that would cut its partitions off); cloud-init grows the root
   # partition into the rest on first boot.
@@ -574,7 +535,7 @@ cmd_start() {
 }
 
 start_qemu() {
-  local seed_node=gooarchy_vm_seed launch_pid
+  local seed_node=gooarchy_vm_seed
   local -a display
   local kernel_args=()
   if [[ ${GOOARCHY_VM_KERNEL_BOOT:-0} == 1 ]]; then
@@ -600,8 +561,7 @@ start_qemu() {
   [[ -w /dev/kvm ]] || die "needs /dev/kvm"
   mkdir -p "$dir/pkgcache"
   log "booting ($gpu, ${size}, ${memory} MiB, $cpus CPUs)"
-  # QEMU remains a child of this runner; its verified stop path owns guest cleanup. Timeout callers
-  # use --foreground so the timeout wrapper does not signal this process group.
+  # Keep QEMU in this process group so a test runner can clean it up with the wrapper.
   # NoCloud reads the local CIDATA volume before network setup, so seed delivery needs no host route.
   # Prefer the guest root disk explicitly; firmware priority among unindexed disks is unspecified.
   "$qemu" -name gooarchy-vm -enable-kvm -cpu host -smp "$cpus" -m "$memory" -machine q35 \
@@ -618,8 +578,6 @@ start_qemu() {
     -virtfs "local,path=$rpc_root,mount_tag=gooarchy-vm-rpc,security_model=mapped-xattr,id=vmrpc" \
     -serial "file:$run/serial.log" -qmp "unix:$run/qmp.sock,server,nowait" -pidfile "$run/qemu.pid" \
     >"$run/qemu.log" 2>&1 </dev/null &
-  launch_pid=$!
-  printf '%s\n' "$launch_pid" >"$run/qemu.launch.pid"
   sleep 2
   running || die "QEMU didn't start: $(cat "$run/qemu.log")"
   wait_guest_channel 300
@@ -1336,58 +1294,20 @@ EOF
 
 cmd_stop() {
   stop_seed
-  if [[ -e $run/qemu.pid || -e $run/qemu.launch.pid ]]; then
-    local pid launch_pid current deadline
-    if ! pid=$(owned_qemu_pid); then
-      pid=$(cat -- "$run/qemu.pid" 2>/dev/null || true)
-      launch_pid=$(cat -- "$run/qemu.launch.pid" 2>/dev/null || true)
-      if [[ $pid =~ ^[0-9]+$ && $pid == "$launch_pid" ]] &&
-          qemu_process_has_exited "$pid"; then
-        rm -f -- "$run/qemu.pid" "$run/qemu.launch.pid"
-        log "removed stale QEMU PID records after confirming the process exited"
-        return 0
-      fi
-      if [[ ! -e $run/qemu.pid && $launch_pid =~ ^[0-9]+$ ]] &&
-          qemu_process_has_exited "$launch_pid"; then
-        rm -f -- "$run/qemu.launch.pid"
-        log "removed stale QEMU launch record after confirming it exited before writing its PID file"
-        return 0
-      fi
-      log "refusing to stop or forget an unverified QEMU PID; preserving the run directory"
-      return 1
-    fi
-
-    current=$(owned_qemu_pid) || {
-      log "refusing QMP quit because QEMU ownership changed"
-      return 1
-    }
-    [[ $current == "$pid" ]] || {
-      log "refusing QMP quit because QEMU PID changed"
-      return 1
-    }
-    if ! python3 "$here/qmp.py" "$run/qmp.sock" quit >/dev/null 2>&1; then
-      current=$(owned_qemu_pid) || current=
-      [[ $current != "$pid" ]] || kill "$pid" 2>/dev/null || true
-    fi
-
-    deadline=$((SECONDS + 20))
-    while current=$(owned_qemu_pid) && [[ $current == "$pid" ]] && (( SECONDS < deadline )); do
-      sleep 1
-    done
-    current=$(owned_qemu_pid) || current=
-    [[ $current != "$pid" ]] || kill -9 "$pid" 2>/dev/null || true
-    if ! qemu_process_has_exited "$pid"; then
-      log "QEMU PID $pid has not exited; preserving its PID records and run artifacts"
-      return 1
-    fi
-    rm -f -- "$run/qemu.pid" "$run/qemu.launch.pid"
-    wait "$pid" 2>/dev/null || true
+  if running; then
+    python3 "$here/qmp.py" "$run/qmp.sock" quit >/dev/null 2>&1 ||
+      { running && kill "$(cat "$run/qemu.pid")" 2>/dev/null; } || true
+    local deadline=$((SECONDS + 20))
+    while running && (( SECONDS < deadline )); do sleep 1; done
+    running && kill -9 "$(cat "$run/qemu.pid")" 2>/dev/null || true
     log "guest stopped"
   fi
+  rm -f "$run/qemu.pid"
 }
 
 # A successful boot/start invocation deliberately leaves the guest running for later wrapper
-# commands. Failed or interrupted invocations use this runner's verified QEMU stop path.
+# commands. Failed or interrupted invocations stop it; pool callers also own all descendants in
+# this process group and can reap them when their job exits.
 cleanup_failed_invocation() {
   local status=$?
   trap - EXIT
@@ -1400,21 +1320,11 @@ cleanup_failed_invocation() {
 cleanup_interrupted_invocation() {
   local status=$1
   trap - HUP INT TERM EXIT
-  {
-    printf 'signal_exit=%s\n' "$status"
-    printf 'observed_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf 'qemu_pid=%s\n' "$(cat -- "$run/qemu.pid" 2>/dev/null || echo unavailable)"
-    printf 'owned_qemu_pid=%s\n' "$(owned_qemu_pid 2>/dev/null || echo unverified)"
-  } >>"$run/runner-interrupted.txt" 2>/dev/null || true
   cmd_stop || true
   exit "$status"
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-# A bounded caller should use timeout --foreground so TERM reaches this runner's trap instead of
-# signalling its process group. If the runner is KILLed after the grace period, the caller must
-# invoke this script's stop command with the same GOOARCHY_VM_DIR; stop verifies the exact QEMU
-# PID, disk and QMP socket before it can quit or signal that guest.
 trap 'cleanup_interrupted_invocation 129' HUP
 trap 'cleanup_interrupted_invocation 130' INT
 trap 'cleanup_interrupted_invocation 143' TERM
@@ -1444,6 +1354,7 @@ case ${1:-all} in
   ssh) shift; guest -t "$@" ;;
   stop) cmd_stop ;;
   all)
+    rm -f "$run/artifacts"
     trap cmd_stop EXIT
     cmd_boot
     manifest
