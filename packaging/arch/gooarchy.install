@@ -1,0 +1,11 @@
+post_install() {
+  /usr/lib/gooarchy/tools/base/gooarchy-source adopt
+}
+
+post_upgrade() {
+  /usr/lib/gooarchy/tools/base/gooarchy-source adopt
+}
+
+pre_remove() {
+  /usr/lib/gooarchy/tools/base/gooarchy-source remove
+}

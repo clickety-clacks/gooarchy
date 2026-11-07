@@ -3,10 +3,18 @@
 # workspace builds and tests as a whole. packaging/arch/PKGBUILD builds and installs it.
 [workspace]
 resolver = "3"
-members = ["common", "gooarchy", "lock", "look"]
+members = ["common", "gooarchy", "lock", "look", "software", "source"]
 
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-license = "LicenseRef-unlicensed"
+license = "MIT"
 publish = false
+
+[workspace.dependencies]
+# Scottland's source mechanism is shared by both products. Keep the exact source revision here;
+# Gooarchy must not carry a second implementation or a copy of its crate.
+scottland-source = {
+  git = "https://github.com/clickety-clacks/scottland.git",
+  rev = "bf1033b981f3aac4373839788c1dbe11e0753a88",
+}

@@ -1,0 +1,11 @@
+[package]
+name = "gooarchy-software"
+description = "Install and manage Gooarchy software and web apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+common = { package = "gooarchy-common", path = "../common" }
+

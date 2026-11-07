@@ -1,0 +1,11 @@
+[package]
+name = "gooarchy-source"
+description = "Gooarchy's shared on-machine source mechanism"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+scottland-source = { workspace = true }

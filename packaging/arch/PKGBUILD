@@ -4,11 +4,9 @@
 #             dependencies on everything Gooarchy is made of (removing it takes them along)
 # gooarchy-flavorings is a separate package with its own recipe in packaging/gooarchy-flavorings/.
 #
-# This is a local build of a checkout, not a self-contained source package: package() reads the
-# checkout ($GOOARCHY_PATH, or two levels up) directly, so makepkg --source would not capture it.
-# /usr/share/gooarchy/build-info records exactly what went in (checkout revision and uncommitted
-# changes), and a checkout with uncommitted changes gets
-# ".dirty" in its version. A source package that builds anywhere comes with the package repository.
+# The package carries the exact source commit for Scottland's shared on-machine source mechanism.
+# A dirty checkout is captured as a temporary commit in $srcdir so the installed tools and source
+# bundle still name the same tree; the caller's checkout is left alone.
 pkgbase=gooarchy
 pkgname=gooarchy
 _repo=${GOOARCHY_PATH:-$startdir/../..}
@@ -18,17 +16,57 @@ pkgrel=1
 pkgdesc="Gooarchy, a desktop Linux distribution built around Scottland"
 arch=('x86_64')
 url="https://github.com/clickety-clacks/gooarchy"
-license=('LicenseRef-unlicensed')
+license=('MIT')
 makedepends=('git' 'cargo' 'pam')
 options=('!debug')
+install=gooarchy.install
 
 build() {
-  # Build into $srcdir so the checkout remains clean. Rust sources are vendored.
-  (cd "$_repo/system-tools" && CARGO_TARGET_DIR="$srcdir/target" cargo build --frozen --release)
+  local snapshot="$srcdir/gooarchy-source" source_commit relative
+  [[ "$(git -C "$_repo" rev-parse --is-shallow-repository)" == false ]] || {
+    echo "Gooarchy source builds need the full Git history." >&2
+    return 1
+  }
+
+  git clone --quiet --no-hardlinks "$_repo" "$snapshot"
+  git -C "$_repo" diff --binary HEAD -- | git -C "$snapshot" apply --binary
+  while IFS= read -r -d '' relative; do
+    install -d "$snapshot/$(dirname "$relative")"
+    cp -a -- "$_repo/$relative" "$snapshot/$relative"
+  done < <(git -C "$_repo" ls-files --others --exclude-standard -z)
+  git -C "$snapshot" add --all
+  if ! git -C "$snapshot" diff --cached --quiet; then
+    git -C "$snapshot" -c user.name='Gooarchy package build' \
+      -c user.email='gooarchy-package-build@localhost' \
+      -c commit.gpgsign=false \
+      commit --quiet -m 'Capture working source for package build'
+  fi
+  source_commit=$(git -C "$snapshot" rev-parse HEAD)
+  printf '%s\n' "$source_commit" > "$srcdir/build-commit"
+
+  (
+    cd "$snapshot/system-tools"
+    PRODUCT_SOURCE_BUILD_COMMIT="$source_commit" \
+      CARGO_TARGET_DIR="$srcdir/target" \
+      cargo build --locked --workspace --release
+  )
+
+  install -d "$srcdir/tools/base"
+  for tool in gooarchy gooarchy-lock gooarchy-look gooarchy-software gooarchy-source; do
+    install -m755 "$srcdir/target/release/$tool" "$srcdir/tools/base/$tool"
+  done
+  git clone --quiet --no-checkout --no-hardlinks "$snapshot" "$srcdir/source-bundle"
+  git -C "$srcdir/source-bundle" update-ref refs/heads/release "$source_commit"
+  git -C "$srcdir/source-bundle" bundle create "$srcdir/base.bundle" refs/heads/release
 }
 
 check() {
-  (cd "$_repo/system-tools" && CARGO_TARGET_DIR="$srcdir/target" cargo test --frozen --release)
+  (
+    cd "$srcdir/gooarchy-source/system-tools"
+    PRODUCT_SOURCE_BUILD_COMMIT="$(cat "$srcdir/build-commit")" \
+      CARGO_TARGET_DIR="$srcdir/target" \
+      cargo test --locked --workspace --release
+  )
 }
 
 package() {
@@ -37,28 +75,41 @@ package() {
   # Optional, not required: editing the system tools is the exception, and package upgrades work
   # without a toolchain (docs/rulings.md).
   optdepends=('rust: rebuild system tools from edited source')
-  install -Dm644 "$_repo/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
-  install -Dm755 "$_repo/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
-  install -Dm755 "$_repo/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
-  install -Dm755 "$_repo/session/35-gooarchy-lock" "$pkgdir/usr/lib/scottland/config.d/35-gooarchy-lock"
-  install -Dm644 "$_repo/session/gooarchy-lock.pam" "$pkgdir/etc/pam.d/gooarchy-lock"
-  install -Dm755 "$_repo/session/35-gooarchy-lid" "$pkgdir/usr/lib/scottland/config.d/35-gooarchy-lid"
-  install -Dm755 "$_repo/session/autostart.d/45-gooarchy-clamshell" "$pkgdir/usr/lib/scottland/autostart.d/45-gooarchy-clamshell"
-  install -Dm755 "$_repo/session/libexec/gooarchy-clamshell" "$pkgdir/usr/bin/gooarchy-clamshell"
-  install -Dm644 "$_repo/agents/skills/gooarchy/SKILL.md" "$pkgdir/usr/share/gooarchy/agents/skills/gooarchy/SKILL.md"
-  install -Dm755 "$_repo/session/03-link-gooarchy-agent-skills" "$pkgdir/usr/lib/scottland/autostart.d/03-link-gooarchy-agent-skills"
-  install -Dm755 "$srcdir/target/release/gooarchy" "$pkgdir/usr/bin/gooarchy"
-  install -Dm755 "$srcdir/target/release/gooarchy-look" "$pkgdir/usr/bin/gooarchy-look"
-  install -Dm755 "$srcdir/target/release/gooarchy-lock" "$pkgdir/usr/bin/gooarchy-lock"
-  install -Dm644 "$_repo/system-tools/LICENSE-omarchy" "$pkgdir/usr/share/licenses/gooarchy/LICENSE-omarchy"
+  local snapshot="$srcdir/gooarchy-source" source_commit source_manifest
+  source_commit=$(cat "$srcdir/build-commit")
+  install -Dm644 "$snapshot/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
+  install -Dm755 "$snapshot/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
+  install -Dm755 "$snapshot/session/30-gooarchy-keyboard" "$pkgdir/usr/lib/scottland/config.d/30-gooarchy-keyboard"
+  install -Dm755 "$snapshot/session/35-gooarchy-lock" "$pkgdir/usr/lib/scottland/config.d/35-gooarchy-lock"
+  install -Dm644 "$snapshot/session/gooarchy-lock.pam" "$pkgdir/etc/pam.d/gooarchy-lock"
+  install -Dm755 "$snapshot/session/35-gooarchy-lid" "$pkgdir/usr/lib/scottland/config.d/35-gooarchy-lid"
+  install -Dm755 "$snapshot/session/autostart.d/45-gooarchy-clamshell" "$pkgdir/usr/lib/scottland/autostart.d/45-gooarchy-clamshell"
+  install -Dm755 "$snapshot/session/libexec/gooarchy-clamshell" "$pkgdir/usr/bin/gooarchy-clamshell"
+  install -Dm644 "$snapshot/agents/skills/gooarchy/SKILL.md" "$pkgdir/usr/share/gooarchy/agents/skills/gooarchy/SKILL.md"
+  install -Dm755 "$snapshot/session/03-link-gooarchy-agent-skills" "$pkgdir/usr/lib/scottland/autostart.d/03-link-gooarchy-agent-skills"
+  install -dm755 "$pkgdir/usr/lib/gooarchy/tools/base"
+  install -m755 "$srcdir/tools/base/"* "$pkgdir/usr/lib/gooarchy/tools/base/"
+  install -Dm644 "$srcdir/base.bundle" "$pkgdir/usr/share/gooarchy/source/base.bundle"
+  install -Dm644 "$srcdir/build-commit" "$pkgdir/usr/share/gooarchy/source/base.commit"
+  install -Dm644 "$snapshot/LICENSE" "$pkgdir/usr/share/licenses/gooarchy/LICENSE"
+  install -Dm644 "$snapshot/system-tools/LICENSE-omarchy" "$pkgdir/usr/share/licenses/gooarchy/LICENSE-omarchy"
   local license relative
   while IFS= read -r -d '' license; do
-    relative=${license#"$_repo"/system-tools/vendor/}
+    relative=${license#"$snapshot"/system-tools/vendor/}
     install -Dm644 "$license" "$pkgdir/usr/share/licenses/gooarchy/vendor/$relative"
-  done < <(find "$_repo/system-tools/vendor" -type f \( -name 'LICENSE*' -o -name 'COPYING*' \) -print0 | sort -z)
+  done < <(find "$snapshot/system-tools/vendor" -type f \( -name 'LICENSE*' -o -name 'COPYING*' \) -print0 | sort -z)
+  source_manifest=$(cd "$snapshot/system-tools" &&
+    cargo metadata --locked --format-version 1 |
+      jq -r '.packages[] | select(.name == "scottland-source") | .manifest_path')
+  [[ -f ${source_manifest%/Cargo.toml}/LICENSE ]] || {
+    echo "Could not find the pinned Scottland source-mechanism MIT license." >&2
+    return 1
+  }
+  install -Dm644 "${source_manifest%/Cargo.toml}/LICENSE" \
+    "$pkgdir/usr/share/licenses/gooarchy/scottland-source/LICENSE"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
 gooarchy $pkgver
-checkout $(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo unknown)${_dirty:+ with uncommitted changes}
+source $source_commit
 built $(date -u +%Y-%m-%dT%H:%M:%SZ)
 INFO
 }
