@@ -604,12 +604,13 @@ def software_system_tool_checks():
                   focus_rc == 0 and "Focused the existing Chromium app window" in focus
                   and after_focus == first_window, focus)
 
+            launch_present_before_remove = os.path.isfile(launch_path)
             remove_app_rc, remove_app = software_command(
                 "gooarchy", "software", "webapp", "remove", launch_name, env=web_env
             )
             remains_after_remove = app_window_ids()
             check("webapp remove deletes its launcher and leaves the running window open",
-                  remove_app_rc == 0 and not os.path.exists(launch_path)
+                  remove_app_rc == 0 and launch_present_before_remove and not os.path.exists(launch_path)
                   and remains_after_remove == first_window, remove_app)
 
             picker_name = f"WI026 Picker {suffix}"
@@ -618,11 +619,12 @@ def software_system_tool_checks():
             picker_install_rc, picker_install = software_command(
                 "gooarchy", "software", "webapp", "install", picker_name, url, env=web_env
             )
+            picker_present_before_remove = os.path.isfile(picker_path)
             picker_remove_rc, picker_remove = software_command(
                 "gooarchy", "software", "webapp", "remove", input_text="1\n", env=web_env
             )
             check("webapp remove picker removes the selected Gooarchy launcher",
-                  picker_install_rc == 0 and os.path.isfile(picker_path)
+                  picker_install_rc == 0 and picker_present_before_remove
                   and picker_remove_rc == 0 and "Select a web app to remove:" in picker_remove
                   and not os.path.exists(picker_path), picker_remove)
 
@@ -632,6 +634,7 @@ def software_system_tool_checks():
             all_install_rc, all_install = software_command(
                 "gooarchy", "software", "webapp", "install", all_name, url, env=web_env
             )
+            all_present_before_remove = os.path.isfile(all_path)
             unmanaged_path = os.path.join(applications, "wi026-unmanaged.desktop")
             with open(unmanaged_path, "w") as unmanaged:
                 unmanaged.write("[Desktop Entry]\nType=Application\nName=Unmanaged test entry\n")
@@ -639,7 +642,7 @@ def software_system_tool_checks():
                 "gooarchy", "software", "webapp", "remove-all", env=web_env
             )
             check("webapp remove-all removes Gooarchy launchers and preserves other launchers",
-                  all_install_rc == 0 and os.path.isfile(all_path) and remove_all_rc == 0
+                  all_install_rc == 0 and all_present_before_remove and remove_all_rc == 0
                   and not os.path.exists(all_path) and os.path.isfile(unmanaged_path), remove_all)
 
     except Exception as error:
