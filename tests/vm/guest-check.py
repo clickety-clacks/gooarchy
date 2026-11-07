@@ -19,6 +19,7 @@ import glob
 import http.server
 import json
 import os
+import select
 import shutil
 import signal
 import socket
@@ -101,6 +102,71 @@ def software_command(*command, input_text=None, env=None, timeout=60):
         detail = f"{type(error).__name__}: {error}"
         software_command_results.append({"command": list(command), "error": detail})
         return -1, detail
+
+
+def software_picker_command(*command, selection, timeout=180):
+    """Choose a package first, then answer pacman after its confirmation appears."""
+    process = None
+    output = bytearray()
+    try:
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        process.stdin.write(f"{selection}\n".encode())
+        process.stdin.flush()
+
+        deadline = time.monotonic() + timeout
+        confirmation_sent = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            ready, _, _ = select.select([process.stdout], [], [], min(remaining, 0.25))
+            if ready:
+                chunk = os.read(process.stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if not confirmation_sent and b"[Y/n]" in output:
+                    process.stdin.write(b"y\n")
+                    process.stdin.flush()
+                    process.stdin.close()
+                    confirmation_sent = True
+            if process.poll() is not None and not ready:
+                break
+
+        process.wait(timeout=max(0, deadline - time.monotonic()))
+        while select.select([process.stdout], [], [], 0)[0]:
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            output.extend(chunk)
+        rendered = output.decode("utf-8", errors="replace").strip()
+        stored_output = (
+            rendered
+            if len(rendered) <= 12000
+            else rendered[:6000] + "\n... output truncated ...\n" + rendered[-6000:]
+        )
+        software_command_results.append({
+            "command": list(command),
+            "exit_code": process.returncode,
+            "output": stored_output,
+        })
+        return process.returncode, rendered
+    except Exception as error:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        detail = f"{type(error).__name__}: {error}\n{output.decode('utf-8', errors='replace')}"
+        software_command_results.append({"command": list(command), "error": detail})
+        return -1, detail
+    finally:
+        if process is not None:
+            if process.stdin and not process.stdin.closed:
+                process.stdin.close()
+            if process.stdout:
+                process.stdout.close()
 
 
 def wait_for(predicate, timeout=30, interval=0.25):
@@ -588,9 +654,9 @@ def software_system_tool_checks():
               f"install_list_rc={0 if install_picker_choices else 1}")
 
         if remove_picker_index is not None and install_picker_index is not None:
-            picker_remove_rc, picker_remove = software_command(
+            picker_remove_rc, picker_remove = software_picker_command(
                 "gooarchy", "software", "pkg", "remove",
-                input_text=f"{remove_picker_index}\ny\n", timeout=180,
+                selection=str(remove_picker_index), timeout=180,
             )
             picker_removed_rc, picker_removed = software_command(
                 "gooarchy", "software", "pkg", "missing", "xterm"
@@ -601,9 +667,9 @@ def software_system_tool_checks():
                   and picker_removed_rc == 0,
                   f"{picker_remove[-500:]}\nmissing: {picker_removed}")
 
-            picker_install_rc, picker_install = software_command(
+            picker_install_rc, picker_install = software_picker_command(
                 "gooarchy", "software", "pkg", "install",
-                input_text=f"{install_picker_index}\ny\n", timeout=180,
+                selection=str(install_picker_index), timeout=180,
             )
             picker_installed_rc, picker_installed = software_command(
                 "gooarchy", "software", "pkg", "present", "xterm"
