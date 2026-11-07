@@ -6,21 +6,21 @@
 # Keep this final upstream tag and package version aligned. RCs, branches, and raw commits are
 # unsupported source selectors.
 pkgname=gooarchy-flavorings
-_tag=v0.2.1
-pkgver=0.2.1
-pkgrel=3
+_tag=v0.2.2
+pkgver=0.2.2
+pkgrel=1
 # Expected identity for the selected final tag. These values validate the tag and any imported
 # package receipt; _tag remains the sole source selector.
-_upstream_commit=a7107415e39be00fb50745788c17429932bf6829
-_upstream_tree=d1ec6a0ded81b8e4cb8ccb167a8679fb9f8542b6
-_upstream_archive_sha256=722d4cf2f83c2f1f16e27e0a2e1105a28cf46716025bf1f290565df6300763af
+_upstream_commit=04c504b3fcc0ef80f82fa3a94c991ffc424f57c0
+_upstream_tree=97b43ad0e826a93033d08799e0d5c56bbcfe48ad
+_upstream_archive_sha256=24cc0f42760eeaffdd75578b69e28e398f86a966ed1f25fb8ee865b8347e16df
 pkgdesc="Gooarchy's curated defaults for Scottland and its apps"
 arch=('any')
 url="https://github.com/clickety-clacks/gooarchy-flavorings.git"
 license=('MIT')
 # Runtime needs of what it installs. Building needs only git and Python (and base-devel), not
 # Scottland: on a machine without Scottland yet, build with makepkg --nodeps (see the README).
-depends=('scottland' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
+depends=('scottland' 'agentd' 'agentd-attention' 'python' 'glib2' 'gsettings-desktop-schemas' 'dconf' 'swaybg' 'webp-pixbuf-loader'
          'xdg-user-dirs' 'grim' 'slurp')
 optdepends=('ghostty: themed terminal' 'chromium: browser (system title bar)'
             'strata-bin: file manager' 'tmux: titled terminal sessions')
