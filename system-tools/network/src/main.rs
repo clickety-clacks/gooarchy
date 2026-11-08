@@ -16,11 +16,6 @@ const SERVICES: [(&str, &str); 3] = [
     ("iwd", "iwd.service"),
     ("systemd-resolved", "systemd-resolved.service"),
 ];
-const NETWORKD_ADMIN_DIRS: [&str; 3] = [
-    "/etc/systemd/network",
-    "/run/systemd/network",
-    "/usr/local/lib/systemd/network",
-];
 const NETWORKD_CONFIG_PATH: &str = "/etc/systemd/network/zz-gooarchy-dhcp.network";
 const NETWORKD_VENDOR_CONFIG_PATH: &str = "/usr/lib/systemd/network/zz-gooarchy-dhcp.network";
 const NETWORKD_DHCP_CONFIG: &str = "[Match]\nName=en* eth* wl* wlan*\n\n[Network]\nDHCP=yes\n";
@@ -126,14 +121,18 @@ fn ensure(yes: bool) -> Result<(), Failure> {
         run_privileged("pacman", &args)?;
     }
 
+    // A rule for another link does not configure the available link. Keep
+    // Gooarchy's later rule as a fallback for links unmatched by earlier rules.
     let network_config = if route_present {
         NetworkConfigState::DefaultRouteAlreadyActive
-    } else if let Some(path) = existing_networkd_config()? {
+    } else if let Some(path) = existing_networkd_fallback()? {
         NetworkConfigState::Existing(path)
     } else if write_networkd_default()? {
         NetworkConfigState::Added
     } else {
-        NetworkConfigState::Existing(PathBuf::from(NETWORKD_CONFIG_PATH))
+        NetworkConfigState::Existing(
+            existing_networkd_fallback()?.unwrap_or_else(|| PathBuf::from(NETWORKD_CONFIG_PATH)),
+        )
     };
 
     for (name, service) in SERVICES {
@@ -180,43 +179,17 @@ fn ensure(yes: bool) -> Result<(), Failure> {
     Ok(())
 }
 
-fn existing_networkd_config() -> Result<Option<PathBuf>, Failure> {
-    for directory in NETWORKD_ADMIN_DIRS {
-        let entries = match fs::read_dir(directory) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(Failure::new(format!(
-                    "could not inspect networkd configuration directory {directory}: {error}"
-                )));
-            }
-        };
-
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                Failure::new(format!(
-                    "could not read networkd configuration directory {directory}: {error}"
-                ))
-            })?;
-            if entry
-                .path()
-                .extension()
-                .and_then(|extension| extension.to_str())
-                == Some("network")
-            {
-                return Ok(Some(entry.path()));
-            }
+fn existing_networkd_fallback() -> Result<Option<PathBuf>, Failure> {
+    for path in [NETWORKD_CONFIG_PATH, NETWORKD_VENDOR_CONFIG_PATH] {
+        if path_entry_exists(path)? {
+            return Ok(Some(PathBuf::from(path)));
         }
-    }
-
-    if path_entry_exists(NETWORKD_VENDOR_CONFIG_PATH)? {
-        return Ok(Some(PathBuf::from(NETWORKD_VENDOR_CONFIG_PATH)));
     }
     Ok(None)
 }
 
 fn write_networkd_default() -> Result<bool, Failure> {
-    if path_entry_exists(NETWORKD_CONFIG_PATH)? {
+    if existing_networkd_fallback()?.is_some() {
         return Ok(false);
     }
 
