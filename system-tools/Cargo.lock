@@ -98,6 +98,13 @@ name = "gooarchy-common"
 version = "0.0.1"
 
 [[package]]
+name = "gooarchy-hw"
+version = "0.0.1"
+dependencies = [
+ "gooarchy-common",
+]
+
+[[package]]
 name = "gooarchy-lock"
 version = "0.0.1"
 dependencies = [
@@ -111,6 +118,13 @@ dependencies = [
 
 [[package]]
 name = "gooarchy-look"
+version = "0.0.1"
+dependencies = [
+ "gooarchy-common",
+]
+
+[[package]]
+name = "gooarchy-network"
 version = "0.0.1"
 dependencies = [
  "gooarchy-common",

@@ -1,0 +1,10 @@
+[package]
+name = "gooarchy-hw"
+description = "Hardware detection and supported per-laptop fixes for Gooarchy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+common = { package = "gooarchy-common", path = "../common" }
