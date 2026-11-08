@@ -241,10 +241,11 @@ fi
 source "$repo_root/install/sources.conf"
 scottland_repo=$GOOARCHY_SCOTTLAND_REPO
 scottland_ref=$GOOARCHY_SCOTTLAND_REF
-if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag && $scottland_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag &&
+  ( $scottland_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || $scottland_ref == v0.4.1-rc1 ) ]]; then
   scottland_source_label="Scottland tag:$scottland_ref"
 else
-  die "Gooarchy main publication requires a final Scottland version tag."
+  die "Gooarchy main publication requires a final Scottland version tag or its approved v0.4.1-rc1 pin."
 fi
 if [[ ${recipe_for[gooarchy-flavorings]+present} &&
   ${recipe_for[gooarchy-flavorings]} != @scottland &&
