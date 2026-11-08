@@ -39,6 +39,13 @@ else
     echo "Gooarchy's scottland package was not installed as a signed repository copy." >&2
     exit 1
   }
+  if [[ -n $GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET ]]; then
+    package_is_repository_copy scottland-sunlight || {
+      echo "Gooarchy's scottland-sunlight package was not installed as a signed repository copy." >&2
+      exit 1
+    }
+    echo "Scottland Sunlight $(pacman -Q scottland-sunlight | awk '{print $2}') from the Gooarchy repository."
+  fi
   sudo pacman -D --asdeps scottland
   forget_build scottland
   echo "Scottland $(pacman -Q scottland | awk '{print $2}') from the Gooarchy repository."

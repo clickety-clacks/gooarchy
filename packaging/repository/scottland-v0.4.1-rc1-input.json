@@ -39,6 +39,17 @@
       "required_dependency": "wayfire"
     },
     {
+      "name": "scottland-sunlight",
+      "version": "0.4.1-1",
+      "architecture": "any",
+      "filename": "scottland-sunlight-0.4.1-1-any.pkg.tar.zst",
+      "sha256": "640de20c739d160a68d796e3dce9a3cc7ddb567925cbf8967716453aa8d14812",
+      "packager": "Unknown Packager",
+      "pkgbuild_sha256": "18a6bb4730f73684113d52206e51f967b11fc64a004cb558b5a829833c60e9c8",
+      "wayfire_build": "0.11.0-1",
+      "required_dependency": "scottland=0.4.1-1"
+    },
+    {
       "name": "scottland-omarchy",
       "version": "0.4.1-1",
       "architecture": "any",

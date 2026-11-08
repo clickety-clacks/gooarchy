@@ -66,8 +66,13 @@ class ScottlandPairTests(unittest.TestCase):
         )
         self.assertEqual(
             {item["name"] for item in manifest["packages"]},
-            {"scottland", "scottland-omarchy"},
+            {"scottland", "scottland-sunlight", "scottland-omarchy"},
         )
+        sunlight = next(item for item in manifest["packages"] if item["name"] == "scottland-sunlight")
+        self.assertEqual(sunlight["version"], "0.4.1-1")
+        self.assertEqual(sunlight["architecture"], "any")
+        self.assertEqual(sunlight["sha256"], "640de20c739d160a68d796e3dce9a3cc7ddb567925cbf8967716453aa8d14812")
+        self.assertEqual(sunlight["required_dependency"], "scottland=0.4.1-1")
 
     def test_previous_0_3_6_pair_remains_pinned(self) -> None:
         historical = ROOT / "packaging/repository/scottland-v0.3.6-input.json"
@@ -165,7 +170,7 @@ class ScottlandPairTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, "dependency metadata"):
                             protocol.verify_scottland_pair_package(archive, package_pin)
 
-    def test_staging_copies_the_pair_bytes_unchanged(self) -> None:
+    def test_staging_copies_every_release_package_byte_unchanged(self) -> None:
         manifest = protocol.load_scottland_pair_manifest()
         with tempfile.TemporaryDirectory(prefix="gooarchy-pair-stage-") as temporary:
             root = Path(temporary)

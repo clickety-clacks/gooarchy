@@ -685,8 +685,9 @@ class RepositoryTransferTests(unittest.TestCase):
         observed = self.verify(bundle, sha256(manifest_path))
         self.assertEqual(observed["schema"], protocol.LEGACY_SCHEMA)
 
-    def test_signed_upstream_pair_manifest_covers_unknown_packager_assets(self) -> None:
+    def test_signed_upstream_release_set_covers_unknown_packager_assets(self) -> None:
         versions = {name: "1.0.0-1" for name in NAMES}
+        versions["scottland-sunlight"] = "1.0.0-1"
         versions["scottland-omarchy"] = "1.0.0-1"
         bundle, _manifest_hash, manifest = make_bundle(self.root, versions)
         payload = bundle / "payload"

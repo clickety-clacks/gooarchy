@@ -28,7 +28,7 @@ SCOTTLAND_PAIR_SCHEMA = "gooarchy-scottland-pair-input-v1"
 REPOSITORY = "clickety-clacks/gooarchy"
 FLAVORINGS_REPOSITORY = "clickety-clacks/gooarchy-flavorings"
 SCOTTLAND_REPOSITORY = "clickety-clacks/scottland"
-SCOTTLAND_PACKAGE_NAMES = {"scottland", "scottland-omarchy"}
+SCOTTLAND_PACKAGE_NAMES = {"scottland", "scottland-sunlight", "scottland-omarchy"}
 PACKAGE_ORIGINS = {"source-build", "prebuilt-input", "upstream-release", "retained-release"}
 SCOTTLAND_PAIR_MANIFESTS = {
     "v0.3.4": "scottland-v0.3.4-input.json",
@@ -229,6 +229,17 @@ SCOTTLAND_PAIR_PINS = {
                 "pkgbuild_sha256": "18a6bb4730f73684113d52206e51f967b11fc64a004cb558b5a829833c60e9c8",
                 "wayfire_build": "0.11.0-1",
                 "required_dependency": "wayfire",
+            },
+            "scottland-sunlight": {
+                "name": "scottland-sunlight",
+                "version": "0.4.1-1",
+                "architecture": "any",
+                "filename": "scottland-sunlight-0.4.1-1-any.pkg.tar.zst",
+                "sha256": "640de20c739d160a68d796e3dce9a3cc7ddb567925cbf8967716453aa8d14812",
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "18a6bb4730f73684113d52206e51f967b11fc64a004cb558b5a829833c60e9c8",
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "scottland=0.4.1-1",
             },
             "scottland-omarchy": {
                 "name": "scottland-omarchy",
@@ -437,8 +448,8 @@ def load_scottland_pair_manifest(path: Path | None = None) -> dict[str, Any]:
     if checksums["filename"] != "SHA256SUMS" or not isinstance(checksums["sha256"], str) or not SHA256_RE.fullmatch(checksums["sha256"]):
         fail("Scottland checksum identity is invalid")
     packages = manifest["packages"]
-    if not isinstance(packages, list) or len(packages) != 2:
-        fail("Scottland input must pin exactly the core and adapter packages")
+    if not isinstance(packages, list) or len(packages) != len(pair_pin["packages"]):
+        fail("Scottland input must pin every package in the selected release set")
     observed: dict[str, dict[str, Any]] = {}
     required_fields = {
         "name", "version", "architecture", "filename", "sha256", "packager",
@@ -474,8 +485,8 @@ def load_scottland_pair_manifest(path: Path | None = None) -> dict[str, Any]:
         if package != expected:
             fail(f"Scottland package metadata differs from the pinned release asset: {name}")
         observed[name] = package
-    if set(observed) != SCOTTLAND_PACKAGE_NAMES:
-        fail("Scottland input is missing a member of the reviewed package pair")
+    if set(observed) != set(pair_pin["packages"]):
+        fail("Scottland input is missing a package from the reviewed release set")
     return manifest
 
 
@@ -1086,7 +1097,7 @@ def write_manifest(args: argparse.Namespace) -> None:
         expected_payload.add(filename)
 
     if upstream_names and upstream_names != SCOTTLAND_PACKAGE_NAMES:
-        fail("an upstream Scottland import must contain the exact core and adapter pair")
+        fail("an upstream Scottland import must contain the exact core, Sunlight, and adapter packages")
 
     if base is not None:
         if not set(base_by_name).issubset(package_names):
@@ -1333,7 +1344,7 @@ def load_and_verify_bundle(
     upstream_names = {name for name, origin in origins.items() if origin == "upstream-release"}
     pair_manifest = load_scottland_pair_manifest() if upstream_names else None
     if upstream_names and upstream_names != SCOTTLAND_PACKAGE_NAMES:
-        fail("an upstream Scottland import must contain the exact core and adapter pair")
+        fail("an upstream Scottland import must contain the exact core, Sunlight, and adapter packages")
 
     if base is None:
         if not REQUIRED_INITIAL.issubset(names):
