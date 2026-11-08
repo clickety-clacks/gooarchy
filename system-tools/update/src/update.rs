@@ -53,6 +53,11 @@ pub fn run_update(input: &mut impl BufRead, output: &mut impl Write) -> Result<(
 
     let before = versions()?;
     let local_scottland = before.scottland.is_some() && local_scottland_selected()?;
+    let local_scottland_source = if local_scottland {
+        Some(saved_local_scottland_source()?)
+    } else {
+        None
+    };
     writeln!(
         output,
         "Update Arch packages, installed AUR/git packages and Gooarchy."
@@ -86,6 +91,9 @@ pub fn run_update(input: &mut impl BufRead, output: &mut impl Write) -> Result<(
     }
     let log_start = fs::metadata(PACMAN_LOG).map(|metadata| metadata.len()).ok();
 
+    // Refresh the adopted source checkout before pacman can move Wayfire past the
+    // installed local Scottland package's exact dependency.
+    run_tool("gooarchy-source", &["update"])?;
     pacman(&["-Sy", "--needed", "archlinux-keyring"])?;
     if local_scottland {
         pacman(&["-Syu", "--nodeps"])?;
@@ -96,9 +104,11 @@ pub fn run_update(input: &mut impl BufRead, output: &mut impl Write) -> Result<(
     }
     let wayfire_after_arch_update = package_version("wayfire")?;
     let rebuild_scottland = before.wayfire != wayfire_after_arch_update;
-    run_tool("gooarchy-source", &["update"])?;
     if local_scottland && rebuild_scottland {
-        rebuild_local_scottland()?;
+        let source = local_scottland_source.as_ref().ok_or_else(|| {
+            Failure::new("Scottland's saved local source pin is unavailable for its rebuild")
+        })?;
+        rebuild_local_scottland(source)?;
     }
     run_software_aur_update(rebuild_scottland && !local_scottland, local_scottland)?;
 
@@ -454,6 +464,46 @@ fn local_scottland_selected() -> Result<bool, Failure> {
     }
 }
 
+struct ScottlandSource {
+    repository: String,
+    ref_kind: String,
+    reference: String,
+}
+
+fn saved_local_scottland_source() -> Result<ScottlandSource, Failure> {
+    let path = gooarchy_state_dir()?.join("builds.tsv");
+    let contents = fs::read_to_string(&path).map_err(|error| {
+        Failure::new(format!(
+            "cannot read Scottland's saved local source record: {error}"
+        ))
+    })?;
+    let record = contents
+        .lines()
+        .rev()
+        .find(|line| line.split('\t').next() == Some("scottland"))
+        .ok_or_else(|| Failure::new("Scottland has no saved local source record"))?;
+    let fields: Vec<&str> = record.split('\t').collect();
+    if fields.len() < 7 {
+        return Err(Failure::new(
+            "Scottland's saved local source record is incomplete; restore its pin before updating",
+        ));
+    }
+    let source = ScottlandSource {
+        repository: fields[1].to_owned(),
+        ref_kind: fields[5].to_owned(),
+        reference: fields[6].to_owned(),
+    };
+    if source.repository.is_empty()
+        || source.reference.is_empty()
+        || !matches!(source.ref_kind.as_str(), "tag" | "branch")
+    {
+        return Err(Failure::new(
+            "Scottland's saved local source pin is invalid; restore its pin before updating",
+        ));
+    }
+    Ok(source)
+}
+
 fn gooarchy_state_dir() -> Result<PathBuf, Failure> {
     Ok(state_home()?.join("gooarchy"))
 }
@@ -485,20 +535,20 @@ fn user_home() -> Result<PathBuf, Failure> {
         .ok_or_else(|| Failure::new("HOME must be set to an absolute path"))
 }
 
-fn rebuild_local_scottland() -> Result<(), Failure> {
-    let source = Command::new(tool_path("gooarchy-source")?)
+fn rebuild_local_scottland(saved_source: &ScottlandSource) -> Result<(), Failure> {
+    let update_source = Command::new(tool_path("gooarchy-source")?)
         .args(["edit", "update", "--path"])
         .output()
         .map_err(|error| {
             Failure::new(format!("cannot locate Gooarchy's source checkout: {error}"))
         })?;
-    if !source.status.success() {
+    if !update_source.status.success() {
         return Err(Failure::new(format!(
             "gooarchy-source could not locate its update source (status {})",
-            source.status
+            update_source.status
         )));
     }
-    let tool_directory = PathBuf::from(String::from_utf8_lossy(&source.stdout).trim());
+    let tool_directory = PathBuf::from(String::from_utf8_lossy(&update_source.stdout).trim());
     if !tool_directory.is_absolute() {
         return Err(Failure::new(
             "gooarchy-source returned a non-absolute update source path",
@@ -525,6 +575,9 @@ fn rebuild_local_scottland() -> Result<(), Failure> {
         .env("GOOARCHY_STATE", &state)
         .env("GOOARCHY_BUILD", &build)
         .env("GOOARCHY_INSTALL_LOG_FILE", state.join("install.log"))
+        .env("GOOARCHY_SCOTTLAND_REPO", &saved_source.repository)
+        .env("GOOARCHY_SCOTTLAND_REF_KIND", &saved_source.ref_kind)
+        .env("GOOARCHY_SCOTTLAND_REF", &saved_source.reference)
         .status()
         .map_err(|error| {
             Failure::new(format!("cannot start the local Scottland rebuild: {error}"))
