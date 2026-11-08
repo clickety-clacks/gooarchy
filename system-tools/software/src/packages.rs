@@ -1,6 +1,7 @@
 use crate::commands::{Runner, args as command_args, command_error, output_text, strings};
 use crate::ui;
 use common::Failure;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::ffi::OsString;
@@ -11,6 +12,7 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/";
+const AUR_INFO_BATCH_SIZE: usize = 50;
 
 pub fn dispatch(
     args: &[String],
@@ -104,6 +106,23 @@ fn aur_dispatch(
             if !selected.is_empty() {
                 install_aur(&selected, runner, output)?;
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        [command, options @ ..] if command == "__update" => {
+            let mut forced_rebuilds = Vec::new();
+            let mut local_scottland = false;
+            for option in options {
+                match option.as_str() {
+                    "scottland" => forced_rebuilds.push(option.clone()),
+                    "--local-scottland" => local_scottland = true,
+                    _ => {
+                        return Err(ui::usage(
+                            "internal AUR update accepts only the scottland rebuild hint and local-scottland marker",
+                        ));
+                    }
+                }
+            }
+            update_installed_aur(&forced_rebuilds, local_scottland, runner, output)?;
             Ok(ExitCode::SUCCESS)
         }
         [] => Err(ui::usage("expected pkg aur add, install, or accessible")),
@@ -336,12 +355,252 @@ fn install_aur(
     }
 
     for (base, packages) in bases {
-        build_and_install_aur_base(&base, &packages, runner)?;
+        build_and_install_aur_base(&base, &packages, runner, false)?;
     }
     if !all_installed(&missing, runner)? {
         return Err(Failure::new("one or more AUR packages did not install"));
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ForeignPackage {
+    name: String,
+    version: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AurPackage {
+    name: String,
+    base: String,
+    version: String,
+}
+
+fn update_installed_aur(
+    forced_rebuilds: &[String],
+    local_scottland: bool,
+    runner: &Runner,
+    output: &mut impl Write,
+) -> Result<(), Failure> {
+    let installed_output = runner.output("pacman", &command_args(&["-Qm"]))?;
+    if !installed_output.status.success() {
+        return Err(command_error("pacman", &installed_output));
+    }
+    let mut installed = parse_foreign_packages(&output_text(&installed_output));
+    if local_scottland {
+        let previous_count = installed.len();
+        installed.retain(|package| package.name != "scottland");
+        if installed.len() != previous_count {
+            writeln!(
+                output,
+                "Scottland stays on its configured local source pin and is rebuilt separately after a Wayfire change."
+            )?;
+        }
+    }
+    if installed.is_empty() {
+        writeln!(
+            output,
+            "No installed foreign packages were found to update."
+        )?;
+        return Ok(());
+    }
+
+    let aur_packages = installed_aur_info(&installed, runner)?;
+    let aur_by_name: BTreeMap<&str, &AurPackage> = aur_packages
+        .iter()
+        .map(|package| (package.name.as_str(), package))
+        .collect();
+
+    let mut installed_by_base: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut rebuild_bases = HashSet::new();
+    let mut not_in_aur = Vec::new();
+    for package in &installed {
+        let Some(aur_package) = aur_by_name.get(package.name.as_str()) else {
+            not_in_aur.push(package.name.clone());
+            continue;
+        };
+        if !valid_package_name(&aur_package.base) || aur_package.version.is_empty() {
+            return Err(Failure::new(format!(
+                "AUR returned incomplete package information for {}",
+                package.name
+            )));
+        }
+        installed_by_base
+            .entry(aur_package.base.clone())
+            .or_default()
+            .push(package.name.clone());
+        let vcs_package = is_vcs_package(&package.name);
+        let forced = forced_rebuilds
+            .iter()
+            .any(|forced| forced == &package.name || forced == &aur_package.base);
+        let version_is_newer = if vcs_package || forced || package.version == aur_package.version {
+            false
+        } else {
+            aur_version_is_newer(&package.version, &aur_package.version, runner)?
+        };
+        if needs_aur_rebuild(
+            &package.name,
+            &aur_package.base,
+            version_is_newer,
+            forced_rebuilds,
+        ) {
+            rebuild_bases.insert(aur_package.base.clone());
+        }
+    }
+
+    if !not_in_aur.is_empty() {
+        writeln!(
+            output,
+            "Leaving foreign packages not published in the AUR unchanged: {}.",
+            not_in_aur.join(", ")
+        )?;
+    }
+    if rebuild_bases.is_empty() {
+        writeln!(output, "Installed AUR packages are up to date.")?;
+        return Ok(());
+    }
+
+    if !runner.exists("git") {
+        return Err(Failure::new("git is required to update AUR packages"));
+    }
+    if !runner.exists("makepkg") {
+        return Err(Failure::new("makepkg is required to update AUR packages"));
+    }
+
+    let selected: Vec<String> = installed_by_base
+        .iter()
+        .filter(|(base, _)| rebuild_bases.contains(*base))
+        .flat_map(|(_, packages)| packages.iter().cloned())
+        .collect();
+    writeln!(
+        output,
+        "Rebuild installed AUR/git packages: {}.",
+        selected.join(", ")
+    )?;
+    if forced_rebuilds.iter().any(|package| package == "scottland") {
+        writeln!(
+            output,
+            "Reason: update newer AUR versions, refresh VCS packages, and rebuild Scottland after a Wayfire change."
+        )?;
+    } else {
+        writeln!(
+            output,
+            "Reason: update newer AUR versions and refresh packages built from Git or another VCS."
+        )?;
+    }
+    writeln!(
+        output,
+        "Undo: restore the pre-update Btrfs snapshot shown by gooarchy update, or reinstall prior package archives from the pacman cache."
+    )?;
+
+    for (base, packages) in installed_by_base {
+        if rebuild_bases.contains(&base) {
+            build_and_install_aur_base(&base, &packages, runner, true)?;
+        }
+    }
+    if !all_installed(&selected, runner)? {
+        return Err(Failure::new(
+            "one or more updated AUR packages are no longer installed",
+        ));
+    }
+    Ok(())
+}
+
+fn installed_aur_info(
+    installed: &[ForeignPackage],
+    runner: &Runner,
+) -> Result<Vec<AurPackage>, Failure> {
+    let mut packages = Vec::new();
+    for batch in installed.chunks(AUR_INFO_BATCH_SIZE) {
+        let mut query = vec![("v", "5"), ("type", "info")];
+        for package in batch {
+            query.push(("arg[]", package.name.as_str()));
+        }
+        let response = aur_request(runner, &query)?;
+        let parsed = runner.output_with_input(
+            "jq",
+            &command_args(&[
+                "-r",
+                ".results[]? | [.Name, (.PackageBase // .Name), (.Version // \"\")] | @tsv",
+            ]),
+            &response.stdout,
+        )?;
+        if !parsed.status.success() {
+            return Err(command_error("jq", &parsed));
+        }
+        packages.extend(parse_aur_package_info(&output_text(&parsed)));
+    }
+    Ok(packages)
+}
+
+fn parse_foreign_packages(text: &str) -> Vec<ForeignPackage> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some(ForeignPackage {
+                name: fields.next()?.to_owned(),
+                version: fields.next()?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn parse_aur_package_info(text: &str) -> Vec<AurPackage> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            Some(AurPackage {
+                name: fields.next()?.to_owned(),
+                base: fields.next()?.to_owned(),
+                version: fields.next()?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn needs_aur_rebuild(
+    name: &str,
+    base: &str,
+    version_is_newer: bool,
+    forced_rebuilds: &[String],
+) -> bool {
+    version_is_newer
+        || is_vcs_package(name)
+        || forced_rebuilds
+            .iter()
+            .any(|forced| forced == name || forced == base)
+}
+
+fn aur_version_is_newer(
+    installed_version: &str,
+    aur_version: &str,
+    runner: &Runner,
+) -> Result<bool, Failure> {
+    let comparison = runner.output("vercmp", &command_args(&[aur_version, installed_version]))?;
+    if !comparison.status.success() {
+        return Err(command_error("vercmp", &comparison));
+    }
+    match parse_version_comparison(&output_text(&comparison)) {
+        Some(Ordering::Greater) => Ok(true),
+        Some(Ordering::Equal | Ordering::Less) => Ok(false),
+        None => Err(Failure::new(
+            "could not compare installed and AUR package versions",
+        )),
+    }
+}
+
+fn parse_version_comparison(text: &str) -> Option<Ordering> {
+    match text.trim().parse::<i32>().ok()?.cmp(&0) {
+        Ordering::Less => Some(Ordering::Less),
+        Ordering::Equal => Some(Ordering::Equal),
+        Ordering::Greater => Some(Ordering::Greater),
+    }
+}
+
+fn is_vcs_package(name: &str) -> bool {
+    ["-git", "-hg", "-svn", "-bzr", "-cvs", "-darcs"]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
 }
 
 fn missing_packages(packages: &[String], runner: &Runner) -> Result<Vec<String>, Failure> {
@@ -358,6 +617,7 @@ fn build_and_install_aur_base(
     base: &str,
     packages: &[String],
     runner: &Runner,
+    update_flow: bool,
 ) -> Result<(), Failure> {
     let scratch = Scratch::new()?;
     let source = scratch.path.join("source");
@@ -434,7 +694,18 @@ fn build_and_install_aur_base(
             missing.join(", ")
         )));
     }
-    let mut install_args = command_args(&["pacman", "-U", "--noconfirm", "--"]);
+    let mut install_args = if update_flow {
+        command_args(&[
+            "env",
+            "GOOARCHY_UPDATE=1",
+            "pacman",
+            "-U",
+            "--noconfirm",
+            "--",
+        ])
+    } else {
+        command_args(&["pacman", "-U", "--noconfirm", "--"])
+    };
     install_args.extend(files);
     runner.status("sudo", &install_args)
 }
@@ -576,5 +847,43 @@ mod tests {
             .filter(|name| seen.insert(*name))
             .collect();
         assert_eq!(unique, ["one", "two"]);
+    }
+
+    #[test]
+    fn parses_pacman_foreign_packages_and_aur_versions() {
+        assert_eq!(
+            parse_foreign_packages("strata-git 1.2.r4.gabc-1\nscottland 3.0-2\n"),
+            [
+                ForeignPackage {
+                    name: "strata-git".to_owned(),
+                    version: "1.2.r4.gabc-1".to_owned(),
+                },
+                ForeignPackage {
+                    name: "scottland".to_owned(),
+                    version: "3.0-2".to_owned(),
+                },
+            ]
+        );
+        assert_eq!(
+            parse_aur_package_info("strata-git\tstrata\t1.2.r4.gabc-1\n"),
+            [AurPackage {
+                name: "strata-git".to_owned(),
+                base: "strata".to_owned(),
+                version: "1.2.r4.gabc-1".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn rebuilds_newer_and_vcs_aur_packages_and_wayfire_changed_scottland() {
+        let forced = vec!["scottland".to_owned()];
+        assert!(!needs_aur_rebuild("ordinary", "ordinary", false, &[]));
+        assert!(needs_aur_rebuild("ordinary", "ordinary", true, &[]));
+        assert!(needs_aur_rebuild("strata-git", "strata-git", false, &[]));
+        assert!(needs_aur_rebuild("scottland", "scottland", false, &forced));
+        assert_eq!(parse_version_comparison("-4\n"), Some(Ordering::Less));
+        assert_eq!(parse_version_comparison("0\n"), Some(Ordering::Equal));
+        assert_eq!(parse_version_comparison("2\n"), Some(Ordering::Greater));
+        assert_eq!(parse_version_comparison("invalid"), None);
     }
 }
