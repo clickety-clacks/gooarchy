@@ -52,13 +52,19 @@ pub fn run_update(input: &mut impl BufRead, output: &mut impl Write) -> Result<(
     }
 
     let before = versions()?;
+    let local_scottland = before.scottland.is_some() && local_scottland_selected()?;
     writeln!(
         output,
         "Update Arch packages, installed AUR/git packages and Gooarchy."
     )?;
     writeln!(
         output,
-        "Reason: apply the current package updates and rebuild foreign Git packages against the updated system."
+        "{}",
+        if local_scottland {
+            "Reason: update Arch packages, then rebuild Scottland from its configured local source pin for the installed Wayfire version. The Arch transaction temporarily skips dependency checks so Scottland's old exact Wayfire pin does not block the update."
+        } else {
+            "Reason: apply the current package updates and rebuild foreign Git packages against the updated system."
+        }
     )?;
     writeln!(
         output,
@@ -81,11 +87,20 @@ pub fn run_update(input: &mut impl BufRead, output: &mut impl Write) -> Result<(
     let log_start = fs::metadata(PACMAN_LOG).map(|metadata| metadata.len()).ok();
 
     pacman(&["-Sy", "--needed", "archlinux-keyring"])?;
-    pacman(&["-Syu"])?;
+    if local_scottland {
+        pacman(&["-Syu", "--nodeps"])?;
+    } else if before.scottland.is_some() {
+        pacman(&["-Syu", "gooarchy/scottland"])?;
+    } else {
+        pacman(&["-Syu"])?;
+    }
     let wayfire_after_arch_update = package_version("wayfire")?;
     let rebuild_scottland = before.wayfire != wayfire_after_arch_update;
-    run_software_aur_update(rebuild_scottland)?;
     run_tool("gooarchy-source", &["update"])?;
+    if local_scottland && rebuild_scottland {
+        rebuild_local_scottland()?;
+    }
+    run_software_aur_update(rebuild_scottland && !local_scottland, local_scottland)?;
 
     let after = versions()?;
     report_versions(&before, &after, output)?;
@@ -409,12 +424,129 @@ fn run_tool_output(name: &str, args: &[&str]) -> Result<Output, Failure> {
     }
 }
 
-fn run_software_aur_update(rebuild_scottland: bool) -> Result<(), Failure> {
+fn local_scottland_selected() -> Result<bool, Failure> {
+    let plan = gooarchy_state_dir()?.join("repository-plan.sh");
+    let contents = match fs::read_to_string(&plan) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Failure::new(
+                "Gooarchy cannot determine Scottland's configured source because its saved package plan is missing; restore that plan before updating",
+            ));
+        }
+        Err(error) => {
+            return Err(Failure::new(format!(
+                "cannot read Gooarchy's saved package plan: {error}"
+            )));
+        }
+    };
+    let selected = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("GOOARCHY_BUILD_LOCAL_SCOTTLAND="))
+        .ok_or_else(|| {
+            Failure::new("Gooarchy's saved package plan has no Scottland source selection")
+        })?;
+    match selected {
+        "1" => Ok(true),
+        "0" => Ok(false),
+        _ => Err(Failure::new(
+            "Gooarchy's saved Scottland source selection is not recognized",
+        )),
+    }
+}
+
+fn gooarchy_state_dir() -> Result<PathBuf, Failure> {
+    Ok(state_home()?.join("gooarchy"))
+}
+
+fn state_home() -> Result<PathBuf, Failure> {
+    if let Some(path) = env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        return Ok(path);
+    }
+    Ok(user_home()?.join(".local/state"))
+}
+
+fn cache_home() -> Result<PathBuf, Failure> {
+    if let Some(path) = env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        return Ok(path);
+    }
+    Ok(user_home()?.join(".cache"))
+}
+
+fn user_home() -> Result<PathBuf, Failure> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| Failure::new("HOME must be set to an absolute path"))
+}
+
+fn rebuild_local_scottland() -> Result<(), Failure> {
+    let source = Command::new(tool_path("gooarchy-source")?)
+        .args(["edit", "update", "--path"])
+        .output()
+        .map_err(|error| {
+            Failure::new(format!("cannot locate Gooarchy's source checkout: {error}"))
+        })?;
+    if !source.status.success() {
+        return Err(Failure::new(format!(
+            "gooarchy-source could not locate its update source (status {})",
+            source.status
+        )));
+    }
+    let tool_directory = PathBuf::from(String::from_utf8_lossy(&source.stdout).trim());
+    if !tool_directory.is_absolute() {
+        return Err(Failure::new(
+            "gooarchy-source returned a non-absolute update source path",
+        ));
+    }
+    let checkout = tool_directory
+        .ancestors()
+        .find(|path| path.join("install/packaging/scottland.sh").is_file())
+        .ok_or_else(|| {
+            Failure::new("Gooarchy's source checkout has no Scottland package build step")
+        })?
+        .to_path_buf();
+    let state = gooarchy_state_dir()?;
+    let install = checkout.join("install");
+    let build = cache_home()?.join("gooarchy/build");
+    fs::create_dir_all(&build).map_err(|error| {
+        Failure::new(format!("cannot prepare the local build directory: {error}"))
+    })?;
+    let status = Command::new("bash")
+        .args(["-eEo", "pipefail", "-c"])
+        .arg("source \"$GOOARCHY_INSTALL/packaging/scottland.sh\"")
+        .env("GOOARCHY_PATH", &checkout)
+        .env("GOOARCHY_INSTALL", &install)
+        .env("GOOARCHY_STATE", &state)
+        .env("GOOARCHY_BUILD", &build)
+        .env("GOOARCHY_INSTALL_LOG_FILE", state.join("install.log"))
+        .status()
+        .map_err(|error| {
+            Failure::new(format!("cannot start the local Scottland rebuild: {error}"))
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Failure::new(format!(
+            "local Scottland rebuild failed with {status}"
+        )))
+    }
+}
+
+fn run_software_aur_update(rebuild_scottland: bool, local_scottland: bool) -> Result<(), Failure> {
     let software = tool_path("gooarchy-software")?;
     let mut command = Command::new(software);
     command.args(["pkg", "aur", "__update"]);
     if rebuild_scottland {
         command.arg("scottland");
+    }
+    if local_scottland {
+        command.arg("--local-scottland");
     }
     let status = command
         .status()

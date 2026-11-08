@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/";
+const AUR_INFO_BATCH_SIZE: usize = 50;
 
 pub fn dispatch(
     args: &[String],
@@ -107,13 +108,21 @@ fn aur_dispatch(
             }
             Ok(ExitCode::SUCCESS)
         }
-        [command, forced @ ..] if command == "__update" => {
-            if forced.iter().any(|package| package != "scottland") {
-                return Err(ui::usage(
-                    "internal AUR update accepts only the scottland rebuild hint",
-                ));
+        [command, options @ ..] if command == "__update" => {
+            let mut forced_rebuilds = Vec::new();
+            let mut local_scottland = false;
+            for option in options {
+                match option.as_str() {
+                    "scottland" => forced_rebuilds.push(option.clone()),
+                    "--local-scottland" => local_scottland = true,
+                    _ => {
+                        return Err(ui::usage(
+                            "internal AUR update accepts only the scottland rebuild hint and local-scottland marker",
+                        ));
+                    }
+                }
             }
-            update_installed_aur(forced, runner, output)?;
+            update_installed_aur(&forced_rebuilds, local_scottland, runner, output)?;
             Ok(ExitCode::SUCCESS)
         }
         [] => Err(ui::usage("expected pkg aur add, install, or accessible")),
@@ -369,6 +378,7 @@ struct AurPackage {
 
 fn update_installed_aur(
     forced_rebuilds: &[String],
+    local_scottland: bool,
     runner: &Runner,
     output: &mut impl Write,
 ) -> Result<(), Failure> {
@@ -376,7 +386,17 @@ fn update_installed_aur(
     if !installed_output.status.success() {
         return Err(command_error("pacman", &installed_output));
     }
-    let installed = parse_foreign_packages(&output_text(&installed_output));
+    let mut installed = parse_foreign_packages(&output_text(&installed_output));
+    if local_scottland {
+        let previous_count = installed.len();
+        installed.retain(|package| package.name != "scottland");
+        if installed.len() != previous_count {
+            writeln!(
+                output,
+                "Scottland stays on its configured local source pin and is rebuilt separately after a Wayfire change."
+            )?;
+        }
+    }
     if installed.is_empty() {
         writeln!(
             output,
@@ -385,23 +405,7 @@ fn update_installed_aur(
         return Ok(());
     }
 
-    let mut query = vec![("v", "5"), ("type", "info")];
-    for package in &installed {
-        query.push(("arg[]", package.name.as_str()));
-    }
-    let response = aur_request(runner, &query)?;
-    let parsed = runner.output_with_input(
-        "jq",
-        &command_args(&[
-            "-r",
-            ".results[]? | [.Name, (.PackageBase // .Name), (.Version // \"\")] | @tsv",
-        ]),
-        &response.stdout,
-    )?;
-    if !parsed.status.success() {
-        return Err(command_error("jq", &parsed));
-    }
-    let aur_packages = parse_aur_package_info(&output_text(&parsed));
+    let aur_packages = installed_aur_info(&installed, runner)?;
     let aur_by_name: BTreeMap<&str, &AurPackage> = aur_packages
         .iter()
         .map(|package| (package.name.as_str(), package))
@@ -500,6 +504,33 @@ fn update_installed_aur(
         ));
     }
     Ok(())
+}
+
+fn installed_aur_info(
+    installed: &[ForeignPackage],
+    runner: &Runner,
+) -> Result<Vec<AurPackage>, Failure> {
+    let mut packages = Vec::new();
+    for batch in installed.chunks(AUR_INFO_BATCH_SIZE) {
+        let mut query = vec![("v", "5"), ("type", "info")];
+        for package in batch {
+            query.push(("arg[]", package.name.as_str()));
+        }
+        let response = aur_request(runner, &query)?;
+        let parsed = runner.output_with_input(
+            "jq",
+            &command_args(&[
+                "-r",
+                ".results[]? | [.Name, (.PackageBase // .Name), (.Version // \"\")] | @tsv",
+            ]),
+            &response.stdout,
+        )?;
+        if !parsed.status.success() {
+            return Err(command_error("jq", &parsed));
+        }
+        packages.extend(parse_aur_package_info(&output_text(&parsed)));
+    }
+    Ok(packages)
 }
 
 fn parse_foreign_packages(text: &str) -> Vec<ForeignPackage> {

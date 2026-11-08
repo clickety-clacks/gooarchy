@@ -2,12 +2,16 @@
 
 Run `gooarchy update` to update Arch packages, installed AUR packages, and Gooarchy from its
 configured package repository. The command asks once before it changes packages, holds a sleep
-inhibitor during the update, refreshes `archlinux-keyring`, then runs a full `pacman -Syu`. It
-rebuilds installed AUR packages whose versions changed and refreshes AUR packages built from Git or
-another VCS. Foreign packages that are not published in the AUR are left unchanged.
+inhibitor during the update, refreshes `archlinux-keyring`, then performs a full `pacman -Syu`
+transaction. It rebuilds installed AUR packages whose versions changed and refreshes AUR packages
+built from Git or another VCS. Foreign packages that are not published in the AUR are left
+unchanged. AUR info requests are split into small batches.
 
-When Wayfire changes, Gooarchy rebuilds an AUR Scottland package if one is installed. The signed
-package repository supplies a matching Scottland build when that package is available there. A
+When Wayfire changes, Gooarchy keeps Scottland on its configured source. With the normal repository
+package, it selects `gooarchy/scottland` in the same pacman transaction as Wayfire. With an explicit
+local Scottland source pin, pacman temporarily skips dependency checks so the old exact Wayfire
+dependency does not block the system update; Gooarchy then rebuilds and installs Scottland from that
+same pin for the installed Wayfire version. That local package is excluded from AUR rebuilding. A
 pacman hook blocks a Wayfire upgrade started outside `gooarchy update` and explains why the paired
 update is needed.
 
