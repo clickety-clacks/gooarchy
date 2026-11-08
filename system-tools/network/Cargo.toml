@@ -1,0 +1,10 @@
+[package]
+name = "gooarchy-network"
+description = "Gooarchy network status and Wi-Fi recovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+common = { package = "gooarchy-common", path = "../common" }

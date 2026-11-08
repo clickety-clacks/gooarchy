@@ -55,7 +55,7 @@ build() {
   )
 
   install -d "$srcdir/tools/base"
-  for tool in gooarchy gooarchy-lock gooarchy-look gooarchy-software gooarchy-source; do
+  for tool in gooarchy gooarchy-hw gooarchy-lock gooarchy-look gooarchy-network gooarchy-software gooarchy-source; do
     install -m755 "$srcdir/target/release/$tool" "$srcdir/tools/base/$tool"
   done
   git clone --quiet --no-checkout --no-hardlinks "$snapshot" "$srcdir/source-bundle"
