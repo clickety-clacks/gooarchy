@@ -11,7 +11,15 @@ When Wayfire changes, Gooarchy keeps Scottland on its configured source. With th
 package, it selects `gooarchy/scottland` in the same pacman transaction as Wayfire. With an explicit
 local Scottland source pin, pacman temporarily skips dependency checks so the old exact Wayfire
 dependency does not block the system update; Gooarchy then rebuilds and installs Scottland from that
-same pin for the installed Wayfire version. That local package is excluded from AUR rebuilding. A
+same pin for the installed Wayfire version. Before changing packages, it requires archives matching
+both installed versions in pacman's configured cache or the local Scottland build directory, and
+copies them into its update recovery cache so a failed clone or clean build cannot remove them.
+If either archive is missing, the update stops without changing packages and names the missing
+version. On an Arch transaction or Scottland rebuild/install failure, it restores both archives
+in one pacman transaction and checks the installed versions before reporting recovery. This works
+on non-Btrfs roots too. Other packages already upgraded are not rolled back. If recovery itself
+fails, it reports that separately with the archive paths and tells you not to log out or restart.
+The local Scottland package is excluded from repository and AUR replacement. A
 pacman hook blocks a Wayfire upgrade started outside `gooarchy update` and explains why the paired
 update is needed.
 

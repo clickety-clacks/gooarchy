@@ -66,7 +66,7 @@ pub fn run_update(input: &mut impl BufRead, output: &mut impl Write) -> Result<(
         output,
         "{}",
         if local_scottland {
-            "Reason: update Arch packages, then rebuild Scottland from its configured local source pin for the installed Wayfire version. The Arch transaction temporarily skips dependency checks so Scottland's old exact Wayfire pin does not block the update."
+            "Reason: preserve the installed Wayfire and Scottland archives, update Arch packages, then rebuild Scottland from its configured local source pin. If the update or rebuild fails, restore the prior pair."
         } else {
             "Reason: apply the current package updates and rebuild foreign Git packages against the updated system."
         }
@@ -82,6 +82,12 @@ pub fn run_update(input: &mut impl BufRead, output: &mut impl Write) -> Result<(
         return Ok(());
     }
 
+    // Capture both archives before source refresh or the rebuild can clean its cache.
+    let recovery = if local_scottland {
+        Some(preserve_desktop_packages(&before)?)
+    } else {
+        None
+    };
     let snapshot = take_snapshot(output)?;
     if let Some(id) = snapshot {
         writeln!(
@@ -95,21 +101,28 @@ pub fn run_update(input: &mut impl BufRead, output: &mut impl Write) -> Result<(
     // installed local Scottland package's exact dependency.
     run_tool("gooarchy-source", &["update"])?;
     pacman(&["-Sy", "--needed", "archlinux-keyring"])?;
-    if local_scottland {
-        pacman(&["-Syu", "--nodeps"])?;
-    } else if before.scottland.is_some() {
-        pacman(&["-Syu", "gooarchy/scottland"])?;
+    let rebuild_scottland = if let Some(archives) = recovery.as_ref() {
+        update_local_desktop(
+            || {
+                pacman(&["-Syu", "--nodeps", "--ignore", "scottland"])?;
+                let changed = before.wayfire != package_version("wayfire")?;
+                if changed {
+                    rebuild_local_scottland(local_scottland_source.as_ref().ok_or_else(|| {
+                        Failure::new("Scottland's saved local source pin is unavailable")
+                    })?)?;
+                }
+                Ok(changed)
+            },
+            || restore_desktop_packages(archives, &before),
+        )?
     } else {
-        pacman(&["-Syu"])?;
-    }
-    let wayfire_after_arch_update = package_version("wayfire")?;
-    let rebuild_scottland = before.wayfire != wayfire_after_arch_update;
-    if local_scottland && rebuild_scottland {
-        let source = local_scottland_source.as_ref().ok_or_else(|| {
-            Failure::new("Scottland's saved local source pin is unavailable for its rebuild")
-        })?;
-        rebuild_local_scottland(source)?;
-    }
+        if before.scottland.is_some() {
+            pacman(&["-Syu", "gooarchy/scottland"])?;
+        } else {
+            pacman(&["-Syu"])?;
+        }
+        before.wayfire != package_version("wayfire")?
+    };
     run_software_aur_update(rebuild_scottland && !local_scottland, local_scottland)?;
 
     let after = versions()?;
@@ -391,6 +404,142 @@ fn pacman(args: &[&str]) -> Result<(), Failure> {
     }
 }
 
+// Only the local source path separates the Wayfire transaction from Scottland's
+// rebuild. Any error in that interval must restore the pair, including a pacman
+// post-transaction failure and an error after the rebuilt package was installed.
+fn update_local_desktop(
+    update: impl FnOnce() -> Result<bool, Failure>,
+    restore: impl FnOnce() -> Result<(), Failure>,
+) -> Result<bool, Failure> {
+    match update() {
+        Ok(changed) => Ok(changed),
+        Err(error) => match restore() {
+            Ok(()) => Err(Failure::new(format!(
+                "{error}; restored the previous Wayfire and Scottland packages. The desktop was left on the working versions; the rest of the update was stopped."
+            ))),
+            Err(recovery) => Err(Failure::new(format!(
+                "{error}; restoring the previous desktop packages also failed: {recovery}. Do not log out or restart until the saved packages have been restored."
+            ))),
+        },
+    }
+}
+
+fn preserve_desktop_packages(before: &Versions) -> Result<Vec<PathBuf>, Failure> {
+    let cache_dirs = Command::new("pacman-conf")
+        .arg("CacheDir")
+        .output()
+        .map_err(|error| Failure::new(format!("cannot read pacman's package cache: {error}")))?;
+    if !cache_dirs.status.success() {
+        return Err(Failure::new(
+            "cannot read pacman's package cache; no packages changed",
+        ));
+    }
+    let mut directories: Vec<PathBuf> = String::from_utf8_lossy(&cache_dirs.stdout)
+        .lines()
+        .map(PathBuf::from)
+        .collect();
+    let saved = cache_home()?.join("gooarchy/update-recovery");
+    directories.push(saved.clone());
+    directories.push(cache_home()?.join("gooarchy/build/scottland/packaging/arch"));
+    let mut archives = Vec::new();
+    for (package, version) in [
+        ("wayfire", &before.wayfire),
+        ("scottland", &before.scottland),
+    ] {
+        let version = version.as_ref().ok_or_else(|| {
+            Failure::new(format!(
+                "cannot preserve {package}: it is not installed; no packages changed"
+            ))
+        })?;
+        let mut found = None;
+        for directory in &directories {
+            let entries = match fs::read_dir(directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(Failure::new(format!(
+                        "cannot read {}: {error}",
+                        directory.display()
+                    )));
+                }
+            };
+            for entry in entries {
+                let path = entry?.path();
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                if !name.starts_with(&format!("{package}-"))
+                    || !name.contains(".pkg.tar")
+                    || name.ends_with(".sig")
+                {
+                    continue;
+                }
+                // Query metadata: filenames alone do not establish name/version.
+                let query = Command::new("pacman")
+                    .args(["-Qp", "--"])
+                    .arg(&path)
+                    .output()?;
+                if query.status.success()
+                    && String::from_utf8_lossy(&query.stdout)
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        == [package, version.as_str()]
+                {
+                    found = Some(path);
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        archives.push(found.ok_or_else(|| Failure::new(format!(
+            "the installed {package} {version} archive is missing. Put that exact package archive in pacman's CacheDir before retrying; no packages changed"
+        )))?);
+    }
+    fs::create_dir_all(&saved)?;
+    archives
+        .into_iter()
+        .map(|archive| {
+            let destination = saved.join(
+                archive
+                    .file_name()
+                    .ok_or_else(|| Failure::new("invalid package archive path"))?,
+            );
+            if archive == destination {
+                return Ok(destination);
+            }
+            fs::copy(&archive, &destination)?;
+            let signature = PathBuf::from(format!("{}.sig", archive.display()));
+            if signature.is_file() {
+                fs::copy(
+                    signature,
+                    PathBuf::from(format!("{}.sig", destination.display())),
+                )?;
+            }
+            Ok(destination)
+        })
+        .collect()
+}
+
+fn restore_desktop_packages(archives: &[PathBuf], before: &Versions) -> Result<(), Failure> {
+    let paths: Vec<String> = archives
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let mut args = vec!["-U", "--noconfirm", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    pacman(&args).map_err(|error| {
+        Failure::new(format!("{error}; recovery archives: {}", paths.join(", ")))
+    })?;
+    let restored = versions()?;
+    if restored.wayfire != before.wayfire || restored.scottland != before.scottland {
+        return Err(Failure::new(format!(
+            "installed versions do not match the saved pair; recovery archives: {}",
+            paths.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 fn tool_path(name: &str) -> Result<PathBuf, Failure> {
     let current = env::current_exe()
         .map_err(|error| Failure::new(format!("cannot locate Gooarchy's system tools: {error}")))?;
@@ -644,6 +793,57 @@ fn initramfs_failed(log: &str) -> bool {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn failed_upgrade_clone_build_or_install_restores_the_pair_and_stops() {
+        for stage in [
+            "pacman transaction",
+            "source clone",
+            "package build",
+            "package install",
+        ] {
+            let restored = std::cell::Cell::new(false);
+            let error = update_local_desktop(
+                || Err(Failure::new(format!("{stage} failed"))),
+                || {
+                    restored.set(true);
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+            assert!(restored.get(), "{stage}");
+            assert!(error.to_string().contains(stage));
+            assert!(error.to_string().contains("left on the working versions"));
+        }
+    }
+
+    #[test]
+    fn successful_update_keeps_the_new_pair() {
+        for changed in [false, true] {
+            assert_eq!(
+                update_local_desktop(
+                    || Ok(changed),
+                    || panic!("a successful update must not restore old packages"),
+                )
+                .unwrap(),
+                changed
+            );
+        }
+    }
+
+    #[test]
+    fn failed_recovery_does_not_claim_the_desktop_is_restored() {
+        let error = update_local_desktop(
+            || Err(Failure::new("build failed")),
+            || Err(Failure::new("archive install failed")),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("build failed"));
+        assert!(error.contains("archive install failed"));
+        assert!(!error.contains("left on the working versions"));
+        assert!(error.contains("Do not log out"));
+    }
 
     #[test]
     fn reads_df_available_bytes_without_accepting_headers_or_extra_fields() {
