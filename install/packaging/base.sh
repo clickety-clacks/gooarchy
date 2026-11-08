@@ -36,7 +36,9 @@ if pacman -Q scottland >/dev/null 2>&1; then
 fi
 packages=(git base-devel)
 if [[ -n $GOOARCHY_SCOTTLAND_TARGET ]]; then packages+=("$GOOARCHY_SCOTTLAND_TARGET"); fi
+if [[ -n $GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET ]]; then packages+=("$GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET"); fi
 "${upgrade[@]}" "${packages[@]}"
 if [[ -n $GOOARCHY_SCOTTLAND_TARGET ]]; then sudo pacman -D --asdeps scottland; fi
+if [[ -n $GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET ]]; then sudo pacman -D --asdeps scottland-sunlight; fi
 mapfile -t packages < <(package_list "$GOOARCHY_INSTALL/gooarchy-base.packages")
 sudo pacman -S --noconfirm --needed --asdeps "${packages[@]}"

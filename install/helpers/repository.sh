@@ -47,22 +47,31 @@ package_is_repository_copy() {
   [[ -n $repository_version && $installed_version == "$repository_version" ]]
 }
 
-# The imported 0.3.4, 0.3.5, 0.3.6 and 0.3.7 cores are identified by the upstream Packager value
-# whenever package metadata is available. If package metadata itself is unavailable, keep the
-# no-new-stop behavior for these exact selected-repository versions. When dependency metadata exists,
-# only their unversioned Wayfire dependency avoids comparison; versioned dependencies need an Arch version.
+# The imported 0.3.4 through 0.3.7 cores retain their historical metadata fallback. The public
+# 0.4.1-1 core is recognized only with its available upstream Packager metadata; its unversioned
+# Wayfire dependency is accepted only for that exact imported package and never for a local override.
 repository_scottland_is_imported_core() {
   local package_version=$1 packager=$2 metadata_available=$3 override=$4
-  [[ $package_version == 0.3.4-1 || $package_version == 0.3.5-1 \
-    || $package_version == 0.3.6-1 || $package_version == 0.3.7-1 ]] || return 1
   [[ $override != 1 ]] || return 1
-  [[ $packager == 'Unknown Packager' || $metadata_available == 0 ]]
+  case $package_version in
+    0.3.4-1|0.3.5-1|0.3.6-1|0.3.7-1)
+      [[ $packager == 'Unknown Packager' || $metadata_available == 0 ]]
+      ;;
+    0.4.1-1)
+      [[ $metadata_available == 1 && $packager == 'Unknown Packager' ]]
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 repository_scottland_wayfire_import_exception() {
   local package_version=$1 packager=$2 dependency=$3 metadata_available=$4 override=$5
   repository_scottland_is_imported_core \
     "$package_version" "$packager" "$metadata_available" "$override" || return 1
+  if [[ $package_version == 0.4.1-1 ]]; then
+    [[ $dependency == wayfire ]]
+    return
+  fi
   [[ -z $dependency || $dependency == wayfire ]]
 }
 

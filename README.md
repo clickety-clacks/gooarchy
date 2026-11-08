@@ -155,13 +155,13 @@ from source eligibility alone.
 Scottland's Omarchy adapter uses the same `gooarchy-flavorings` package. On an Omarchy machine,
 without Gooarchy:
 
-1. Build Scottland's packages (`scottland` and `scottland-omarchy`) from Scottland's
-   `packaging/arch/PKGBUILD` with `makepkg`, without installing them yet.
+1. Build Scottland's packages (`scottland`, `scottland-sunlight` and `scottland-omarchy`) from
+   Scottland's `packaging/arch/PKGBUILD` with `makepkg`, without installing them yet.
 2. Build `gooarchy-flavorings` from this repository's `packaging/gooarchy-flavorings/PKGBUILD`: copy
    it into an empty directory and run `makepkg --nodeps` there (`--nodeps` because Scottland, one of
    its runtime dependencies, isn't installed yet; building needs only git and Python).
-3. Install all three together, in one `sudo pacman -U` with the three package files, so each finds
-   the others.
+3. Install all four together, in one `sudo pacman -U` with the three Scottland packages and
+   `gooarchy-flavorings`, so each finds the others.
 
 ## How it is put together
 

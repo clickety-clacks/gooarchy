@@ -145,6 +145,15 @@ for package in gooarchy gooarchy-flavorings scottland xdg-desktop-portal-wlr-goo
 done
 
 repo_scottland_version=$(sync_package_field scottland Version)
+scottland_sunlight_target=
+if [[ ${GOOARCHY_SCOTTLAND_PIN_REF:-} == v0.4.1-rc1 && $scottland_override == 0 ]]; then
+  [[ $repo_scottland_version == 0.4.1-1 ]] ||
+    fail_repository "Scottland v0.4.1-rc1 requires repository scottland 0.4.1-1."
+  repo_scottland_sunlight_version=$(sync_package_field scottland-sunlight Version)
+  [[ $repo_scottland_sunlight_version == 0.4.1-1 ]] ||
+    fail_repository "Scottland v0.4.1-rc1 requires repository scottland-sunlight 0.4.1-1."
+  scottland_sunlight_target="gooarchy/scottland-sunlight=$repo_scottland_sunlight_version"
+fi
 repo_scottland_metadata_available=1
 if ! repo_scottland_metadata=$(pacman -Si gooarchy/scottland 2>/dev/null); then
   repo_scottland_metadata_available=0
@@ -326,6 +335,7 @@ plan_tmp=$GOOARCHY_STATE/repository-plan.sh.$$
   printf 'GOOARCHY_PREVIOUS_SCOTTLAND_REF=%q\n' "$previous_scottland_ref"
   printf 'GOOARCHY_PREVIOUS_SCOTTLAND_REF_KIND=%q\n' "$previous_scottland_ref_kind"
   printf 'GOOARCHY_SCOTTLAND_TARGET=%q\n' "$scottland_target"
+  printf 'GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET=%q\n' "$scottland_sunlight_target"
   printf 'GOOARCHY_PREVIOUS_GOOARCHY_INSTALLED=%q\n' "$previous_gooarchy_installed"
   printf 'GOOARCHY_PREVIOUS_GOOARCHY_REPOSITORY_COPY=%q\n' "$previous_gooarchy_repository_copy"
   printf 'GOOARCHY_PREVIOUS_GOOARCHY_VERSION=%q\n' "$previous_gooarchy_version"

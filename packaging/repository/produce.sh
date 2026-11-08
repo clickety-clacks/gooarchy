@@ -15,14 +15,14 @@ usage() {
 Usage: packaging/repository/produce.sh --output <new-transfer-directory> --all
        packaging/repository/produce.sh --output <new-transfer-directory> --flavorings-package <archive> --all
        packaging/repository/produce.sh --output <new-transfer-directory> --cua-driver-package <archive> --all
-       packaging/repository/produce.sh --output <new-transfer-directory> --scottland-pair <directory> <scottland> <scottland-omarchy>
+       packaging/repository/produce.sh --output <new-transfer-directory> --scottland-pair <directory> <scottland> <scottland-sunlight> <scottland-omarchy>
        packaging/repository/produce.sh --output <new-transfer-directory> <package> [<package> ...]
 
 Builds package archives and an unsigned repository database only. It does not
 read signing credentials, create signatures, or contact GitHub Releases. The optional
 Flavorings archive is accepted only when it matches the reviewed source-input manifest.
 The optional cua-driver archive is accepted only when it matches the pinned package-input manifest.
-The Scottland pair directory is accepted only when both unchanged release assets match the
+The Scottland release directory is accepted only when all unchanged release assets match the
 pinned upstream identity, metadata, dependency and release-checksum manifest.
 USAGE
   exit 2
@@ -189,6 +189,7 @@ while IFS= read -r -d '' recipe_file; do
   done < <(sed -nE 's/^[[:space:]]*pkgname = ([^[:space:]]+)$/\1/p' <<<"$srcinfo")
 done < <(find "${recipe_roots[@]}" -type f -name PKGBUILD -print0 | sort -z)
 [[ ${recipe_for[scottland]+present} ]] || recipe_for[scottland]=@scottland
+[[ ${recipe_for[scottland-sunlight]+present} ]] || recipe_for[scottland-sunlight]=@scottland
 [[ ${recipe_for[scottland-omarchy]+present} ]] || recipe_for[scottland-omarchy]=@scottland
 
 if ((all_packages)); then
@@ -217,9 +218,11 @@ if [[ -n $cua_driver_package ]]; then
     die "the prebuilt cua-driver input requires Gooarchy's canonical cua-driver recipe."
 fi
 if [[ -n $scottland_pair_dir ]]; then
-  [[ ${selected[scottland]+present} && ${selected[scottland-omarchy]+present} ]] ||
-    die "--scottland-pair requires both scottland and scottland-omarchy in the selected package set."
-  [[ ${recipe_for[scottland]} == @scottland && ${recipe_for[scottland-omarchy]} == @scottland ]] ||
+  [[ ${selected[scottland]+present} && ${selected[scottland-sunlight]+present} &&
+    ${selected[scottland-omarchy]+present} ]] ||
+    die "--scottland-pair requires scottland, scottland-sunlight, and scottland-omarchy in the selected package set."
+  [[ ${recipe_for[scottland]} == @scottland && ${recipe_for[scottland-sunlight]} == @scottland &&
+    ${recipe_for[scottland-omarchy]} == @scottland ]] ||
     die "--scottland-pair requires the existing Scottland source-package mapping."
 fi
 
@@ -241,10 +244,11 @@ fi
 source "$repo_root/install/sources.conf"
 scottland_repo=$GOOARCHY_SCOTTLAND_REPO
 scottland_ref=$GOOARCHY_SCOTTLAND_REF
-if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag && $scottland_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag &&
+  ( $scottland_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || $scottland_ref == v0.4.1-rc1 ) ]]; then
   scottland_source_label="Scottland tag:$scottland_ref"
 else
-  die "Gooarchy main publication requires a final Scottland version tag."
+  die "Gooarchy main publication requires a final Scottland version tag or its approved v0.4.1-rc1 pin."
 fi
 if [[ ${recipe_for[gooarchy-flavorings]+present} &&
   ${recipe_for[gooarchy-flavorings]} != @scottland &&
@@ -473,8 +477,9 @@ for package_name in "${requested_packages[@]}"; do
     comparison=$(vercmp "${package_version[$package_name]}" "$old_version") || die "vercmp failed for $package_name."
     if ((comparison <= 0)); then
       if [[ -n $scottland_pair_dir &&
-        ( $package_name == scottland || $package_name == scottland-omarchy ) ]]; then
-        die "the pinned Scottland import must advance both pair members; $package_name is not newer than the base release."
+        ( $package_name == scottland || $package_name == scottland-sunlight ||
+          $package_name == scottland-omarchy ) ]]; then
+        die "every package in the pinned Scottland release set must advance; $package_name is not newer than the base release."
       fi
       echo "Refused $package_name: new version ${package_version[$package_name]} is not newer than published version $old_version; source revision: ${source_revision[$package_name]}; this package remains unchanged."
       continue
