@@ -242,7 +242,7 @@ fi
 repo_archive=$repo_cache/$repo_filename
 [[ -s $repo_archive ]] || fail_repository "pacman did not cache the repository's gooarchy package from $repository_url."
 repo_source_commit=$(sudo bsdtar -xOf "$repo_archive" usr/share/gooarchy/build-info |
-  sed -nE 's/^checkout ([[:xdigit:]]{40})$/\1/p' | sed -n '1p')
+  sed -nE 's/^source ([[:xdigit:]]{40})$/\1/p' | sed -n '1p')
 [[ $repo_source_commit =~ ^[[:xdigit:]]{40}$ ]] ||
   fail_repository "the repository's gooarchy package at $repository_url has no valid source commit in build-info."
 sudo rm -rf -- "$repo_cache"
@@ -294,7 +294,8 @@ if package_is_installed gooarchy; then
   package_was_repository_copy gooarchy && previous_gooarchy_repository_copy=1
   if [[ -r /usr/share/gooarchy/build-info ]]; then
     previous_gooarchy_source_commit=$(sed -nE \
-      's/^checkout ([[:xdigit:]]{40})( with uncommitted changes)?$/\1/p' \
+      -e 's/^source ([[:xdigit:]]{40})$/\1/p' \
+      -e 's/^checkout ([[:xdigit:]]{40})( with uncommitted changes)?$/\1/p' \
       /usr/share/gooarchy/build-info | sed -n '1p')
   fi
 fi

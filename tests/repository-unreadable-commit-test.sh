@@ -155,7 +155,7 @@ esac
 EOF
 cat >"$tmp/bin/bsdtar" <<'EOF'
 #!/usr/bin/env bash
-printf 'checkout 0123456789abcdef0123456789abcdef01234567\n'
+printf 'source 0123456789abcdef0123456789abcdef01234567\n'
 EOF
 cat >"$tmp/bin/pacman-key" <<'EOF'
 #!/usr/bin/env bash
