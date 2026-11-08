@@ -1,0 +1,10 @@
+[package]
+name = "gooarchy-update"
+description = "Update Gooarchy, Arch and foreign packages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+common = { package = "gooarchy-common", path = "../common" }

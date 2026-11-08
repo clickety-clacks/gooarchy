@@ -55,7 +55,7 @@ build() {
   )
 
   install -d "$srcdir/tools/base"
-  for tool in gooarchy gooarchy-hw gooarchy-lock gooarchy-look gooarchy-network gooarchy-software gooarchy-source; do
+  for tool in gooarchy gooarchy-boot gooarchy-hw gooarchy-lock gooarchy-look gooarchy-network gooarchy-software gooarchy-source gooarchy-update; do
     install -m755 "$srcdir/target/release/$tool" "$srcdir/tools/base/$tool"
   done
   git clone --quiet --no-checkout --no-hardlinks "$snapshot" "$srcdir/source-bundle"
@@ -92,6 +92,8 @@ package() {
   install -Dm755 "$snapshot/session/03-link-gooarchy-agent-skills" "$pkgdir/usr/lib/scottland/autostart.d/03-link-gooarchy-agent-skills"
   install -dm755 "$pkgdir/usr/lib/gooarchy/tools/base"
   install -m755 "$srcdir/tools/base/"* "$pkgdir/usr/lib/gooarchy/tools/base/"
+  install -Dm644 "$_repo/packaging/arch/30-gooarchy-wayfire-update.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/30-gooarchy-wayfire-update.hook"
   install -Dm644 "$srcdir/base.bundle" "$pkgdir/usr/share/gooarchy/source/base.bundle"
   install -Dm644 "$srcdir/build-commit" "$pkgdir/usr/share/gooarchy/source/base.commit"
   install -Dm644 "$snapshot/LICENSE" "$pkgdir/usr/share/licenses/gooarchy/LICENSE"

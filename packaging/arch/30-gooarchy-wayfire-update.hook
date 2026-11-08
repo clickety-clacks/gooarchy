@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = wayfire
+
+[Action]
+Description = Require Gooarchy update for a Wayfire upgrade
+When = PreTransaction
+Exec = /usr/lib/gooarchy/tools/base/gooarchy-update pacman-guard
+AbortOnFail
