@@ -162,10 +162,10 @@ class RepositoryTransferTests(unittest.TestCase):
         self.assertEqual(selected, recipe_path.parent / f"{identity['source']['tag']}-input.json")
         self.assertEqual(identity["source"], {
             "repository": "clickety-clacks/gooarchy-flavorings",
-            "tag": "v0.2.1",
-            "commit": "a7107415e39be00fb50745788c17429932bf6829",
-            "tree": "d1ec6a0ded81b8e4cb8ccb167a8679fb9f8542b6",
-            "archive_sha256": "722d4cf2f83c2f1f16e27e0a2e1105a28cf46716025bf1f290565df6300763af",
+            "tag": "v0.2.2",
+            "commit": "04c504b3fcc0ef80f82fa3a94c991ffc424f57c0",
+            "tree": "97b43ad0e826a93033d08799e0d5c56bbcfe48ad",
+            "archive_sha256": "24cc0f42760eeaffdd75578b69e28e398f86a966ed1f25fb8ee865b8347e16df",
         })
 
     def make_cua_driver_input(self) -> tuple[Path, Path, dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -368,7 +368,7 @@ class RepositoryTransferTests(unittest.TestCase):
                 archive, manifest_path, ROOT / "packaging/gooarchy-flavorings/PKGBUILD"
             )
         self.assertEqual(observed["source"]["tag"], tag)
-        self.assertEqual(observed["source"]["commit"], "a7107415e39be00fb50745788c17429932bf6829")
+        self.assertEqual(observed["source"]["commit"], "04c504b3fcc0ef80f82fa3a94c991ffc424f57c0")
         self.assertEqual(observed["sha256"], sha256(archive))
         source = observed["source"]
         self.assertEqual(
@@ -384,13 +384,13 @@ class RepositoryTransferTests(unittest.TestCase):
         archive, manifest_path, _tag, _version, metadata = self.make_flavorings_input()
         recipe_path = ROOT / "packaging/gooarchy-flavorings/PKGBUILD"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["source"]["tag"] = "v0.2.2"
+        manifest["source"]["tag"] = "v0.2.1"
         manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "does not match the current recipe"):
             protocol.verify_flavorings_input(archive, manifest_path, recipe_path)
 
-        manifest["source"]["tag"] = "v0.2.1"
-        manifest["version"] = "0.2.2-1"
+        manifest["source"]["tag"] = "v0.2.2"
+        manifest["version"] = "not-the-current-version"
         manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "does not match the current recipe"):
             protocol.verify_flavorings_input(archive, manifest_path, recipe_path)
