@@ -1,0 +1,53 @@
+{
+  "schema": "gooarchy-scottland-pair-input-v1",
+  "source": {
+    "repository": "clickety-clacks/scottland",
+    "tag": "v0.4.1-rc1",
+    "commit": "dc155ea158dd8aee14bc9a30f451b7e73316586b",
+    "tree": "5ea3f22461b820144778512e674d3b632929ba27",
+    "release_url": "https://github.com/clickety-clacks/scottland/releases/tag/v0.4.1-rc1",
+    "source_pkgbuild_sha256": "18a6bb4730f73684113d52206e51f967b11fc64a004cb558b5a829833c60e9c8"
+  },
+  "checksums": {
+    "filename": "SHA256SUMS",
+    "sha256": "c38fe0a9ad38408373cfadd092396793588ec9e178b748aabd030ec062c6c982"
+  },
+  "release_assets": [
+    {
+      "filename": "scottland-0.4.1-1-x86_64.pkg.tar.zst",
+      "sha256": "d233b0c4ecee076bf5392656352a7b585dfcbdbdef6b8a3f792bc542bf159182"
+    },
+    {
+      "filename": "scottland-sunlight-0.4.1-1-any.pkg.tar.zst",
+      "sha256": "640de20c739d160a68d796e3dce9a3cc7ddb567925cbf8967716453aa8d14812"
+    },
+    {
+      "filename": "scottland-omarchy-0.4.1-1-any.pkg.tar.zst",
+      "sha256": "faa032febe111b92b87a8c19aff5acc697d18a2d566a97c5a93678a18f2c1c23"
+    }
+  ],
+  "packages": [
+    {
+      "name": "scottland",
+      "version": "0.4.1-1",
+      "architecture": "x86_64",
+      "filename": "scottland-0.4.1-1-x86_64.pkg.tar.zst",
+      "sha256": "d233b0c4ecee076bf5392656352a7b585dfcbdbdef6b8a3f792bc542bf159182",
+      "packager": "Unknown Packager",
+      "pkgbuild_sha256": "18a6bb4730f73684113d52206e51f967b11fc64a004cb558b5a829833c60e9c8",
+      "wayfire_build": "0.11.0-1",
+      "required_dependency": "wayfire"
+    },
+    {
+      "name": "scottland-omarchy",
+      "version": "0.4.1-1",
+      "architecture": "any",
+      "filename": "scottland-omarchy-0.4.1-1-any.pkg.tar.zst",
+      "sha256": "faa032febe111b92b87a8c19aff5acc697d18a2d566a97c5a93678a18f2c1c23",
+      "packager": "Unknown Packager",
+      "pkgbuild_sha256": "18a6bb4730f73684113d52206e51f967b11fc64a004cb558b5a829833c60e9c8",
+      "wayfire_build": "0.11.0-1",
+      "required_dependency": "scottland=0.4.1-1"
+    }
+  ]
+}

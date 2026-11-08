@@ -24,9 +24,10 @@ def digest(path: Path) -> str:
 
 
 class ScottlandPairTests(unittest.TestCase):
-    def test_manifest_binds_exact_release_assets_and_truthful_source_provenance(self) -> None:
-        manifest = protocol.load_scottland_pair_manifest()
-        self.assertEqual(protocol.scottland_pair_manifest_path().name, "scottland-v0.3.7-input.json")
+    def test_previous_v0_3_7_pair_remains_pinned(self) -> None:
+        historical = ROOT / "packaging/repository/scottland-v0.3.7-input.json"
+        manifest = protocol.load_scottland_pair_manifest(historical)
+        self.assertEqual(historical.name, "scottland-v0.3.7-input.json")
         self.assertEqual(manifest["source"]["repository"], "clickety-clacks/scottland")
         self.assertEqual(manifest["source"]["tag"], "v0.3.7")
         self.assertEqual(manifest["source"]["commit"], "60f04ba44bf1b4f0fcf65d7d88ffa19ea0206eef")
@@ -46,6 +47,27 @@ class ScottlandPairTests(unittest.TestCase):
         self.assertIn("embedded-BUILDINFO-PKGBUILD-sha256:155579ca", revision)
         self.assertIn("source-PKGBUILD-matches-BUILDINFO:no", revision)
         self.assertIn("asset:scottland-0.3.7-1-x86_64.pkg.tar.zst sha256:c1ded7cb", revision)
+
+    def test_default_manifest_binds_the_reviewed_rc1_release_and_all_release_assets(self) -> None:
+        manifest = protocol.load_scottland_pair_manifest()
+        self.assertEqual(protocol.scottland_pair_manifest_path().name, "scottland-v0.4.1-rc1-input.json")
+        self.assertEqual(manifest["source"]["repository"], "clickety-clacks/scottland")
+        self.assertEqual(manifest["source"]["tag"], "v0.4.1-rc1")
+        self.assertEqual(manifest["source"]["commit"], "dc155ea158dd8aee14bc9a30f451b7e73316586b")
+        self.assertEqual(manifest["source"]["tree"], "5ea3f22461b820144778512e674d3b632929ba27")
+        self.assertEqual(manifest["checksums"]["sha256"], "c38fe0a9ad38408373cfadd092396793588ec9e178b748aabd030ec062c6c982")
+        self.assertEqual(
+            [(item["filename"], item["sha256"]) for item in manifest["release_assets"]],
+            [
+                ("scottland-0.4.1-1-x86_64.pkg.tar.zst", "d233b0c4ecee076bf5392656352a7b585dfcbdbdef6b8a3f792bc542bf159182"),
+                ("scottland-sunlight-0.4.1-1-any.pkg.tar.zst", "640de20c739d160a68d796e3dce9a3cc7ddb567925cbf8967716453aa8d14812"),
+                ("scottland-omarchy-0.4.1-1-any.pkg.tar.zst", "faa032febe111b92b87a8c19aff5acc697d18a2d566a97c5a93678a18f2c1c23"),
+            ],
+        )
+        self.assertEqual(
+            {item["name"] for item in manifest["packages"]},
+            {"scottland", "scottland-omarchy"},
+        )
 
     def test_previous_0_3_6_pair_remains_pinned(self) -> None:
         historical = ROOT / "packaging/repository/scottland-v0.3.6-input.json"
@@ -153,10 +175,10 @@ class ScottlandPairTests(unittest.TestCase):
             output.mkdir()
             for package in manifest["packages"]:
                 (source / package["filename"]).write_bytes(f"unchanged:{package['name']}".encode())
-            sums = "\n".join(
-                f"{item['sha256']}  {item['filename']}"
-                for item in sorted(manifest["packages"], key=lambda entry: entry["filename"])
-            ) + "\n"
+            release_assets = manifest.get("release_assets")
+            if release_assets is None:
+                release_assets = sorted(manifest["packages"], key=lambda entry: entry["filename"])
+            sums = "\n".join(f"{item['sha256']}  {item['filename']}" for item in release_assets) + "\n"
             (source / "SHA256SUMS").write_text(sums, encoding="ascii")
             expected_record = {"source": manifest["source"], "checksums": manifest["checksums"], "packages": {}}
             with patch.object(protocol, "load_scottland_pair_manifest", return_value=manifest), \
