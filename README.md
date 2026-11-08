@@ -20,13 +20,11 @@ user and at later logins; it does not install the Scottland Omarchy-adapter skil
 The installer defaults to Gooarchy's signed package repository at `https://gooarchy.com/gooarchy.db`
 and trusts the committed public key with fingerprint
 `F56B5368815D6C607C41265A69FCC98C28CD08EC`. The endpoint and trust identity are configured.
-Package archives and the repository database are intended to ship together as assets in Gooarchy's
-GitHub Release. The repository workflow produces an unsigned transfer first; a separately
-credentialed signer adds detached signatures for every package and the database, and an independently
-qualified uploader publishes the complete signed set. No signed package Release asset has been
-published, so installation and upgrades cannot complete until one is available. There is no installer
-ISO or update channel, and no hardware support beyond what Arch and Mesa give. It is for trying the
-desktop and for building the distro, not for daily use.
+The current [repository Release](https://github.com/clickety-clacks/gooarchy/releases/latest)
+publishes package archives and the repository database with detached `.sig` assets. The stock Omarchy
+enrollment and install route is below. There is no installer ISO or update channel, and no hardware
+support beyond what Arch and Mesa give. It is for trying the desktop and for building the distro, not
+for daily use.
 
 What you get:
 
@@ -150,18 +148,48 @@ screen sharing and the safe concurrent agent-skill link hook. The empty Flavorin
 fail-closed until its qualifying final tag and acceptance are available; no consumer pin is inferred
 from source eligibility alone.
 
-### Gooarchy's defaults on stock Omarchy
+### Enroll and trust Gooarchy on stock Omarchy
 
-Scottland's Omarchy adapter uses the same `gooarchy-flavorings` package. On an Omarchy machine,
-without Gooarchy:
+Scottland's Omarchy adapter uses the same `gooarchy-flavorings` package as Gooarchy. Before syncing
+or installing packages, download the public key from the pinned Gooarchy source and check its
+fingerprint:
 
-1. Build Scottland's packages (`scottland`, `scottland-sunlight` and `scottland-omarchy`) from
-   Scottland's `packaging/arch/PKGBUILD` with `makepkg`, without installing them yet.
-2. Build `gooarchy-flavorings` from this repository's `packaging/gooarchy-flavorings/PKGBUILD`: copy
-   it into an empty directory and run `makepkg --nodeps` there (`--nodeps` because Scottland, one of
-   its runtime dependencies, isn't installed yet; building needs only git and Python).
-3. Install all four together, in one `sudo pacman -U` with the three Scottland packages and
-   `gooarchy-flavorings`, so each finds the others.
+```sh
+curl --fail --location --output gooarchy.asc \
+  https://raw.githubusercontent.com/clickety-clacks/gooarchy/85d94e7d426fe96b169a217805511080f6ad7b4b/packaging/keys/gooarchy.asc
+gpg --show-keys --with-fingerprint gooarchy.asc
+```
+
+Proceed only when the displayed fingerprint is
+`F56B5368815D6C607C41265A69FCC98C28CD08EC`, then add and locally sign the key:
+
+```sh
+sudo pacman-key --add gooarchy.asc
+sudo pacman-key --lsign-key F56B5368815D6C607C41265A69FCC98C28CD08EC
+```
+
+Add this repository to `/etc/pacman.conf`:
+
+```ini
+[gooarchy]
+Server = https://gooarchy.com
+SigLevel = PackageRequired DatabaseOptional
+```
+
+#### Flavorings in the package transaction
+
+The current release assets identify the Scottland core and adapter as `0.3.7-1` and Flavorings as
+`0.2.2-1`; the linked transaction uses version-neutral package names. Pacman resolves `agentd` and
+`agentd-attention` through Flavorings' declared dependencies, so do not add them as explicit targets.
+Include Flavorings in the same transaction as Scottland, before adapter setup; there is no separate
+Flavorings install afterward.
+
+With the key and repository configured, follow Scottland's [Omarchy install and package
+verification steps](https://github.com/clickety-clacks/scottland/blob/main/README.md#install-and-upgrade-on-omarchy).
+That single sync-and-full-upgrade transaction installs the Scottland core, its Omarchy adapter, and
+Flavorings together. Then follow Scottland's [adapter setup and session
+steps](https://github.com/clickety-clacks/scottland/blob/main/README.md#running-it). Save your work
+before switching sessions because the switch closes the current desktop and its windows.
 
 ## How it is put together
 
