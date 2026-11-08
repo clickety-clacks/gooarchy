@@ -22,14 +22,17 @@ options=('!debug')
 install=gooarchy.install
 
 build() {
-  local snapshot="$srcdir/gooarchy-source" source_commit relative
+  local snapshot="$srcdir/gooarchy-source" source_commit relative source_patch="$srcdir/source.patch"
   [[ "$(git -C "$_repo" rev-parse --is-shallow-repository)" == false ]] || {
     echo "Gooarchy source builds need the full Git history." >&2
     return 1
   }
 
   git clone --quiet --no-hardlinks "$_repo" "$snapshot"
-  git -C "$_repo" diff --binary HEAD -- | git -C "$snapshot" apply --binary
+  git -C "$_repo" diff --binary HEAD -- > "$source_patch" || return 1
+  if [[ -s "$source_patch" ]]; then
+    git -C "$snapshot" apply --binary "$source_patch"
+  fi
   while IFS= read -r -d '' relative; do
     install -d "$snapshot/$(dirname "$relative")"
     cp -a -- "$_repo/$relative" "$snapshot/$relative"
