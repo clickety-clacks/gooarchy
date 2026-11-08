@@ -559,11 +559,10 @@ fn aur_version_is_newer(
 }
 
 fn parse_version_comparison(text: &str) -> Option<Ordering> {
-    match text.trim().parse::<i8>().ok()? {
-        -1 => Some(Ordering::Less),
-        0 => Some(Ordering::Equal),
-        1 => Some(Ordering::Greater),
-        _ => None,
+    match text.trim().parse::<i32>().ok()?.cmp(&0) {
+        Ordering::Less => Some(Ordering::Less),
+        Ordering::Equal => Some(Ordering::Equal),
+        Ordering::Greater => Some(Ordering::Greater),
     }
 }
 
@@ -851,9 +850,9 @@ mod tests {
         assert!(needs_aur_rebuild("ordinary", "ordinary", true, &[]));
         assert!(needs_aur_rebuild("strata-git", "strata-git", false, &[]));
         assert!(needs_aur_rebuild("scottland", "scottland", false, &forced));
-        assert_eq!(parse_version_comparison("-1\n"), Some(Ordering::Less));
+        assert_eq!(parse_version_comparison("-4\n"), Some(Ordering::Less));
         assert_eq!(parse_version_comparison("0\n"), Some(Ordering::Equal));
-        assert_eq!(parse_version_comparison("1\n"), Some(Ordering::Greater));
+        assert_eq!(parse_version_comparison("2\n"), Some(Ordering::Greater));
         assert_eq!(parse_version_comparison("invalid"), None);
     }
 }
