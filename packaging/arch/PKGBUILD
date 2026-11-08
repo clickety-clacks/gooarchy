@@ -78,7 +78,7 @@ package() {
   # Optional, not required: editing the system tools is the exception, and package upgrades work
   # without a toolchain (docs/rulings.md).
   optdepends=('rust: rebuild system tools from edited source')
-  local snapshot="$srcdir/gooarchy-source" source_commit source_manifest
+  local snapshot="$srcdir/gooarchy-source" source_commit source_manifest source_license_dir source_checkout_root source_license
   source_commit=$(cat "$srcdir/build-commit")
   install -Dm644 "$snapshot/session/gooarchy-session.sh" "$pkgdir/etc/profile.d/gooarchy-session.sh"
   install -Dm755 "$snapshot/session/libexec/gooarchy-session-cleanup" "$pkgdir/usr/lib/gooarchy/gooarchy-session-cleanup"
@@ -104,12 +104,24 @@ package() {
   source_manifest=$(cd "$snapshot/system-tools" &&
     cargo metadata --locked --format-version 1 |
       jq -r '.packages[] | select(.name == "scottland-source") | .manifest_path')
-  [[ -f ${source_manifest%/Cargo.toml}/LICENSE ]] || {
+  source_license_dir=${source_manifest%/Cargo.toml}
+  source_checkout_root=$(git -C "$source_license_dir" rev-parse --show-toplevel) || source_checkout_root=''
+  source_license=''
+  if [[ -n "$source_checkout_root" ]]; then
+    while [[ "$source_license_dir" == "$source_checkout_root" || "$source_license_dir" == "$source_checkout_root/"* ]]; do
+      if [[ -f "$source_license_dir/LICENSE" ]]; then
+        source_license="$source_license_dir/LICENSE"
+        break
+      fi
+      [[ "$source_license_dir" != "$source_checkout_root" ]] || break
+      source_license_dir=${source_license_dir%/*}
+    done
+  fi
+  [[ -n "$source_license" ]] || {
     echo "Could not find the pinned Scottland source-mechanism MIT license." >&2
     return 1
   }
-  install -Dm644 "${source_manifest%/Cargo.toml}/LICENSE" \
-    "$pkgdir/usr/share/licenses/gooarchy/scottland-source/LICENSE"
+  install -Dm644 "$source_license" "$pkgdir/usr/share/licenses/gooarchy/scottland-source/LICENSE"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gooarchy/build-info" <<INFO
 gooarchy $pkgver
 source $source_commit
