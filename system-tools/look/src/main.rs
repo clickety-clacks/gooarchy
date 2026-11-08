@@ -27,6 +27,12 @@ wallpaper current|list|set NAME|next|pick\n\
 font current|list|set FAMILY|pick\n\
          Show or choose an installed compatible monospace family\n";
 
+// Even with CLOEXEC, a parallel test can fork while a fixture script is open
+// for writing; the child keeps its copied descriptor until exec, so another
+// test can get ETXTBSY when it executes that script.
+#[cfg(test)]
+static SCRIPT_FIXTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Clone, Debug)]
 struct Paths {
     themes: PathBuf,
@@ -189,10 +195,14 @@ fn run_helper(
     output: &mut impl Write,
     error: &mut impl Write,
 ) -> Result<(), Failure> {
-    let result = Command::new(executable)
-        .args(args)
-        .output()
-        .map_err(|error| Failure::new(format!("cannot run {}: {error}", executable.display())))?;
+    let result = {
+        #[cfg(test)]
+        let _script_fixture_lock = SCRIPT_FIXTURE_LOCK
+            .lock()
+            .expect("script fixture lock poisoned");
+        Command::new(executable).args(args).output()
+    }
+    .map_err(|error| Failure::new(format!("cannot run {}: {error}", executable.display())))?;
     if !result.stdout.is_empty() {
         output.write_all(&result.stdout)?;
     }
@@ -218,10 +228,14 @@ fn pick_helper(
     output: &mut impl Write,
     error: &mut impl Write,
 ) -> Result<(), Failure> {
-    let result = Command::new(executable)
-        .args(list_args)
-        .output()
-        .map_err(|error| Failure::new(format!("cannot run {}: {error}", executable.display())))?;
+    let result = {
+        #[cfg(test)]
+        let _script_fixture_lock = SCRIPT_FIXTURE_LOCK
+            .lock()
+            .expect("script fixture lock poisoned");
+        Command::new(executable).args(list_args).output()
+    }
+    .map_err(|error| Failure::new(format!("cannot run {}: {error}", executable.display())))?;
     if !result.stderr.is_empty() {
         error.write_all(&result.stderr)?;
     }
@@ -322,9 +336,14 @@ fn valid_slug(slug: &str) -> bool {
 }
 
 fn current(paths: &Paths, output: &mut impl Write, error: &mut impl Write) -> Result<(), Failure> {
-    let result = Command::new(&paths.lookup)
-        .output()
-        .map_err(|error| Failure::new(format!("cannot run theme lookup: {error}")))?;
+    let result = {
+        #[cfg(test)]
+        let _script_fixture_lock = SCRIPT_FIXTURE_LOCK
+            .lock()
+            .expect("script fixture lock poisoned");
+        Command::new(&paths.lookup).output()
+    }
+    .map_err(|error| Failure::new(format!("cannot run theme lookup: {error}")))?;
     if !result.stderr.is_empty() {
         error.write_all(&result.stderr)?;
     }
@@ -372,9 +391,14 @@ fn set_theme(
         return Err(Failure::new(format!("theme is not installed: {slug}")));
     }
     write_selection(&paths.selection, slug)?;
-    let result = Command::new(&paths.refresh)
-        .output()
-        .map_err(|error| {
+    let result = {
+        #[cfg(test)]
+        let _script_fixture_lock = SCRIPT_FIXTURE_LOCK
+            .lock()
+            .expect("script fixture lock poisoned");
+        Command::new(&paths.refresh).output()
+    }
+    .map_err(|error| {
             Failure::new(format!(
                 "theme {slug} was saved, but refresh could not run: {error}"
             ))
@@ -510,6 +534,9 @@ mod tests {
         }
 
         fn executable(&self, name: &str, body: &str) -> PathBuf {
+            let _script_fixture_lock = super::SCRIPT_FIXTURE_LOCK
+                .lock()
+                .expect("script fixture lock poisoned");
             let path = self.0.join(name);
             fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
