@@ -176,6 +176,18 @@ Server = https://gooarchy.com
 SigLevel = PackageRequired DatabaseOptional
 ```
 
+#### Refresh the system through Omarchy
+
+After enabling the Gooarchy repository, run Omarchy's supported full-system updater once before
+installing the Scottland packages:
+
+```sh
+omarchy update
+```
+
+Use `omarchy update` for future full-system upgrades as well. Do not run a full-system upgrade
+directly through pacman on Omarchy.
+
 #### Flavorings in the package transaction
 
 The current release assets identify the Scottland core and adapter as `0.3.7-1` and Flavorings as
@@ -184,12 +196,12 @@ The current release assets identify the Scottland core and adapter as `0.3.7-1` 
 Include Flavorings in the same transaction as Scottland, before adapter setup; there is no separate
 Flavorings install afterward.
 
-With the key and repository configured, follow Scottland's [Omarchy install and package
-verification steps](https://github.com/clickety-clacks/scottland/blob/main/README.md#install-and-upgrade-on-omarchy).
-That single sync-and-full-upgrade transaction installs the Scottland core, its Omarchy adapter, and
-Flavorings together. Then follow Scottland's [adapter setup and session
-steps](https://github.com/clickety-clacks/scottland/blob/main/README.md#running-it). Save your work
-before switching sessions because the switch closes the current desktop and its windows.
+After the system update, follow Scottland's [Omarchy install and package verification
+steps](https://github.com/clickety-clacks/scottland/blob/main/README.md#install-and-upgrade-on-omarchy).
+That package-install transaction installs the Scottland core, its Omarchy adapter, and Flavorings
+together; it does not run another full-system upgrade. Then follow Scottland's [adapter setup and
+session steps](https://github.com/clickety-clacks/scottland/blob/main/README.md#running-it). Save
+your work before switching sessions because the switch closes the current desktop and its windows.
 
 ## How it is put together
 
