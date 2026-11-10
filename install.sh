@@ -39,6 +39,12 @@ for arg in "$@"; do
     *) echo "install.sh: unknown option $arg (see --help)" >&2; exit 2 ;;
   esac
 done
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "install.sh: git is required to install Gooarchy. Install it with 'sudo pacman -S git', then rerun ./install.sh." >&2
+  exit 1
+fi
+
 export GOOARCHY_YES GOOARCHY_AUTOLOGIN GOOARCHY_KERNEL
 
 source "$GOOARCHY_INSTALL/helpers/all.sh"
