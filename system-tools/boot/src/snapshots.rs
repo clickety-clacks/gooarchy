@@ -335,7 +335,10 @@ fn boot_uses_default_subvolume() -> Result<bool, Failure> {
 fn has_subvolume_option(options: &str) -> bool {
     options
         .split(',')
-        .any(|option| option.starts_with("subvol=") || option.starts_with("subvolid="))
+        .any(|option| {
+            let option = option.strip_prefix("rootflags=").unwrap_or(option);
+            option.starts_with("subvol=") || option.starts_with("subvolid=")
+        })
 }
 
 fn confirmed(input: &mut impl BufRead) -> Result<bool, Failure> {
@@ -402,6 +405,14 @@ mod tests {
         assert!(has_subvolume_option("rw,subvol=@,compress=zstd"));
         assert!(has_subvolume_option("rootflags=subvolid=256"));
         assert!(!has_subvolume_option("rw,compress=zstd,ssd"));
+    }
+
+    #[test]
+    fn root_boot_options_detect_rootflags_subvolume_selection() {
+        assert!(has_subvolume_option("rootflags=subvol=@"));
+        assert!(has_subvolume_option("rootflags=subvolid=256"));
+        assert!(has_subvolume_option("rootflags=compress=zstd,subvol=@"));
+        assert!(has_subvolume_option("rootflags=compress=zstd,subvolid=256"));
     }
 
     #[test]
