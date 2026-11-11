@@ -38,7 +38,7 @@ SCOTTLAND_PAIR_MANIFESTS = {
     "v0.4.1-rc1": "scottland-v0.4.1-rc1-input.json",
     "v0.4.2-rc1": "scottland-v0.4.2-rc1-input.json",
 }
-DEFAULT_SCOTTLAND_PAIR_TAG = "v0.4.2-rc1"
+DEFAULT_SCOTTLAND_PAIR_TAG = "v0.4.1-rc1"
 SCOTTLAND_PAIR_PINS = {
     "v0.3.4": {
         "source": {
