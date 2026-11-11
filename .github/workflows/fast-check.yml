@@ -39,3 +39,5 @@ jobs:
           bash tests/repository-strata-bootstrap-test.sh
       - name: Check update failure recovery
         run: cargo test --manifest-path system-tools/Cargo.toml -p gooarchy-update --locked
+      - name: Test Gooarchy version entry points
+        run: cargo test --manifest-path system-tools/Cargo.toml -p gooarchy -p gooarchy-software --locked

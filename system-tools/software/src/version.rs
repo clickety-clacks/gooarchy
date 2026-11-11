@@ -7,8 +7,8 @@ const BUILD_COMMIT: &str = env!("GOOARCHY_SOFTWARE_BUILD_COMMIT");
 pub fn report(runner: &Runner, output: &mut impl Write) -> Result<(), Failure> {
     let gooarchy = installed_package(runner, "gooarchy")?;
     let scottland = installed_package(runner, "scottland")?;
-    writeln!(output, "Gooarchy: {gooarchy} (commit {BUILD_COMMIT})")?;
     writeln!(output, "Scottland: {scottland}")?;
+    writeln!(output, "Gooarchy: {gooarchy} - build commit {BUILD_COMMIT}")?;
     Ok(())
 }
 
@@ -55,6 +55,7 @@ mod tests {
         assert!(output.contains("Gooarchy: gooarchy 0.0.1.r7.g1234567-1"));
         assert!(output.contains(BUILD_COMMIT));
         assert!(output.contains("Scottland: scottland 0.3.1-1"));
+        assert_eq!(output.split_whitespace().last(), Some(BUILD_COMMIT));
         fs::remove_dir_all(directory).unwrap();
     }
 }

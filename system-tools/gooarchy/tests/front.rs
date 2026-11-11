@@ -80,6 +80,22 @@ fn a_tool_runs_with_its_arguments_and_its_exit_status() {
 }
 
 #[test]
+fn version_flag_runs_the_software_version_command() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let tools = Tools::new("version-flag");
+    write(
+        &tools.0.join("gooarchy-software"),
+        "#!/bin/sh\nprintf '[%s]\\n' \"$1\"\n",
+        0o755,
+    );
+
+    let out = tools.run(&["--version"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(text(&out.stdout), "[version]\n");
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
 fn an_unknown_or_unrunnable_tool_exits_127_with_a_suggestion_when_one_fits() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let tools = Tools::new("unknown");

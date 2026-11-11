@@ -92,7 +92,7 @@ fn tool_path(dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn route_name(name: &str) -> (&str, bool) {
-    if name == "version" {
+    if matches!(name, "version" | "--version") {
         ("software", true)
     } else {
         (name, false)
@@ -188,10 +188,11 @@ mod tests {
     }
 
     #[test]
-    fn version_is_a_public_alias_for_the_software_tool() {
+    fn version_spellings_are_public_aliases_for_the_software_tool() {
         let listed = help(Path::new("/usr/bin"), &names(&["software"]));
         assert!(listed.contains("version  Show installed Gooarchy and Scottland versions"));
         assert_eq!(route_name("version"), ("software", true));
+        assert_eq!(route_name("--version"), ("software", true));
         assert_eq!(route_name("software"), ("software", false));
     }
 }
