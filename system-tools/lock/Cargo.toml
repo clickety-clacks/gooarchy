@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+common = { package = "gooarchy-common", path = "../common" }
 font8x8 = { version = "=0.3.1", default-features = false, features = ["unicode"] }
 kbvm = { version = "=0.1.7", features = ["compose"] }
 libc = "=0.2.177"

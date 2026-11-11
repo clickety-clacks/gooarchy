@@ -30,6 +30,9 @@ webapp remove-all              Remove Gooarchy web-app launchers\n\
 version                        Show installed Gooarchy and Scottland versions\n";
 
 fn main() -> ExitCode {
+    if common::report_version_if_requested("gooarchy-software") {
+        return ExitCode::SUCCESS;
+    }
     let args = match env::args_os()
         .skip(1)
         .map(|arg| arg.into_string())

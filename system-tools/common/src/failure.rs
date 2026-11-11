@@ -39,9 +39,13 @@ impl From<io::Error> for Failure {
     }
 }
 
-/// Runs a tool's body and turns its result into the process's exit status, writing
-/// "`tool`: message" to stderr when it fails. A tool's `main` is `common::run("gooarchy-x", body)`.
+/// Handles `--version` before running a tool's body, then maps its result to the process exit
+/// status and writes "`tool`: message" to stderr when it fails. A tool's `main` is
+/// `common::run("gooarchy-x", body)`.
 pub fn run(tool: &str, body: impl FnOnce() -> Result<(), Failure>) -> ExitCode {
+    if crate::report_version_if_requested(tool) {
+        return ExitCode::SUCCESS;
+    }
     match body() {
         Ok(()) => ExitCode::SUCCESS,
         Err(failure) => {
