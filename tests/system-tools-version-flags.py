@@ -59,6 +59,9 @@ def main() -> None:
             command.chmod(0o755)
 
         environment = os.environ.copy()
+        original_home = Path(environment.get("HOME", str(Path.home())))
+        environment.setdefault("RUSTUP_HOME", str(original_home / ".rustup"))
+        environment.setdefault("CARGO_HOME", str(original_home / ".cargo"))
         rustflags = environment.get("RUSTFLAGS", "").strip()
         environment["RUSTFLAGS"] = f"{rustflags} -L native={native_link_dir}".strip()
         environment["GOOARCHY_VERSION_TEST_CALL_LOG"] = str(call_log)
