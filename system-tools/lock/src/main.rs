@@ -599,6 +599,9 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
+    if common::report_version_if_requested("gooarchy-lock") {
+        return;
+    }
     if let Err(error) = run() {
         eprintln!("gooarchy-lock: {error}");
         std::process::exit(1);

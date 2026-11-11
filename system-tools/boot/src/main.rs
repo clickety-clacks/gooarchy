@@ -16,6 +16,9 @@ list           List Gooarchy snapshots\n\
 restore ID     Select a snapshot as the Btrfs default root for the next boot\n";
 
 fn main() -> ExitCode {
+    if common::report_version_if_requested("gooarchy-boot") {
+        return ExitCode::SUCCESS;
+    }
     let args = match env::args_os()
         .skip(1)
         .map(|arg| arg.into_string())

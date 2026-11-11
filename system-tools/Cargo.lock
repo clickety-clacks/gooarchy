@@ -116,6 +116,7 @@ name = "gooarchy-lock"
 version = "0.0.1"
 dependencies = [
  "font8x8",
+ "gooarchy-common",
  "kbvm",
  "libc",
  "wayland-client",

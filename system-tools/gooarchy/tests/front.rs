@@ -80,18 +80,15 @@ fn a_tool_runs_with_its_arguments_and_its_exit_status() {
 }
 
 #[test]
-fn version_flag_runs_the_software_version_command() {
+fn version_flag_reports_the_exact_source_commit() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
-    let tools = Tools::new("version-flag");
-    write(
-        &tools.0.join("gooarchy-software"),
-        "#!/bin/sh\nprintf '[%s]\\n' \"$1\"\n",
-        0o755,
-    );
-
-    let out = tools.run(&["--version"]);
+    let out = Command::new(env!("CARGO_BIN_EXE_gooarchy"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    let stdout = text(&out.stdout);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(text(&out.stdout), "[version]\n");
+    assert_eq!(stdout.split_whitespace().last(), Some(common::BUILD_COMMIT));
     assert!(out.stderr.is_empty());
 }
 
