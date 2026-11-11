@@ -25,7 +25,4 @@ publish = false
 [workspace.dependencies]
 # Scottland's source mechanism is shared by both products. Keep the exact source revision here;
 # Gooarchy must not carry a second implementation or a copy of its crate.
-scottland-source = {
-  git = "https://github.com/clickety-clacks/scottland.git",
-  rev = "bf1033b981f3aac4373839788c1dbe11e0753a88",
-}
+scottland-source = { git = "https://github.com/clickety-clacks/scottland.git", rev = "bf1033b981f3aac4373839788c1dbe11e0753a88" }
