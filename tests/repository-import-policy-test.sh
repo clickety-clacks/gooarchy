@@ -177,6 +177,22 @@ if repository_scottland_is_imported_core 0.4.2-1 'Unknown Packager' 1 1; then
   echo "a local Scottland override was recognized as the imported v0.4.2-1 core" >&2
   exit 1
 fi
+if ! repository_scottland_is_imported_core 0.4.3-1 'Unknown Packager' 1 0; then
+  echo "the exact v0.4.3-1 public core was not recognized" >&2
+  exit 1
+fi
+if repository_scottland_is_imported_core 0.4.3-1 'Unknown Packager' 0 0; then
+  echo "missing metadata was accepted for the v0.4.3-1 imported core" >&2
+  exit 1
+fi
+if repository_scottland_is_imported_core 0.4.3-1 Gooarchy 1 0; then
+  echo "a non-upstream packager was accepted as the v0.4.3-1 imported core" >&2
+  exit 1
+fi
+if repository_scottland_is_imported_core 0.4.3-1 'Unknown Packager' 1 1; then
+  echo "a local Scottland override was recognized as the imported v0.4.3-1 core" >&2
+  exit 1
+fi
 if repository_scottland_is_imported_core 0.4.1-1 'Unknown Packager' 1 1; then
   echo "a local Scottland override was recognized as the imported v0.4.1-1 core" >&2
   exit 1
@@ -205,6 +221,10 @@ if ! repository_scottland_wayfire_import_exception 0.4.2-1 'Unknown Packager' wa
   echo "the exact v0.4.2-1 core's public unversioned Wayfire dependency was not exempted" >&2
   exit 1
 fi
+if ! repository_scottland_wayfire_import_exception 0.4.3-1 'Unknown Packager' wayfire 1 0; then
+  echo "the exact v0.4.3-1 core's public unversioned Wayfire dependency was not exempted" >&2
+  exit 1
+fi
 if repository_scottland_wayfire_import_exception 0.4.1-1 'Unknown Packager' "" 1 0; then
   echo "missing dependency metadata was accepted for the v0.4.1-1 core" >&2
   exit 1
@@ -227,6 +247,18 @@ if repository_scottland_wayfire_import_exception 0.4.2-1 'Unknown Packager' wayf
 fi
 if repository_scottland_wayfire_import_exception 0.4.2-1 'Unknown Packager' wayfire 1 1; then
   echo "the v0.4.2-1 import exception accepted a local override" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.4.3-1 'Unknown Packager' "" 1 0; then
+  echo "missing dependency metadata was accepted for the v0.4.3-1 core" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.4.3-1 'Unknown Packager' wayfire=0.11.0 1 0; then
+  echo "the v0.4.3-1 import exception accepted a versioned dependency" >&2
+  exit 1
+fi
+if repository_scottland_wayfire_import_exception 0.4.3-1 'Unknown Packager' wayfire 1 1; then
+  echo "the v0.4.3-1 import exception accepted a local override" >&2
   exit 1
 fi
 if ! repository_scottland_wayfire_import_exception 0.3.5-1 'Unknown Packager' "" 1 0; then
@@ -310,6 +342,11 @@ expect_wayfire_status 0 0.4.2-1 'Unknown Packager' wayfire 1 0.11.0 0
 expect_wayfire_status 2 0.4.2-1 'Unknown Packager' wayfire 1 0.11.0 1
 expect_wayfire_status 2 0.4.2-1 'Unknown Packager' "" 1 0.11.0 0
 expect_wayfire_status 2 0.4.2-1 Gooarchy wayfire 1 0.11.0 0
+expect_wayfire_status 0 0.4.3-1 'Unknown Packager' wayfire 1 0.11.0 0
+expect_wayfire_status 2 0.4.3-1 'Unknown Packager' wayfire 1 0.11.0 1
+expect_wayfire_status 2 0.4.3-1 'Unknown Packager' "" 1 0.11.0 0
+expect_wayfire_status 2 0.4.3-1 Gooarchy wayfire 1 0.11.0 0
+expect_wayfire_status 2 0.4.3-2 'Unknown Packager' wayfire 1 0.11.0 0
 expect_wayfire_status 0 0.4.1-1 Gooarchy wayfire=0.11.0 1 0.11.0 0
 expect_wayfire_status 1 0.4.1-1 Gooarchy wayfire=0.11.0 1 0.10.0 0
 expect_wayfire_status 2 0.3.5-1 'Unknown Packager' wayfire 1 0.11.0 1

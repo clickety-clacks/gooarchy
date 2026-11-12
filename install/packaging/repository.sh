@@ -153,6 +153,13 @@ if [[ ${GOOARCHY_SCOTTLAND_PIN_REF:-} == v0.4.1-rc1 && $scottland_override == 0 
   [[ $repo_scottland_sunlight_version == 0.4.1-1 ]] ||
     fail_repository "Scottland v0.4.1-rc1 requires repository scottland-sunlight 0.4.1-1."
   scottland_sunlight_target="gooarchy/scottland-sunlight=$repo_scottland_sunlight_version"
+elif [[ ${GOOARCHY_SCOTTLAND_PIN_REF:-} == v0.4.3-rc1 && $scottland_override == 0 ]]; then
+  [[ $repo_scottland_version == 0.4.3-1 ]] ||
+    fail_repository "Scottland v0.4.3-rc1 requires repository scottland 0.4.3-1."
+  repo_scottland_sunlight_version=$(sync_package_field scottland-sunlight Version)
+  [[ $repo_scottland_sunlight_version == 0.4.3-1 ]] ||
+    fail_repository "Scottland v0.4.3-rc1 requires repository scottland-sunlight 0.4.3-1."
+  scottland_sunlight_target="gooarchy/scottland-sunlight=$repo_scottland_sunlight_version"
 fi
 repo_scottland_metadata_available=1
 if ! repo_scottland_metadata=$(pacman -Si gooarchy/scottland 2>/dev/null); then

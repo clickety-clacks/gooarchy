@@ -23,6 +23,7 @@ for relative in \
   install/packaging/gooarchy.sh \
   LICENSE \
   packaging/arch/PKGBUILD \
+  packaging/arch/30-gooarchy-wayfire-update.hook \
   packaging/arch/gooarchy.install \
   packaging/gooarchy-flavorings/PKGBUILD; do
   copy_file "$relative"
@@ -62,8 +63,14 @@ printf '[package]\nname = "scottland-source"\n' >"$tmp/scottland-source/Cargo.to
 
 cat >"$tmp/bin/git" <<'EOF'
 #!/usr/bin/env bash
-if [[ ${1:-} == -C && ( ${3:-} == rev-parse || ${3:-} == status ) ]]; then
+if [[ ${1:-} == -C && ${2:-} == ${GOOARCHY_PATH:-} &&
+  ( ${3:-} == rev-parse || ${3:-} == status ) ]]; then
   exit 1
+fi
+if [[ ${1:-} == -C && ${2:-} == ${TEST_SOURCE_ROOT:-} &&
+  ${3:-} == rev-parse && ${4:-} == --show-toplevel ]]; then
+  printf '%s\n' "$TEST_SOURCE_ROOT"
+  exit 0
 fi
 exec /usr/bin/git "$@"
 EOF
@@ -112,11 +119,11 @@ case ${1:-} in
     case $package in
       wayfire) version=0.12.0-1 ;;
       scottland)
-        printf 'Name : scottland\nVersion : 0.4.1-1\nPackager : Unknown Packager\nDepends On : wayfire\n'
+        printf 'Name : scottland\nVersion : 0.4.3-1\nPackager : Unknown Packager\nDepends On : wayfire\n'
         exit 0
         ;;
       scottland-sunlight)
-        printf 'Name : scottland-sunlight\nVersion : 0.4.1-1\n'
+        printf 'Name : scottland-sunlight\nVersion : 0.4.3-1\n'
         exit 0
         ;;
       cua-driver) version=0.1.0-1 ;;
@@ -208,6 +215,7 @@ export GOOARCHY_STATE=$tmp/state
 export GOOARCHY_INSTALL_LOG_FILE=$tmp/install.log
 export TEST_BUILD_CALLS=$tmp/build-calls.log
 export TEST_TMPDIR=$tmp
+export TEST_SOURCE_ROOT=$tmp/scottland-source
 export TEST_SOURCE_MANIFEST=$tmp/scottland-source/Cargo.toml
 : >"$TEST_BUILD_CALLS"
 : >"$GOOARCHY_INSTALL_LOG_FILE"
@@ -218,7 +226,7 @@ grep -Fq "Warning: the installer checkout's Git commit is unreadable; treating i
   "$GOOARCHY_STATE/reports.log"
 grep -Fqx 'GOOARCHY_CHECKOUT_COMMIT=unknown' "$GOOARCHY_STATE/repository-plan.sh"
 grep -Fqx 'GOOARCHY_BUILD_LOCAL_GOOARCHY=1' "$GOOARCHY_STATE/repository-plan.sh"
-grep -Fqx 'GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET=gooarchy/scottland-sunlight=0.4.1-1' \
+grep -Fqx 'GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET=gooarchy/scottland-sunlight=0.4.3-1' \
   "$GOOARCHY_STATE/repository-plan.sh"
 
 bash -eE -o pipefail -c 'source "$GOOARCHY_INSTALL/packaging/gooarchy.sh"' \
