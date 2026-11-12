@@ -135,14 +135,43 @@ fn ensure(yes: bool) -> Result<(), Failure> {
         )
     };
 
+    let mut failures = Vec::new();
+    let mut networkd_ready = false;
+    let mut resolved_ready = false;
     for (name, service) in SERVICES {
-        ensure_service(name, service)?;
+        match ensure_service(name, service) {
+            Ok(()) => {
+                networkd_ready |= name == "systemd-networkd";
+                resolved_ready |= name == "systemd-resolved";
+            }
+            Err(error) => {
+                eprintln!(
+                    "Warning: could not start {service}: {error}. See `systemctl status {service}` and `journalctl -u {service}`. Continuing with the remaining network setup."
+                );
+                failures.push(service.to_owned());
+            }
+        }
     }
-    if matches!(&network_config, NetworkConfigState::Added) {
-        run_privileged("networkctl", &["reload"])?;
+    if networkd_ready && matches!(&network_config, NetworkConfigState::Added) {
+        if let Err(error) = run_privileged("networkctl", &["reload"]) {
+            eprintln!("Warning: could not reload network configuration: {error}");
+            failures.push("network configuration reload".to_owned());
+        }
     }
 
-    let resolver_config = ensure_resolved_resolv_conf()?;
+    let resolver_config = if resolved_ready {
+        match ensure_resolved_resolv_conf() {
+            Ok(state) => Some(state),
+            Err(error) => {
+                eprintln!("Warning: could not configure the resolver: {error}");
+                failures.push("resolver configuration".to_owned());
+                None
+            }
+        }
+    } else {
+        eprintln!("Warning: systemd-resolved is unavailable; /etc/resolv.conf was left unchanged.");
+        None
+    };
     match network_config {
         NetworkConfigState::DefaultRouteAlreadyActive => println!(
             "A default route was already active; Gooarchy did not add a networkd DHCP fallback."
@@ -158,17 +187,24 @@ fn ensure(yes: bool) -> Result<(), Failure> {
         ),
     }
     match resolver_config {
-        ResolverConfigState::AlreadyResolved => {
+        Some(ResolverConfigState::AlreadyResolved) => {
             println!("/etc/resolv.conf already points to systemd-resolved.");
         }
-        ResolverConfigState::Added => {
+        Some(ResolverConfigState::Added) => {
             println!("Linked the previously absent /etc/resolv.conf to systemd-resolved.");
         }
-        ResolverConfigState::Preserved => {
+        Some(ResolverConfigState::Preserved) => {
             println!("Existing /etc/resolv.conf was left unchanged.");
         }
+        None => {}
     }
 
+    if !failures.is_empty() {
+        return Err(Failure::new(format!(
+            "network setup is incomplete: {}. Existing network configuration was not replaced. Run `gooarchy network status` to inspect it and retry `gooarchy network ensure` after resolving the reported failures.",
+            failures.join(", ")
+        )));
+    }
     if default_route_present()? {
         println!("A default route is active.");
     } else {
