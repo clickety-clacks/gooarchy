@@ -33,9 +33,13 @@ set -e
   cat "$tmp/no-git.out" >&2
   exit 1
 }
-grep -Fq "Install it with 'sudo pacman -S git', then rerun ./install.sh." "$tmp/no-git.out" || {
+grep -Fq "Update Arch and install it with 'sudo pacman -Syu --needed git', then rerun ./install.sh." "$tmp/no-git.out" || {
   echo "missing-Git failure did not provide an actionable instruction" >&2
   cat "$tmp/no-git.out" >&2
+  exit 1
+}
+grep -Fq 'sudo pacman -Syu --needed git' "$repo_root/README.md" || {
+  echo "README missing-Git instructions must fully upgrade Arch before installing Git" >&2
   exit 1
 }
 [[ ! -e $tmp/no-git-log-started ]] || {

@@ -41,7 +41,7 @@ for arg in "$@"; do
 done
 
 if ! command -v git >/dev/null 2>&1; then
-  echo "install.sh: git is required to install Gooarchy. Install it with 'sudo pacman -S git', then rerun ./install.sh." >&2
+  echo "install.sh: git is required to install Gooarchy. Update Arch and install it with 'sudo pacman -Syu --needed git', then rerun ./install.sh." >&2
   exit 1
 fi
 
