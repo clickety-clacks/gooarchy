@@ -78,43 +78,50 @@ class ScottlandPairTests(unittest.TestCase):
         adapter = next(item for item in manifest["packages"] if item["name"] == "scottland-omarchy")
         self.assertEqual(adapter["required_dependency"], "scottland=0.4.1-1")
 
-    def test_default_manifest_binds_the_v0_4_3_release_in_upstream_checksum_order(self) -> None:
+    def test_default_manifest_binds_the_v0_4_4_release_in_upstream_checksum_order(self) -> None:
         manifest = protocol.load_scottland_pair_manifest()
-        self.assertEqual(protocol.scottland_pair_manifest_path().name, "scottland-v0.4.3-rc1-input.json")
+        self.assertEqual(protocol.scottland_pair_manifest_path().name, "scottland-v0.4.4-rc1-input.json")
         self.assertEqual(manifest["source"]["repository"], "clickety-clacks/scottland")
-        self.assertEqual(manifest["source"]["tag"], "v0.4.3-rc1")
-        self.assertEqual(manifest["source"]["commit"], "c908b89b5509be11879e9e20a0f57bc057f7f7b3")
-        self.assertEqual(manifest["source"]["tree"], "1fb5d32424bfcc97b3af94343f65b6622ce4d86e")
+        self.assertEqual(manifest["source"]["tag"], "v0.4.4-rc1")
+        self.assertEqual(manifest["source"]["commit"], "df37115b9108bd4853df1b693952026e5079a120")
+        self.assertEqual(manifest["source"]["tree"], "24d36bfbaf6b1a5d2fa81e8e4bc9d2e1f9bc527c")
         self.assertEqual(
             manifest["source"]["source_pkgbuild_sha256"],
-            "7c96bf6d0979ebf0404ec058474de310cb59875433db97507377a0a4bdc0590e",
+            "98944fd1c9a05c6d36c8108c5f8401b9bfeb3d695812ff9a2e6227d5a84dbe82",
         )
-        self.assertEqual(manifest["checksums"]["sha256"], "26dc8f49d24bb704373f825e2db2ae2059d70fff2dff987d54e3322b3ec6a3ec")
+        self.assertEqual(manifest["checksums"]["sha256"], "31efebf4bb1182583c615d923a5de5497bf7ab578062754f15fd39026f0ee821")
         self.assertEqual(
             [(item["filename"], item["sha256"]) for item in manifest["release_assets"]],
             [
-                ("scottland-0.4.3-1-x86_64.pkg.tar.zst", "dad0446ef95d757fd090a4e3a1defea593dabe61c4ebe29603c52e1e3fa080d8"),
-                ("scottland-omarchy-0.4.3-1-any.pkg.tar.zst", "7d4555835c5296109b1dc1aab10a3884d18981ed24bf93c492d371e94e59c711"),
-                ("scottland-sunlight-0.4.3-1-any.pkg.tar.zst", "f9200c9077c9ff586f64193d3f051c4c83c32da2fde28c9486de9a7d3943f08b"),
+                ("scottland-0.4.4-1-x86_64.pkg.tar.zst", "08322e97c4b55a5cdbb56729c57c9cf6f702da2d8f254f2bea209f74f2e15e9c"),
+                ("scottland-omarchy-0.4.4-1-any.pkg.tar.zst", "734bde729571146db57ff5e67e9d3157d6956051aac771783425283b8a10a646"),
+                ("scottland-sunlight-0.4.4-1-any.pkg.tar.zst", "fb5f4f10fe906470765210d438fcac1958a4029114cd01e6a859342171a588fb"),
             ],
         )
         self.assertEqual(
             {item["name"]: item["sha256"] for item in manifest["packages"]},
             {
-                "scottland": "dad0446ef95d757fd090a4e3a1defea593dabe61c4ebe29603c52e1e3fa080d8",
-                "scottland-omarchy": "7d4555835c5296109b1dc1aab10a3884d18981ed24bf93c492d371e94e59c711",
-                "scottland-sunlight": "f9200c9077c9ff586f64193d3f051c4c83c32da2fde28c9486de9a7d3943f08b",
+                "scottland": "08322e97c4b55a5cdbb56729c57c9cf6f702da2d8f254f2bea209f74f2e15e9c",
+                "scottland-omarchy": "734bde729571146db57ff5e67e9d3157d6956051aac771783425283b8a10a646",
+                "scottland-sunlight": "fb5f4f10fe906470765210d438fcac1958a4029114cd01e6a859342171a588fb",
             },
         )
-        self.assertEqual({item["version"] for item in manifest["packages"]}, {"0.4.3-1"})
+        self.assertEqual({item["version"] for item in manifest["packages"]}, {"0.4.4-1"})
         for package in manifest["packages"]:
             self.assertEqual(package["packager"], "Unknown Packager")
             self.assertEqual(package["pkgbuild_sha256"], manifest["source"]["source_pkgbuild_sha256"])
             self.assertEqual(package["wayfire_build"], "0.11.0-1")
         sunlight = next(item for item in manifest["packages"] if item["name"] == "scottland-sunlight")
         adapter = next(item for item in manifest["packages"] if item["name"] == "scottland-omarchy")
-        self.assertEqual(sunlight["required_dependency"], "scottland=0.4.3-1")
-        self.assertEqual(adapter["required_dependency"], "scottland=0.4.3-1")
+        self.assertEqual(sunlight["required_dependency"], "scottland=0.4.4-1")
+        self.assertEqual(adapter["required_dependency"], "scottland=0.4.4-1")
+
+    def test_previous_v0_4_3_manifest_remains_pinned(self) -> None:
+        historical = ROOT / "packaging/repository/scottland-v0.4.3-rc1-input.json"
+        manifest = protocol.load_scottland_pair_manifest(historical)
+        self.assertEqual(manifest["source"]["commit"], "c908b89b5509be11879e9e20a0f57bc057f7f7b3")
+        self.assertEqual(manifest["checksums"]["sha256"], "26dc8f49d24bb704373f825e2db2ae2059d70fff2dff987d54e3322b3ec6a3ec")
+        self.assertEqual({item["version"] for item in manifest["packages"]}, {"0.4.3-1"})
 
     def test_previous_0_3_6_pair_remains_pinned(self) -> None:
         historical = ROOT / "packaging/repository/scottland-v0.3.6-input.json"
