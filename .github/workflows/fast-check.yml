@@ -42,5 +42,7 @@ jobs:
         run: cargo test --manifest-path system-tools/Cargo.toml -p gooarchy-update --locked
       - name: Test Gooarchy version entry points
         run: cargo test --manifest-path system-tools/Cargo.toml -p gooarchy-common -p gooarchy -p gooarchy-software --locked
+      - name: Check installer network service failures
+        run: python3 tests/network-install-failure-test.py
       - name: Check every packaged system tool version flag
         run: python3 tests/system-tools-version-flags.py
