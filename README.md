@@ -115,7 +115,7 @@ dated image and checksum from its `manifest.json` (`GOOARCHY_VM_IMAGE_URL`,
 On a fresh Arch Linux install (archinstall's minimal profile is fine), as your user, with sudo:
 
 ```sh
-sudo pacman -S --needed git
+sudo pacman -Syu --needed git
 git clone https://github.com/clickety-clacks/gooarchy.git
 cd gooarchy
 ./install.sh

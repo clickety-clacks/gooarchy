@@ -37,6 +37,7 @@ jobs:
           tests/flavorings-pkgbuild-source-test.sh
           bash tests/scottland-portal-provider-test.sh
           bash tests/repository-strata-bootstrap-test.sh
+          bash tests/install-git-preflight-test.sh
       - name: Check update failure recovery
         run: cargo test --manifest-path system-tools/Cargo.toml -p gooarchy-update --locked
       - name: Test Gooarchy version entry points
