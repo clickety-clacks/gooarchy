@@ -1,0 +1,64 @@
+{
+  "schema": "gooarchy-scottland-pair-input-v1",
+  "source": {
+    "repository": "clickety-clacks/scottland",
+    "tag": "v0.4.3-rc1",
+    "commit": "c908b89b5509be11879e9e20a0f57bc057f7f7b3",
+    "tree": "1fb5d32424bfcc97b3af94343f65b6622ce4d86e",
+    "release_url": "https://github.com/clickety-clacks/scottland/releases/tag/v0.4.3-rc1",
+    "source_pkgbuild_sha256": "7c96bf6d0979ebf0404ec058474de310cb59875433db97507377a0a4bdc0590e"
+  },
+  "checksums": {
+    "filename": "SHA256SUMS",
+    "sha256": "26dc8f49d24bb704373f825e2db2ae2059d70fff2dff987d54e3322b3ec6a3ec"
+  },
+  "release_assets": [
+    {
+      "filename": "scottland-0.4.3-1-x86_64.pkg.tar.zst",
+      "sha256": "dad0446ef95d757fd090a4e3a1defea593dabe61c4ebe29603c52e1e3fa080d8"
+    },
+    {
+      "filename": "scottland-omarchy-0.4.3-1-any.pkg.tar.zst",
+      "sha256": "7d4555835c5296109b1dc1aab10a3884d18981ed24bf93c492d371e94e59c711"
+    },
+    {
+      "filename": "scottland-sunlight-0.4.3-1-any.pkg.tar.zst",
+      "sha256": "f9200c9077c9ff586f64193d3f051c4c83c32da2fde28c9486de9a7d3943f08b"
+    }
+  ],
+  "packages": [
+    {
+      "name": "scottland",
+      "version": "0.4.3-1",
+      "architecture": "x86_64",
+      "filename": "scottland-0.4.3-1-x86_64.pkg.tar.zst",
+      "sha256": "dad0446ef95d757fd090a4e3a1defea593dabe61c4ebe29603c52e1e3fa080d8",
+      "packager": "Unknown Packager",
+      "pkgbuild_sha256": "7c96bf6d0979ebf0404ec058474de310cb59875433db97507377a0a4bdc0590e",
+      "wayfire_build": "0.11.0-1",
+      "required_dependency": "wayfire"
+    },
+    {
+      "name": "scottland-sunlight",
+      "version": "0.4.3-1",
+      "architecture": "any",
+      "filename": "scottland-sunlight-0.4.3-1-any.pkg.tar.zst",
+      "sha256": "f9200c9077c9ff586f64193d3f051c4c83c32da2fde28c9486de9a7d3943f08b",
+      "packager": "Unknown Packager",
+      "pkgbuild_sha256": "7c96bf6d0979ebf0404ec058474de310cb59875433db97507377a0a4bdc0590e",
+      "wayfire_build": "0.11.0-1",
+      "required_dependency": "scottland=0.4.3-1"
+    },
+    {
+      "name": "scottland-omarchy",
+      "version": "0.4.3-1",
+      "architecture": "any",
+      "filename": "scottland-omarchy-0.4.3-1-any.pkg.tar.zst",
+      "sha256": "7d4555835c5296109b1dc1aab10a3884d18981ed24bf93c492d371e94e59c711",
+      "packager": "Unknown Packager",
+      "pkgbuild_sha256": "7c96bf6d0979ebf0404ec058474de310cb59875433db97507377a0a4bdc0590e",
+      "wayfire_build": "0.11.0-1",
+      "required_dependency": "scottland=0.4.3-1"
+    }
+  ]
+}
