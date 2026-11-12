@@ -119,11 +119,11 @@ case ${1:-} in
     case $package in
       wayfire) version=0.12.0-1 ;;
       scottland)
-        printf 'Name : scottland\nVersion : 0.4.3-1\nPackager : Unknown Packager\nDepends On : wayfire\n'
+        printf 'Name : scottland\nVersion : 0.4.4-1\nPackager : Unknown Packager\nDepends On : wayfire\n'
         exit 0
         ;;
       scottland-sunlight)
-        printf 'Name : scottland-sunlight\nVersion : 0.4.3-1\n'
+        printf 'Name : scottland-sunlight\nVersion : 0.4.4-1\n'
         exit 0
         ;;
       cua-driver) version=0.1.0-1 ;;
@@ -226,7 +226,7 @@ grep -Fq "Warning: the installer checkout's Git commit is unreadable; treating i
   "$GOOARCHY_STATE/reports.log"
 grep -Fqx 'GOOARCHY_CHECKOUT_COMMIT=unknown' "$GOOARCHY_STATE/repository-plan.sh"
 grep -Fqx 'GOOARCHY_BUILD_LOCAL_GOOARCHY=1' "$GOOARCHY_STATE/repository-plan.sh"
-grep -Fqx 'GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET=gooarchy/scottland-sunlight=0.4.3-1' \
+grep -Fqx 'GOOARCHY_SCOTTLAND_SUNLIGHT_TARGET=gooarchy/scottland-sunlight=0.4.4-1' \
   "$GOOARCHY_STATE/repository-plan.sh"
 
 bash -eE -o pipefail -c 'source "$GOOARCHY_INSTALL/packaging/gooarchy.sh"' \

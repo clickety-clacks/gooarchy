@@ -38,8 +38,9 @@ SCOTTLAND_PAIR_MANIFESTS = {
     "v0.4.1-rc1": "scottland-v0.4.1-rc1-input.json",
     "v0.4.2-rc1": "scottland-v0.4.2-rc1-input.json",
     "v0.4.3-rc1": "scottland-v0.4.3-rc1-input.json",
+    "v0.4.4-rc1": "scottland-v0.4.4-rc1-input.json",
 }
-DEFAULT_SCOTTLAND_PAIR_TAG = "v0.4.3-rc1"
+DEFAULT_SCOTTLAND_PAIR_TAG = "v0.4.4-rc1"
 SCOTTLAND_PAIR_PINS = {
     "v0.3.4": {
         "source": {
@@ -379,6 +380,69 @@ SCOTTLAND_PAIR_PINS = {
                 "pkgbuild_sha256": "7c96bf6d0979ebf0404ec058474de310cb59875433db97507377a0a4bdc0590e",
                 "wayfire_build": "0.11.0-1",
                 "required_dependency": "scottland=0.4.3-1",
+            },
+        },
+    },
+    "v0.4.4-rc1": {
+        "source": {
+            "repository": SCOTTLAND_REPOSITORY,
+            "tag": "v0.4.4-rc1",
+            "commit": "df37115b9108bd4853df1b693952026e5079a120",
+            "tree": "24d36bfbaf6b1a5d2fa81e8e4bc9d2e1f9bc527c",
+            "release_url": "https://github.com/clickety-clacks/scottland/releases/tag/v0.4.4-rc1",
+            "source_pkgbuild_sha256": "98944fd1c9a05c6d36c8108c5f8401b9bfeb3d695812ff9a2e6227d5a84dbe82",
+        },
+        "checksums": {
+            "filename": "SHA256SUMS",
+            "sha256": "31efebf4bb1182583c615d923a5de5497bf7ab578062754f15fd39026f0ee821",
+        },
+        "release_assets": [
+            {
+                "filename": "scottland-0.4.4-1-x86_64.pkg.tar.zst",
+                "sha256": "08322e97c4b55a5cdbb56729c57c9cf6f702da2d8f254f2bea209f74f2e15e9c",
+            },
+            {
+                "filename": "scottland-omarchy-0.4.4-1-any.pkg.tar.zst",
+                "sha256": "734bde729571146db57ff5e67e9d3157d6956051aac771783425283b8a10a646",
+            },
+            {
+                "filename": "scottland-sunlight-0.4.4-1-any.pkg.tar.zst",
+                "sha256": "fb5f4f10fe906470765210d438fcac1958a4029114cd01e6a859342171a588fb",
+            },
+        ],
+        "packages": {
+            "scottland": {
+                "name": "scottland",
+                "version": "0.4.4-1",
+                "architecture": "x86_64",
+                "filename": "scottland-0.4.4-1-x86_64.pkg.tar.zst",
+                "sha256": "08322e97c4b55a5cdbb56729c57c9cf6f702da2d8f254f2bea209f74f2e15e9c",
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "98944fd1c9a05c6d36c8108c5f8401b9bfeb3d695812ff9a2e6227d5a84dbe82",
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "wayfire",
+            },
+            "scottland-sunlight": {
+                "name": "scottland-sunlight",
+                "version": "0.4.4-1",
+                "architecture": "any",
+                "filename": "scottland-sunlight-0.4.4-1-any.pkg.tar.zst",
+                "sha256": "fb5f4f10fe906470765210d438fcac1958a4029114cd01e6a859342171a588fb",
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "98944fd1c9a05c6d36c8108c5f8401b9bfeb3d695812ff9a2e6227d5a84dbe82",
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "scottland=0.4.4-1",
+            },
+            "scottland-omarchy": {
+                "name": "scottland-omarchy",
+                "version": "0.4.4-1",
+                "architecture": "any",
+                "filename": "scottland-omarchy-0.4.4-1-any.pkg.tar.zst",
+                "sha256": "734bde729571146db57ff5e67e9d3157d6956051aac771783425283b8a10a646",
+                "packager": "Unknown Packager",
+                "pkgbuild_sha256": "98944fd1c9a05c6d36c8108c5f8401b9bfeb3d695812ff9a2e6227d5a84dbe82",
+                "wayfire_build": "0.11.0-1",
+                "required_dependency": "scottland=0.4.4-1",
             },
         },
     },

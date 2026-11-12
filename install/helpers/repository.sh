@@ -48,7 +48,7 @@ package_is_repository_copy() {
 }
 
 # The imported 0.3.4 through 0.3.7 cores retain their historical metadata fallback. The public
-# 0.4.1-1 through 0.4.3-1 cores are recognized only with their available upstream Packager metadata;
+# 0.4.1-1 through 0.4.4-1 cores are recognized only with their available upstream Packager metadata;
 # their unversioned Wayfire dependency is accepted only for those exact imports, never for overrides.
 repository_scottland_is_imported_core() {
   local package_version=$1 packager=$2 metadata_available=$3 override=$4
@@ -57,7 +57,7 @@ repository_scottland_is_imported_core() {
     0.3.4-1|0.3.5-1|0.3.6-1|0.3.7-1)
       [[ $packager == 'Unknown Packager' || $metadata_available == 0 ]]
       ;;
-    0.4.1-1|0.4.2-1|0.4.3-1)
+    0.4.1-1|0.4.2-1|0.4.3-1|0.4.4-1)
       [[ $metadata_available == 1 && $packager == 'Unknown Packager' ]]
       ;;
     *) return 1 ;;
@@ -69,7 +69,7 @@ repository_scottland_wayfire_import_exception() {
   repository_scottland_is_imported_core \
     "$package_version" "$packager" "$metadata_available" "$override" || return 1
   if [[ $package_version == 0.4.1-1 || $package_version == 0.4.2-1 ||
-    $package_version == 0.4.3-1 ]]; then
+    $package_version == 0.4.3-1 || $package_version == 0.4.4-1 ]]; then
     [[ $dependency == wayfire ]]
     return
   fi

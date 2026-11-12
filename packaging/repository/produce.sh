@@ -246,10 +246,11 @@ scottland_repo=$GOOARCHY_SCOTTLAND_REPO
 scottland_ref=$GOOARCHY_SCOTTLAND_REF
 if [[ $GOOARCHY_SCOTTLAND_SOURCE_KIND == tag &&
   ( $scottland_ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ||
-    $scottland_ref == v0.4.1-rc1 || $scottland_ref == v0.4.3-rc1 ) ]]; then
+    $scottland_ref == v0.4.1-rc1 || $scottland_ref == v0.4.3-rc1 ||
+    $scottland_ref == v0.4.4-rc1 ) ]]; then
   scottland_source_label="Scottland tag:$scottland_ref"
 else
-  die "Gooarchy main publication requires a final Scottland version tag or an approved v0.4.1-rc1 or v0.4.3-rc1 pin."
+  die "Gooarchy main publication requires a final Scottland version tag or an approved v0.4.1-rc1, v0.4.3-rc1, or v0.4.4-rc1 pin."
 fi
 if [[ ${recipe_for[gooarchy-flavorings]+present} &&
   ${recipe_for[gooarchy-flavorings]} != @scottland &&
