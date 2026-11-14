@@ -287,7 +287,9 @@ fn window_for_app(windows: &str, app_id: &str, url: &str) -> Option<String> {
 
 fn chromium_wayland_app_id(url: &str) -> Option<String> {
     let (_, remainder) = url.split_once("://")?;
-    let authority = remainder.split(['/', '?', '#']).next()?;
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let suffix = &remainder[authority_end..];
     let authority = authority.rsplit('@').next()?;
     let host = if authority.starts_with('[') {
         let end = authority.find(']')?;
@@ -298,10 +300,20 @@ fn chromium_wayland_app_id(url: &str) -> Option<String> {
     if host.is_empty() {
         return None;
     }
+    let path = if suffix.starts_with('/') {
+        suffix.split(['?', '#']).next()?
+    } else {
+        "/"
+    };
 
-    // Chromium's Wayland app ID for `--app` windows is based on the URL host
-    // and default profile, rather than the launcher ID passed with --class.
-    Some(format!("chrome-{}__-Default", host.to_ascii_lowercase()))
+    // Chromium's Wayland app ID for `--app` windows uses host + path, rather
+    // than the launcher ID passed with --class. It replaces path slashes with
+    // underscores before appending the default profile.
+    Some(format!(
+        "chrome-{}_{}-Default",
+        host.to_ascii_lowercase(),
+        path.replace('/', "_")
+    ))
 }
 
 fn entries(applications: &Path) -> Result<Vec<AppEntry>, Failure> {
@@ -595,6 +607,27 @@ mod tests {
         assert_eq!(
             chromium_wayland_app_id("http://127.0.0.1:33119/"),
             Some("chrome-127.0.0.1__-Default".to_owned())
+        );
+    }
+
+    #[test]
+    fn launch_focus_includes_the_url_path_in_chromium_wayland_app_id() {
+        let windows = "   42  chrome-example.com__app_-Default   main       1.00  App\n   43  chrome-example.com__other_-Default   main       1.00  Other\n";
+        assert_eq!(
+            window_for_app(windows, "gooarchy-webapp-app", "https://example.com/app/"),
+            Some("42".to_owned())
+        );
+        assert_eq!(
+            window_for_app(
+                windows,
+                "gooarchy-webapp-missing",
+                "https://example.com/missing/"
+            ),
+            None
+        );
+        assert_eq!(
+            chromium_wayland_app_id("https://example.com/app/"),
+            Some("chrome-example.com__app_-Default".to_owned())
         );
     }
 
