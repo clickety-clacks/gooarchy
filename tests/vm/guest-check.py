@@ -790,7 +790,7 @@ def software_system_tool_checks():
             suffix = str(os.getpid())
             launch_name = f"WI026 Smoke {suffix}"
             launch_id = f"gooarchy-webapp-wi026-smoke-{suffix}"
-            webapp_id = launch_id
+            webapp_id = "chrome-127.0.0.1__-Default"
             launch_path = os.path.join(applications, f"{launch_id}.desktop")
             install_app_rc, install_app = software_command(
                 "gooarchy", "software", "webapp", "install", launch_name, url, env=web_env
@@ -810,7 +810,7 @@ def software_system_tool_checks():
                 found = []
                 for line in windows.splitlines():
                     fields = line.split()
-                    if len(fields) >= 2 and fields[1] == launch_id and fields[0].isdigit():
+                    if len(fields) >= 2 and fields[1] == webapp_id and fields[0].isdigit():
                         found.append(fields[0])
                 return found
 

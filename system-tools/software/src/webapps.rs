@@ -252,7 +252,7 @@ fn launch(
         if !windows.status.success() {
             return Err(crate::commands::command_error("scottland-ctl", &windows));
         }
-        if let Some(window_id) = window_for_app(&output_text(&windows), id) {
+        if let Some(window_id) = window_for_app(&output_text(&windows), id, &url) {
             runner.status("scottland-ctl", &args(&["present", &window_id]))?;
             writeln!(
                 output,
@@ -273,14 +273,47 @@ fn launch(
     Ok(())
 }
 
-fn window_for_app(windows: &str, app_id: &str) -> Option<String> {
+fn window_for_app(windows: &str, app_id: &str, url: &str) -> Option<String> {
+    let chromium_app_id = chromium_wayland_app_id(url);
     windows.lines().find_map(|line| {
         let mut fields = line.split_whitespace();
         let id = fields.next()?;
         let window_app_id = fields.next()?;
-        (window_app_id == app_id && id.bytes().all(|byte| byte.is_ascii_digit()))
-            .then(|| id.to_owned())
+        ((window_app_id == app_id || chromium_app_id.as_deref() == Some(window_app_id))
+            && id.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| id.to_owned())
     })
+}
+
+fn chromium_wayland_app_id(url: &str) -> Option<String> {
+    let (_, remainder) = url.split_once("://")?;
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let suffix = &remainder[authority_end..];
+    let authority = authority.rsplit('@').next()?;
+    let host = if authority.starts_with('[') {
+        let end = authority.find(']')?;
+        &authority[..=end]
+    } else {
+        authority.split(':').next()?
+    };
+    if host.is_empty() {
+        return None;
+    }
+    let path = if suffix.starts_with('/') {
+        suffix.split(['?', '#']).next()?
+    } else {
+        "/"
+    };
+
+    // Chromium's Wayland app ID for `--app` windows uses host + path, rather
+    // than the launcher ID passed with --class. It replaces path slashes with
+    // underscores before appending the default profile.
+    Some(format!(
+        "chrome-{}_{}-Default",
+        host.to_ascii_lowercase(),
+        path.replace('/', "_")
+    ))
 }
 
 fn entries(applications: &Path) -> Result<Vec<AppEntry>, Failure> {
@@ -557,13 +590,58 @@ mod tests {
     }
 
     #[test]
-    fn launch_focus_uses_the_scottland_window_id_for_the_matching_app_id() {
-        let windows = "   42  gooarchy-webapp-calendar          main       1.00  Calendar\n   99  other-app                        main       1.00  Other\n";
+    fn launch_focus_matches_the_chromium_wayland_app_id_for_the_url_host() {
+        let windows = "   42  chrome-127.0.0.1__-Default   main       1.00  Calendar\n   99  chrome-other.example__-Default   main       1.00  Other\n";
         assert_eq!(
-            window_for_app(windows, "gooarchy-webapp-calendar"),
+            window_for_app(
+                windows,
+                "gooarchy-webapp-calendar",
+                "http://127.0.0.1:33119/"
+            ),
             Some("42".to_owned())
         );
-        assert_eq!(window_for_app(windows, "missing"), None);
+        assert_eq!(
+            window_for_app(windows, "missing", "https://missing.example/path"),
+            None
+        );
+        assert_eq!(
+            chromium_wayland_app_id("http://127.0.0.1:33119/"),
+            Some("chrome-127.0.0.1__-Default".to_owned())
+        );
+    }
+
+    #[test]
+    fn launch_focus_includes_the_url_path_in_chromium_wayland_app_id() {
+        let windows = "   42  chrome-example.com__app_-Default   main       1.00  App\n   43  chrome-example.com__other_-Default   main       1.00  Other\n";
+        assert_eq!(
+            window_for_app(windows, "gooarchy-webapp-app", "https://example.com/app/"),
+            Some("42".to_owned())
+        );
+        assert_eq!(
+            window_for_app(
+                windows,
+                "gooarchy-webapp-missing",
+                "https://example.com/missing/"
+            ),
+            None
+        );
+        assert_eq!(
+            chromium_wayland_app_id("https://example.com/app/"),
+            Some("chrome-example.com__app_-Default".to_owned())
+        );
+    }
+
+    #[test]
+    fn launch_focus_keeps_matching_the_launcher_class_when_the_compositor_reports_it() {
+        let windows = "   42  gooarchy-webapp-calendar          main       1.00  Calendar\n";
+        assert_eq!(
+            window_for_app(
+                windows,
+                "gooarchy-webapp-calendar",
+                "https://calendar.example/"
+            ),
+            Some("42".to_owned())
+        );
     }
 
     #[test]
@@ -573,7 +651,7 @@ mod tests {
         fixture.command(
             "scottland-ctl",
             &format!(
-                "if [ \"$1\" = windows ]; then echo '42 gooarchy-webapp-calendar'; else echo \"$2\" > {}; fi",
+                "if [ \"$1\" = windows ]; then echo '42 chrome-calendar.example__-Default'; else echo \"$2\" > {}; fi",
                 shell_quote(&presented.to_string_lossy())
             ),
         );
@@ -582,7 +660,7 @@ mod tests {
         launch(
             &runner,
             Some("gooarchy-webapp-calendar"),
-            "calendar.example",
+            "https://calendar.example/",
             &mut output,
         )
         .unwrap();
