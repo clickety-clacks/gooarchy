@@ -1,30 +1,21 @@
 import QtQuick
-import "ShortcutPolicy.js" as ShortcutPolicy
 import QtQuick.Controls
 import Quickshell
-import qs.Commons
 
-// All of Ask's settings in one ordinary window (Ctrl+,): the agent for new
-// conversations, the optional Agentd Hub, and the scroll-motion curve. A real
-// window, so the compositor moves, scales and stacks it like any other.
-//
-// Choices apply as they are made. The hub address is typed, so it commits on
-// Return or when the window closes with Ctrl+, or its close control; Escape
-// closes and leaves the hub as it was.
 FloatingWindow {
   id: root
   visible: false
-  title: "Ask Settings"
+  title: "Gooarchy Ask Settings"
   color: Color.menu.background
   implicitWidth: 600
   implicitHeight: 860
   minimumSize: Qt.size(480, 520)
 
   // Agent
-  property string agent: "codex"
-  property string model: "gpt-6-astra"
-  property string reasoningEffort: "low"
-  readonly property var modelChoices: agent === "claude" ? [
+  property string agent: ""
+  property string model: ""
+  property string reasoningEffort: ""
+  readonly property var modelChoices: [{ label: "System harness settings", value: "" }].concat(agent === "claude" ? [
     { label: "Opus 4.8", value: "claude-opus-4-8" },
     { label: "Opus 5", value: "claude-opus-5" },
     { label: "Fable 5", value: "claude-fable-5" },
@@ -34,67 +25,30 @@ FloatingWindow {
     { label: "Terra", value: "gpt-5.6-terra" },
     { label: "Sol (GPT-5.6)", value: "gpt-5.6-sol" },
     { label: "Astra", value: "gpt-6-astra" }
-  ]
+  ])
   signal agentApplied(string agent, string model, string reasoningEffort)
 
-  // Scroll motion and hub
+  // Scroll motion
   property real impulse: 335
   property real deceleration: 608
-  property string hubHost: ""
-  property int hubPort: 0
-  property string openingHubHost: ""
-  property int openingHubPort: 0
-  property bool hubCommitted: false
   readonly property real duration: impulse / deceleration
   readonly property real distance: impulse * impulse / (2 * deceleration)
   signal motionChanged(real impulse, real deceleration)
   signal resetRequested()
-  signal hubChanged(string host, int port)
-
-  ShortcutScope {
-    id: settingsScope
-    targetWindow: root
-    surfaceName: root.title
-    chords: ShortcutPolicy.settings()
-  }
-
   function open() {
-    openingHubHost = hubHost
-    openingHubPort = hubPort
-    hubHostBox.input.text = hubHost
-    hubPortBox.input.text = hubPort > 0 ? String(hubPort) : ""
-    hubCommitted = false
     syncModelIndex()
     visible = true
     curve.requestPaint()
     Qt.callLater(function() {
       if (!root.visible) return
-      var window = settingsScope.nativeWindow
+      var window = root.contentItem.Window.window
       if (window) window.requestActivate()
       modelSelect.forceActiveFocus()
     })
   }
 
-  // Ctrl+, or the window's own close: keep what was typed.
-  function finish() {
-    commitHub()
-    visible = false
-  }
-
-  // Escape: leave the hub as it was when the window opened.
-  function cancel() {
-    hubCommitted = true
-    hubHostBox.input.text = openingHubHost
-    hubPortBox.input.text = openingHubPort > 0 ? String(openingHubPort) : ""
-    if (hubHost !== openingHubHost || hubPort !== openingHubPort)
-      hubChanged(openingHubHost, openingHubPort)
-    visible = false
-  }
-
-  onVisibleChanged: {
-    // Closed by the compositor (the window's close control): same as Ctrl+,.
-    if (!visible && !hubCommitted) commitHub()
-  }
+  function finish() { visible = false }
+  function cancel() { visible = false }
 
   function syncModelIndex() {
     if (agent === "") { modelSelect.currentIndex = -1; return }
@@ -109,30 +63,8 @@ FloatingWindow {
 
   function chooseAgent(nextAgent) {
     if (agent === nextAgent) return
-    if (nextAgent === "") {
-      agentApplied("", "", "")
-    } else {
-      agentApplied(nextAgent, nextAgent === "claude" ? "claude-opus-5" : "gpt-6-astra",
-        reasoningEffort === "" ? "low" : reasoningEffort)
-    }
+    agentApplied(nextAgent, "", "")
     Qt.callLater(root.syncModelIndex)
-  }
-
-  function hubHostInput() { return hubHostBox.input }
-
-  function normalizedHubPort(value) {
-    var port = Number(value)
-    if (!isFinite(port) || port <= 0) return 0
-    return Math.round(Math.max(1, Math.min(65535, port)))
-  }
-
-  function commitHub() {
-    hubCommitted = true
-    var nextHost = String(hubHostBox.input.text || "").trim()
-    var nextPort = normalizedHubPort(hubPortBox.input.text)
-    if (nextHost !== hubHost || nextPort !== hubPort) hubChanged(nextHost, nextPort)
-    openingHubHost = nextHost
-    openingHubPort = nextPort
   }
 
   function setFromEndpoint(seconds, pixels) {
@@ -183,39 +115,6 @@ FloatingWindow {
     }
     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: parent.chosen() }
   }
-  component Field: Rectangle {
-    property alias input: field
-    property string placeholder
-    height: Style.space(38)
-    color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.05)
-    border.color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.20)
-    radius: Style.cornerRadius
-    TextInput {
-      id: field
-      anchors.fill: parent
-      anchors.margins: Style.space(9)
-      color: Color.menu.text
-      font.family: Style.font.family
-      font.pixelSize: Style.font.body
-      clip: true
-      selectByMouse: true
-      Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape) {
-          root.cancel(); event.accepted = true
-        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          root.commitHub(); event.accepted = true
-        }
-      }
-      Text {
-        anchors.fill: parent
-        visible: !parent.text && !parent.activeFocus
-        text: parent.parent.placeholder
-        color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.42)
-        font: parent.font
-      }
-    }
-  }
-
   Flickable {
     anchors.fill: parent
     contentHeight: content.implicitHeight + Style.space(56)
@@ -231,14 +130,14 @@ FloatingWindow {
 
       // --- Agent ---------------------------------------------------------
       Heading { text: "Agent" }
-      Caption { text: "Applies to new conversations and survives shell restarts." }
+      Caption { text: "Choose an installed, signed-in harness. App search works without one." }
       Row {
         spacing: Style.space(8)
         Repeater {
           model: ["", "codex", "claude"]
           delegate: Choice {
             required property string modelData
-            label: modelData || "Omarchy default"
+            label: modelData || "No harness"
             selected: root.agent === modelData
             onChosen: root.chooseAgent(modelData)
           }
@@ -264,35 +163,13 @@ FloatingWindow {
         enabled: root.agent !== ""
         opacity: enabled ? 1 : 0.5
         Repeater {
-          model: ["low", "medium", "high", "xhigh", "max"]
+          model: ["", "low", "medium", "high", "xhigh", "max"]
           delegate: Choice {
             required property string modelData
-            label: modelData
+            label: modelData || "System default"
             selected: root.reasoningEffort === modelData
             onChosen: root.agentApplied(root.agent, root.model, modelData)
           }
-        }
-      }
-
-      Item { width: 1; height: Style.space(10) }
-
-      // --- Agentd Hub ----------------------------------------------------
-      Heading { text: "Agentd Hub" }
-      Caption { text: "Optional. Lists running agents in Ask's search. Return saves the address." }
-      Row {
-        width: parent.width
-        spacing: Style.space(10)
-        Field {
-          id: hubHostBox
-          width: parent.width - hubPortBox.width - parent.spacing
-          placeholder: "hub address"
-        }
-        Field {
-          id: hubPortBox
-          width: Style.space(100)
-          placeholder: "port"
-          input.inputMethodHints: Qt.ImhDigitsOnly
-          input.validator: IntValidator { bottom: 1; top: 65535 }
         }
       }
 

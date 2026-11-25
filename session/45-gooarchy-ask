@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Generate the launcher default after checking the effective user bindings."""
+
+import os
+import re
+import sys
+from pathlib import Path
+
+BINDING = ("command", "binding_gooarchy_ask")
+REPEATABLE_BINDING = ("command", "repeatable_binding_gooarchy_ask")
+COMMAND = ("command", "command_gooarchy_ask")
+
+
+def read_options(path):
+    section = ""
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+        elif "=" in line:
+            name, value = line.split("=", 1)
+            yield (section, name.strip()), value.strip()
+
+
+def owns_super_space(option, value):
+    if option[0] == "scottland" and option[1].startswith("remap_from_"):
+        # Scottland remap sources use XKB names in place of Wayfire's evdev names.
+        return set(re.split(r"[+\s]+", value.lower())) == {"super", "space"}
+    for alternative in value.split("|"):
+        modifiers = {modifier.lower() for modifier in re.findall(r"<([^>]+)>", alternative)}
+        key = re.sub(r"<[^>]+>", "", alternative).strip().upper()
+        if modifiers == {"super"} and key == "KEY_SPACE":
+            return True
+    return False
+
+
+def main():
+    # These hooks are scoped to the active Scottland startup, including checkout sessions.
+    hooks = Path(os.environ.get("SCOTTLAND_HOOKS") or "/usr/lib/scottland")
+    importer = hooks / "config.d" / "50-omarchy-shortcuts"
+    if importer.is_file() and os.access(importer, os.X_OK):
+        return
+
+    # Scottland already watches both of these inputs, including creation of overrides.ini.
+    if sys.argv[1] == "--watch-paths":
+        return
+
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    overrides = config / "scottland" / "overrides.ini"
+    options = dict(read_options(Path(sys.argv[1])))
+    if overrides.is_file():
+        options.update(read_options(overrides))
+
+    lines = []
+    if BINDING not in options and REPEATABLE_BINDING not in options:
+        if any(owns_super_space(option, value) for option, value in options.items()):
+            return
+        lines.append("binding_gooarchy_ask = <super> KEY_SPACE")
+    if COMMAND not in options:
+        lines.append("command_gooarchy_ask = gooarchy-ask")
+    if lines:
+        print("[command]", *lines, sep="\n")
+
+
+if __name__ == "__main__":
+    main()

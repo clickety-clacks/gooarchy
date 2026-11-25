@@ -4,11 +4,9 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolveHarness, resolveExecutable } from "./harness-policy.js";
+import { dirname } from "node:path";
+import { resolveHarness, resolveExecutable, resolveAdapter } from "./harness-policy.js";
 import { explainHarnessError, needsNewSession } from "./harness-errors.js";
-import { readClipboard } from "./image-paste.js";
 import { agentModeFor } from "./permission-mode.js";
 import {
   ClientSideConnection,
@@ -25,55 +23,13 @@ function startupValue(resolve) {
   }
 }
 const agentName = startupValue(() => resolveHarness());
-const bundledAgentBinary = join(
-  here,
-  "node_modules",
-  ".bin",
-  agentName === "codex" ? "codex-acp" : "claude-agent-acp",
-);
-function configuredAgentCommand() {
-  const specificName = agentName === "codex"
-    ? "ASK_CODEX_ACP_COMMAND" : "ASK_CLAUDE_ACP_COMMAND";
-  const raw = String(process.env[specificName]
-    || process.env.ASK_ACP_COMMAND || "").trim();
-  if (!raw) return [bundledAgentBinary];
-  let command;
-  try { command = JSON.parse(raw); }
-  catch { throw new Error("ASK_ACP_COMMAND must be a JSON array of arguments"); }
-  if (!Array.isArray(command) || command.length === 0
-      || command.some((argument) => typeof argument !== "string" || argument === ""))
-    throw new Error("ASK_ACP_COMMAND must be a non-empty JSON array of non-empty strings");
-  return command;
-}
-const agentCommand = startupValue(configuredAgentCommand);
+const agentCommand = startupValue(() => resolveAdapter(agentName, here));
 const cwd = process.env.ASK_CWD || process.env.HOME || process.cwd();
-const settingsDir = join(process.env.HOME || process.cwd(), ".config", "omarchy");
-const settingsPath = join(settingsDir, "ask.json");
+let permissionMode = process.env.ASK_PERMISSION_MODE === "yolo" ? "yolo" : "permission";
 
-let permissionMode = "permission";
-
-async function loadSettings() {
-  try {
-    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
-    permissionMode = settings.permissionMode === "yolo" ? "yolo" : "permission";
-  } catch {}
-}
-
-async function savePermissionMode(mode) {
+async function setPermissionMode(mode) {
   const nextMode = mode === "yolo" ? "yolo" : "permission";
   await applyAgentMode(nextMode);
-  await mkdir(settingsDir, { recursive: true });
-  // The UI writes its own keys (font scale) to this file. Merge rather than
-  // replace so toggling the mode cannot drop them.
-  let settings = {};
-  try {
-    const parsed = JSON.parse(await readFile(settingsPath, "utf8"));
-    if (parsed && typeof parsed === "object") settings = parsed;
-  } catch {}
-  settings.permissionMode = nextMode;
-  await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, {
-    mode: 0o600,
-  });
   permissionMode = nextMode;
 }
 
@@ -179,7 +135,6 @@ let turnRunning = false;
 let steeringSupported = false;
 let imagePromptSupported = false;
 let shuttingDown = false;
-let clipboardAbortController = null;
 let childExitResolve;
 const childExited = new Promise((resolve) => { childExitResolve = resolve; });
 
@@ -234,7 +189,6 @@ const client = {
 };
 
 async function start() {
-  await loadSettings();
   const stream = ndJsonStream(
     Writable.toWeb(child.stdin),
     Readable.toWeb(child.stdout),
@@ -345,8 +299,6 @@ function allowAllPendingPermissions() {
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  clipboardAbortController?.abort();
-  clipboardAbortController = null;
   for (const { resolve } of pendingPermissions.values()) {
     resolve({ outcome: { outcome: "cancelled" } });
   }
@@ -387,34 +339,17 @@ input.on("line", (line) => {
     steer(String(message.text || "")).catch((error) => {
       emit({ type: "steering_error", message: error.message || String(error) });
     });
-  } else if (message.type === "read_clipboard") {
-    clipboardAbortController?.abort();
-    const controller = new AbortController();
-    clipboardAbortController = controller;
-    readClipboard(message.policy, { signal: controller.signal }).then((result) => {
-      if (!controller.signal.aborted && !shuttingDown)
-        emit({ type: "clipboard", requestId: message.requestId, ...result });
-    }).catch((error) => {
-      if (controller.signal.aborted || shuttingDown) return;
-      emit({
-        type: "clipboard_error",
-        requestId: message.requestId,
-        message: error.message || "Could not read the clipboard.",
-      });
-    }).finally(() => {
-      if (clipboardAbortController === controller) clipboardAbortController = null;
-    });
   } else if (message.type === "permission") {
     answerPermission(message);
   } else if (message.type === "permission_mode") {
-    savePermissionMode(message.mode).then(() => {
+    setPermissionMode(message.mode).then(() => {
       if (permissionMode === "yolo") allowAllPendingPermissions();
       emit({ type: "permission_mode", mode: permissionMode });
     }).catch((error) => {
       emit({
         type: "permission_mode_error",
         mode: permissionMode,
-        message: `Could not save permission mode: ${error.message}`,
+        message: `Could not change permission mode: ${error.message}`,
       });
     });
   } else if (message.type === "cancel" && connection && sessionId) {

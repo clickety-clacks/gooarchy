@@ -2,3 +2,4 @@ __pycache__/
 *.pkg.tar.zst
 target/
 /build/
+/ask/bridge/node_modules/

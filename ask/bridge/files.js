@@ -9,7 +9,7 @@ const coordinator = new FileSearchCoordinator({
   home: process.env.HOME || process.cwd(),
   settingsPath: process.env.ASK_FILE_SETTINGS
     || join(process.env.XDG_CONFIG_HOME || join(process.env.HOME || process.cwd(), ".config"),
-      "omarchy", "ask.json"),
+      "gooarchy", "ask.json"),
   repoDepth: process.env.ASK_REPO_SEARCH_DEPTH,
   enableIndex: process.env.ASK_DISABLE_FILE_INDEX !== "1",
   emit: (event) => process.stdout.write(`${JSON.stringify(event)}\n`),

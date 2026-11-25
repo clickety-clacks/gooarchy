@@ -1,12 +1,8 @@
 import QtQuick
-import "ShortcutPolicy.js" as ShortcutPolicy
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
-import Quickshell.Hyprland
-import qs.Commons
-import qs.Ui
 
 Item {
   id: root
@@ -44,12 +40,8 @@ Item {
   property bool outsideDismissArmed: false
   property bool sessionLost: false
   property bool pinned: false
-  property bool pinPending: false
-  property int pinPrepareAttempts: 0
   readonly property var bridgeProcessId: agent.processId
-  readonly property bool shortcutReady: pinned ? pinnedScope.ready : panelScope.ready
-  readonly property bool shortcutFocused: pinned ? pinnedScope.focused : panelScope.focused
-  property string windowTitle: "Omarchy Ask"
+  property string windowTitle: "Gooarchy Ask"
   property string statusText: ""
   property int activeReply: -1
   property string activeReplyMessageId: ""
@@ -66,14 +58,12 @@ Item {
   signal fontScaleStepRequested(real step)
   signal fontScaleResetRequested()
   signal settingsRequested()
-  signal agentRequested(string id)
   signal sessionRestartRequested()
   property real keyboardLineImpulse: 335
   property real keyboardPageImpulse: 689
   property real keyboardDeceleration: 608
   property var fileOpenCommand: []
   property var fileEditCommand: []
-  property var agentRows: []
   property bool settingsOpen: false
   property string agentName: ""
   property string modelName: ""
@@ -143,8 +133,6 @@ Item {
     if (!row) return ""
     if (row.isPath || (row.name !== undefined && row.path !== undefined))
       return "path:" + String(row.absolutePath || row.path || "")
-    if (row.isWindow) return "window:" + String(row.stableId || row.id || "")
-    if (row.isAgent) return "agent:" + String(row.agentId || row.id || "")
     if (row.isApp) return "app:" + String(row.appId || row.id || "")
     return String(row.id || "")
   }
@@ -277,7 +265,6 @@ Item {
     opened = true
     noteKeyboardActivity()
     entranceTimer.restart()
-    agent.running = true
   }
 
   readonly property var bridgeCommand: {
@@ -286,13 +273,12 @@ Item {
     if (raw !== "") {
       try { prefix = JSON.parse(raw) } catch (error) { prefix = [] }
     }
-    // Preserve the historical PATH lookup when no platform command is
-    // supplied. Omarchy deployments can provide any argv prefix explicitly.
     if (!Array.isArray(prefix) || prefix.length === 0) prefix = ["node"]
     return ["env", "HUGINN_INTERNAL=1", "ASK_AGENT=" + agentName,
       "ASK_MODEL=" + modelName,
+      "ASK_PERMISSION_MODE=" + permissionMode,
       "ASK_REASONING_EFFORT=" + reasoningEffort].concat(prefix).concat([
-      Quickshell.env("HOME") + "/.config/omarchy/plugins/clickety-clacks.ask/bridge/bridge.js"
+      Paths.bridge("bridge.js")
     ])
   }
 
@@ -314,6 +300,7 @@ Item {
     outsideDismissArmed = false
     closeFilePreview()
     agent.running = false
+    clipboard.running = false
     keyboardVelocityY = 0
     keyboardCoast.stop()
     trackpadCoast.stop()
@@ -324,7 +311,6 @@ Item {
     veil.opacity = 0
     layoutReady = false
     opened = false
-    pinPending = false
     pinned = false
     waiting = false
     bridgeReady = false
@@ -369,18 +355,24 @@ Item {
   }
 
   function pasteClipboard() {
-    if (!opened || pendingClipboardId !== -1) return
-    if (!agent.running) {
-      statusText = "Start an agent session before pasting an image."
-      prompt.paste()
-      return
-    }
+    if (!opened || clipboard.running || pendingClipboardId !== -1) return
     pendingClipboardId = ++clipboardSequence
     clipboardRequestedWhileWaiting = waiting
-    agent.write(JSON.stringify({
-      type: "read_clipboard", requestId: pendingClipboardId,
-      policy: imagePastePolicy
-    }) + "\n")
+    clipboard.command = ["node", Paths.bridge("clipboard.js"), String(pendingClipboardId),
+      JSON.stringify(imagePastePolicy)]
+    clipboard.running = true
+  }
+
+  Process {
+    id: clipboard
+    stdout: SplitParser {
+      onRead: function(line) { root.receiveClipboard(JSON.parse(line)) }
+    }
+    onExited: function(code) {
+      if (code !== 0) root.receiveClipboard({
+        type: "clipboard_error", requestId: root.pendingClipboardId
+      })
+    }
   }
 
   function receiveClipboard(event) {
@@ -500,53 +492,14 @@ Item {
   function toggle() { opened ? close() : open("{}") }
 
   function pinConversation() {
-    if (!opened || pinned || pinPending) return
-    pinPrepareAttempts = 0
-    pinPending = true
-  }
-
-  function finishPinAttempt(acknowledged) {
-    if (!opened || !pinPending || pinned) return
-    if (!acknowledged && pinPrepareAttempts < 5) return
+    if (!opened || pinned) return
     pinned = true
     Qt.callLater(function() {
+      var window = pinnedWindow.contentItem.Window.window
+      if (window) window.requestActivate()
       if (root.fileBrowserOpen) filePrompt.forceActiveFocus()
       else prompt.forceActiveFocus()
     })
-  }
-
-  Timer {
-    interval: 20
-    repeat: true
-    triggeredOnStart: true
-    running: root.opened && root.pinPending && !root.pinned
-    onTriggered: {
-      if (pinPrepare.running) return
-      root.pinPrepareAttempts++
-      if (panelScope.instance === "") { root.finishPinAttempt(false); return }
-      pinPrepare.awaitingReply = true
-      pinPrepare.running = true
-    }
-  }
-  Process {
-    id: pinPrepare
-    property bool awaitingReply: false
-    command: ["hyprctl", "-i", panelScope.instance, "askshortcuts", "focus-ready", String(Quickshell.processId), "omarchy-ask"]
-    stdout: StdioCollector {}
-    onExited: function(exitCode) {
-      awaitingReply = false
-      // Missing-module fallback still permits pinning; it must not strand the
-      // conversation in an exclusive layer when the dependency is unavailable.
-      root.finishPinAttempt(exitCode === 0 && String(stdout.text).trim() === "ok")
-    }
-    onRunningChanged: {
-      if (!running && awaitingReply) Qt.callLater(function() {
-        if (!pinPrepare.running && pinPrepare.awaitingReply) {
-          pinPrepare.awaitingReply = false
-          root.finishPinAttempt(false)
-        }
-      })
-    }
   }
 
   function scrollToEnd() {
@@ -757,11 +710,8 @@ Item {
   // Ctrl +/-/0 resizes the conversation text. A focused TextEdit claims keys
   // before a window shortcut sees them, so this runs from the same key
   // handlers the scrolling set uses. Returns true when the key was consumed.
-  // ------------------------------------------------- Omarchy menu in the box
-  // The composer doubles as the menu's search field. Nothing is selected
-  // until you arrow into the list, so Return in the composer always submits a
-  // prompt and can never fire a menu action you did not aim at -- which
-  // matters because those rows include package removal and power off.
+  // The composer doubles as search. Return submits a prompt until the user
+  // explicitly selects a result.
   property int menuIndex: -1
   property int menuShortcutFirst: -1
   property int menuShortcutLast: -1
@@ -782,8 +732,8 @@ Item {
   // a steerable composer must keep offering matches while output streams.
   readonly property bool menuOpen: !hasImageAttachments && menuSearch.hasResults
   readonly property bool menuSelected: root.menuOpen && root.menuIndex >= 0
-  // Aggregate Apps/Agents results keep the ordinary composer text but still
-  // own the same keyboard and submission semantics as @/^/% searches.
+  // Aggregate app results keep the composer text and use the same keyboard
+  // and submission semantics as @ and ^ searches.
   readonly property bool searchScopeActive: root.searchMode !== ""
     || menuSearch.focusedBucket !== ""
 
@@ -909,12 +859,10 @@ Item {
   }
 
   function enterSearchMode(mode, query) {
-    var nextMode = mode === "repos" ? "^"
-      : (mode === "windows" ? "%"
-      : (mode === "agents" ? "&" : (mode === "apps" ? "" : "@")))
+    var nextMode = mode === "repos" ? "^" : (mode === "apps" ? "" : "@")
     menuSearch.focusedBucket = mode === "apps" ? mode : ""
     root.searchMode = nextMode
-    prompt.text = String(query || "").replace(/^[@^%&]/, "").trim()
+    prompt.text = String(query || "").replace(/^[@^]/, "").trim()
     prompt.cursorPosition = prompt.length
     root.menuIndex = -1
     prompt.forceActiveFocus()
@@ -1058,7 +1006,7 @@ Item {
     }
     if (repository) {
       Quickshell.execDetached([
-        "setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path
+        "ghostty", "--working-directory=" + path
       ])
       closeAfterTransientAction()
       return
@@ -1066,7 +1014,7 @@ Item {
     if (verb === "edit") {
       if (root.fileEditCommand.length > 0)
         root.runConfiguredFileCommand(root.fileEditCommand, path)
-      else Quickshell.execDetached(["omarchy-launch-editor", path])
+      else Quickshell.execDetached(["xdg-open", path])
       closeAfterTransientAction()
       return
     }
@@ -1095,8 +1043,7 @@ Item {
     // particular file manager or rewrite machine-specific compositor config.
     Quickshell.execDetached([
       "node",
-      Quickshell.env("HOME")
-        + "/.config/omarchy/plugins/clickety-clacks.ask/bridge/reveal.js",
+      Paths.bridge("reveal.js"),
       String(path || "")
     ])
   }
@@ -1237,10 +1184,7 @@ Item {
     fileTrackpadCoast.start()
   }
 
-  // Assigned by Ask.qml, which the shell assigns in turn.
-  property var shell: null
   property int searchDebounceMs: 270
-  readonly property var appLibrary: root.shell ? root.shell.appLibrary : null
 
   // Result text tracks the same scale as the prompt, so Ctrl +/- moves the
   // whole box together rather than leaving the matches behind.
@@ -1250,8 +1194,6 @@ Item {
   MenuSearch {
     id: menuSearch
     query: root.hasImageAttachments ? "" : root.searchMode + prompt.text
-    appLibrary: root.appLibrary
-    agentRows: root.agentRows
     debounceMs: root.searchDebounceMs
     fileMode: root.fileBrowserOpen && root.fileBrowserMode === "files"
     repoMode: root.fileBrowserOpen && root.fileBrowserMode === "repos"
@@ -1270,7 +1212,6 @@ Item {
     onPathActionRequested: function(path, repository, verb) {
       root.openPathAction(path, repository, verb)
     }
-    onAgentRequested: function(id) { root.agentRequested(id) }
   }
 
   function handleFontKey(event) {
@@ -1386,6 +1327,14 @@ Item {
   function submit() {
     var text = prompt.text.trim()
     if (sessionLost) return
+    if (text === "" && imageAttachments.length === 0) return
+    if (!agent.running) {
+      sessionRestartRequested()
+      if (agentName === "") {
+        statusText = "Choose a harness in Settings (Ctrl+,), then submit again."
+        return
+      }
+    }
     if (waiting) {
       if (text === "") return
       if (!steeringSupported || steeringPending || !bridgeReady || !agent.running) return
@@ -1395,13 +1344,12 @@ Item {
       messages.append({ role: "You", body: text })
       activeReply = messages.count
       activeReplyMessageId = ""
-      messages.append({ role: "Claude", body: "" })
+      messages.append({ role: root.agentName === "claude" ? "Claude" : "Codex", body: "" })
       agent.write(JSON.stringify({ type: "steer", text: text }) + "\n")
       Qt.callLater(root.scrollToEnd)
       return
     }
     var images = imageAttachments.slice()
-    if (text === "" && images.length === 0) return
     if (images.length > 0) {
       activeImageDraft = { id: ++imageDraftSequence, text: prompt.text, images: images }
       imageAttachments = []
@@ -1427,10 +1375,13 @@ Item {
     }
     activeReply = messages.count
     activeReplyMessageId = ""
-    messages.append({ role: "Claude", body: "" })
+    messages.append({ role: root.agentName === "claude" ? "Claude" : "Codex", body: "" })
     if (followTail) Qt.callLater(function() { root.anchorPrompt(promptIndex) })
     if (bridgeReady) sendQueuedPrompt()
-    else statusText = "Starting agent…"
+    else {
+      statusText = "Starting agent…"
+      agent.running = true
+    }
   }
 
   function sendQueuedPrompt() {
@@ -1447,7 +1398,10 @@ Item {
   function setPermissionMode(mode) {
     if (permissionModePending) return
     var next = mode === "yolo" ? "yolo" : "permission"
-    if (agent.running && bridgeReady) {
+    if (!agent.running) {
+      permissionMode = next
+      permissionModeConfirmed(next)
+    } else if (bridgeReady) {
       permissionModePending = true
       agent.write(JSON.stringify({ type: "permission_mode", mode: next }) + "\n")
     }
@@ -1460,7 +1414,7 @@ Item {
     var nextMessageId = String(messageId || "")
     if (nextMessageId !== "" && activeReplyMessageId !== "" && nextMessageId !== activeReplyMessageId) {
       activeReply = messages.count
-      messages.append({ role: "Claude", body: "" })
+      messages.append({ role: root.agentName === "claude" ? "Claude" : "Codex", body: "" })
     }
     if (nextMessageId !== "") activeReplyMessageId = nextMessageId
     messages.setProperty(activeReply, "body", (messages.get(activeReply).body || "") + text)
@@ -1502,9 +1456,7 @@ Item {
     if (line === "") return
     try {
       var event = JSON.parse(line)
-      if (event.type === "clipboard" || event.type === "clipboard_error") {
-        receiveClipboard(event)
-      } else if (event.type === "ready") {
+      if (event.type === "ready") {
         bridgeReady = true
         steeringSupported = event.steeringSupported === true
         imagePromptSupported = event.imagePromptSupported === true
@@ -1583,6 +1535,10 @@ Item {
     if (!sessionLost || agent.running) return
     sessionRestartRequested()
     sessionLost = false
+    if (agentName === "") {
+      statusText = "Choose a harness in Settings (Ctrl+,), then submit again."
+      return
+    }
     queuedPrompt = ""
     queuedImages = []
     steeringSupported = false
@@ -1634,7 +1590,6 @@ Item {
     command: root.bridgeCommand
     stdinEnabled: true
     onExited: function(code) {
-      root.pendingClipboardId = -1
       root.clearPermissions()
       root.bridgeReady = false
       if (!root.opened) return
@@ -1660,29 +1615,18 @@ Item {
     id: panel
     // Steps aside while the settings window is open: an overlay would cover
     // that ordinary window. It comes back, with its state, when settings close.
-    visible: root.opened && (!root.pinned || root.pinPending) && !root.settingsOpen
+    visible: root.opened && !root.pinned && !root.settingsOpen
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "omarchy-ask"
+    WlrLayershell.namespace: "gooarchy-ask"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: root.pinPending ? WlrKeyboardFocus.Exclusive : panelFocus.mode
+    WlrLayershell.keyboardFocus: panelFocus.mode
     ShortcutFocus {
       id: panelFocus
       targetWindow: panel
       wanted: !root.settingsOpen
-      allowed: panelScope.admitted
     }
     exclusionMode: ExclusionMode.Ignore
-
-    ShortcutScope {
-      id: panelScope
-      targetWindow: panel
-      surfaceName: "omarchy-ask"
-      chords: ShortcutPolicy.conversation({ menu: root.menuOpen, files: root.fileBrowserOpen,
-        composer: (prompt.focus || (!panelScope.focusEstablished && !root.fileBrowserOpen)) && prompt.enabled, permission: root.pendingPermissionId !== "",
-        searchMode: root.searchScopeActive, emptyPrompt: prompt.text.length === 0,
-        overlay: true, menuSelected: root.menuSelected })
-    }
 
     // While browsing files, only the Ask card itself accepts pointer input.
     // The rest of this transparent full-screen layer must be click-through so
@@ -1722,7 +1666,7 @@ Item {
     NumberAnimation { id: veilFade; target: veil; property: "opacity"; from: 0; to: 1; duration: 150; easing.type: Easing.OutQuad }
     MouseArea { anchors.fill: parent; onClicked: root.dismissFromOutside() }
 
-    BorderSurface {
+    Rectangle {
       id: card
       parent: root.pinned ? pinnedWindow.contentItem : panel.contentItem
       readonly property int maxHeight: Math.min(Style.space(560), parent.height - Style.gapsOut * 2)
@@ -1742,10 +1686,10 @@ Item {
       color: root.background
       visible: root.layoutReady && !root.fileBrowserOpen
       radius: root.pinned ? 0 : Style.cornerRadius
-      // A pinned surface is plain content. Hyprland owns its outer frame,
+      // A pinned surface is plain content. The compositor owns its outer frame,
       // rounding and clipping; only the layer-shell overlay draws a frame.
-      borderSpec: root.pinned ? Border.none()
-        : Border.surfaceSpec("menu", "border", root.border, Math.max(1, Style.space(2)))
+      border.color: root.border
+      border.width: root.pinned ? 0 : 2
       padding: Style.spacing.panelPadding
       opacity: 0
       Behavior on height {
@@ -2195,7 +2139,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               padding: 0
               color: root.accent
-              placeholderText: ""
+              placeholderText: messages.count === 0 ? "Search apps or ask a question" : ""
               font.family: root.conversationFont
               font.pixelSize: responsiveFontSize
               font.italic: true
@@ -2210,7 +2154,7 @@ Item {
               onTextChanged: {
                 if (!root.hasImageAttachments
                     && !root.fileBrowserOpen && text.length > 0
-                    && "@^%&".indexOf(text.charAt(0)) >= 0) {
+                    && "@^".indexOf(text.charAt(0)) >= 0) {
                   if (root.searchMode === "") {
                     if (menuSearch.focusedBucket !== "")
                       menuSearch.focusedBucket = ""
@@ -2326,8 +2270,7 @@ Item {
                 // The normal square becomes the routing sigil while a focused
                 // inline search mode owns the composer.
                 text: root.searchMode !== "" ? root.searchMode
-                  : (menuSearch.focusedBucket === "apps" ? "A"
-                  : (menuSearch.focusedBucket === "agents" ? "&" : "\u25AA"))
+                  : (menuSearch.focusedBucket === "apps" ? "A" : "\u25AA")
                 color: parent.modeActive ? root.background : root.accent
                 font.family: Style.font.family
                 font.pixelSize: parent.modeActive
@@ -2545,7 +2488,7 @@ Item {
 
                 // Menu rows carry a glyph in their own icon font; applications
                 // carry a real icon, resolved by the same AppLibrary the
-                // launcher uses. One column, either kind.
+                // One column for an application icon or a file thumbnail.
                 Item {
                   id: rowIcon
                   visible: !modelData.isMath
@@ -2565,8 +2508,8 @@ Item {
 
                   Text {
                     anchors.centerIn: parent
-                    visible: !parent.fileImage && (!modelData.isApp || !root.appLibrary)
-                    text: modelData.isApp && !root.appLibrary ? "󰀻" : (modelData.icon || "")
+                    visible: !parent.fileImage && (!modelData.isApp || appIcon.status !== Image.Ready)
+                    text: modelData.isApp ? "▦" : (modelData.icon || "")
                     color: parent.parent.current ? root.accent : root.foreground
                     font.family: modelData.iconFont && modelData.iconFont.length > 0
                       ? modelData.iconFont
@@ -2575,9 +2518,10 @@ Item {
                   }
                   Image {
                     anchors.fill: parent
-                    visible: (modelData.isApp && root.appLibrary) || parent.fileImage
-                    source: modelData.isApp && root.appLibrary
-                      ? root.appLibrary.iconSource(modelData.appIcon)
+                    id: appIcon
+                    visible: modelData.isApp || parent.fileImage
+                    source: modelData.isApp && modelData.appIcon
+                      ? Quickshell.iconPath(modelData.appIcon, true)
                       : (parent.fileImage ? root.localFileUrl(modelData.absolutePath) : "")
                     sourceSize.width: parent.fileImage
                       ? Math.round(parent.width * 2) : root.menuTitleSize
@@ -2742,7 +2686,7 @@ Item {
         color: pinMouse.containsMouse
           ? root.accent
           : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.36)
-        font.family: "JetBrainsMono Nerd Font"
+        font.family: "Symbols Nerd Font Mono"
         font.pixelSize: Style.font.body
         z: 10
 
@@ -2757,7 +2701,7 @@ Item {
       }
     }
 
-    BorderSurface {
+    Rectangle {
       id: fileCard
       parent: root.pinned ? pinnedWindow.contentItem : panel.contentItem
       readonly property int maxHeight: Math.min(Style.space(560), parent.height - Style.gapsOut * 2)
@@ -2770,8 +2714,8 @@ Item {
       visible: root.layoutReady && root.fileBrowserOpen
       color: root.background
       radius: root.pinned ? 0 : Style.cornerRadius
-      borderSpec: root.pinned ? Border.none()
-        : Border.surfaceSpec("menu", "border", root.border, Math.max(1, Style.space(2)))
+      border.color: root.border
+      border.width: root.pinned ? 0 : 2
 
       Column {
         id: fileContent
@@ -2974,8 +2918,7 @@ Item {
               filePreviewProc.running = false
               filePreviewProc.command = [
                 "gjs",
-                Quickshell.env("HOME")
-                  + "/.config/omarchy/plugins/clickety-clacks.ask/bridge/preview.js",
+                Paths.bridge("preview.js"),
                 String(root.filePreviewRequestId), root.hoverPreviewPath
               ]
               filePreviewProc.running = true
@@ -3208,7 +3151,7 @@ Item {
           selectionColor: root.accent
           background: null
           padding: 0
-          font.family: "JetBrainsMono Nerd Font"
+          font.family: "Symbols Nerd Font Mono"
           font.pixelSize: root.menuPathSize
         }
       }
@@ -3223,7 +3166,7 @@ Item {
           anchors.horizontalCenter: parent.horizontalCenter
           text: "󰈙"
           color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.38)
-          font.family: "JetBrainsMono Nerd Font"
+          font.family: "Symbols Nerd Font Mono"
           font.pixelSize: Style.space(54)
         }
         Text {
@@ -3266,14 +3209,15 @@ Item {
 
       MouseArea { anchors.fill: parent }
 
-      BorderSurface {
+      Rectangle {
         id: permissionCard
         width: Math.min(Style.space(430), parent.width - Style.gapsOut * 2)
         height: permissionContent.implicitHeight + Style.spacing.panelPadding * 2
         anchors.centerIn: parent
         color: root.background
         radius: Style.cornerRadius
-        borderSpec: Border.surfaceSpec("menu", "border", root.accent, Math.max(1, Style.space(2)))
+        border.color: root.accent
+        border.width: 2
 
         Column {
           id: permissionContent
@@ -3319,21 +3263,17 @@ Item {
             Button {
               width: (parent.width - parent.spacing) / 2
               text: "N  Deny"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: Style.font.family
-              fontSize: Style.font.body
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
               onClicked: root.answerPermission(false)
             }
 
             Button {
               width: (parent.width - parent.spacing) / 2
               text: "Y  Allow"
-              bordered: true
-              selected: true
-              foreground: root.accent
-              fontFamily: Style.font.family
-              fontSize: Style.font.body
+              highlighted: true
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
               onClicked: root.answerPermission(true)
             }
           }
@@ -3348,23 +3288,6 @@ Item {
     id: pinnedWindow
     visible: root.opened && root.pinned
     title: root.windowTitle
-    ShortcutScope {
-      id: pinnedScope
-      targetWindow: pinnedWindow
-      surfaceName: root.windowTitle
-      onAdmittedChanged: {
-        if (!admitted || !root.pinned || !root.pinPending) return
-        root.pinPending = false
-        Qt.callLater(function() {
-          if (root.opened && root.pinned && pinnedScope.nativeWindow)
-            pinnedScope.nativeWindow.requestActivate()
-        })
-      }
-      chords: ShortcutPolicy.conversation({ menu: root.menuOpen, files: root.fileBrowserOpen,
-        composer: (prompt.focus || (!pinnedScope.focusEstablished && !root.fileBrowserOpen)) && prompt.enabled, permission: root.pendingPermissionId !== "",
-        searchMode: root.searchScopeActive, emptyPrompt: prompt.text.length === 0,
-        overlay: false, menuSelected: root.menuSelected })
-    }
     color: root.background
     implicitWidth: 760
     implicitHeight: 800

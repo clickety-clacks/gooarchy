@@ -2,44 +2,18 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
-import qs.Commons
-import qs.Ui
 
 Item {
   id: root
 
-  // The shell assigns this if the property exists (shell.qml: `"shell" in item`).
-  // It is the only route to the shared AppLibrary, which is what makes
-  // applications searchable from the composer alongside menu rows.
-  property var shell: null
   property var activeOverlay: null
   property var conversations: []
   property int conversationSequence: 0
-  property bool opening: false
-  property string pendingOpenPayload: ""
-  readonly property bool shortcutRuntimeReady: shortcutRuntime.available
-  readonly property bool shortcutRuntimePending: shortcutRuntime.pending
-  readonly property string shortcutRuntimeError: shortcutRuntime.error
-  readonly property bool opened: opening || (activeOverlay !== null
-    && activeOverlay.opened
-    && !activeOverlay.pinned)
-
-  ShortcutRuntime {
-    id: shortcutRuntime
-    onSettled: {
-      if (!root.opening) return
-      var payload = root.pendingOpenPayload
-      root.opening = false
-      root.pendingOpenPayload = ""
-      root.createConversation(payload)
-    }
-  }
-
   // The manager owns the font scale so every conversation — overlay or pinned
   // window — reads one value and a single writer persists it.
   readonly property real minFontScale: 0.7
   readonly property real maxFontScale: 2
-  readonly property string settingsPath: Quickshell.env("HOME") + "/.config/omarchy/ask.json"
+  readonly property string settingsPath: Paths.settings
   property real fontScale: 1
   // How long typing has to pause before the menu search recomputes. Matching
   // is cheap; the resize it triggers is not, so this is really a tolerance
@@ -56,12 +30,6 @@ Item {
   property string selectedAgent: ""
   property string selectedModel: ""
   property string selectedReasoningEffort: ""
-  property string agentdHubHost: ""
-  property int agentdHubPort: 0
-  // agentdHub.transport in ask.json: "auto", "local", "et", "mosh" or "ssh".
-  // Read only; the bridge validates it and Ask never writes discovered
-  // transport facts into ask.json (they live under ~/.local/state).
-  property string agentdHubTransport: "auto"
   readonly property real keyboardPageImpulse: keyboardLineImpulse * (740 / 360)
   property bool settingsLoaded: false
   // Keep the complete decoded object so adding a setting never erases fields
@@ -70,9 +38,6 @@ Item {
   // Retained so writing the font scale cannot drop the mode the bridge owns.
   property string persistedPermissionMode: "permission"
   property bool copyToastVisible: false
-  // Never take over (or reset) the user's compositor submap. Legacy
-  // useHyprlandShortcutSubmap preferences are deliberately ignored.
-
   function showCopyToast() {
     copyToastFade.stop()
     copyToastCard.opacity = 1
@@ -129,17 +94,6 @@ Item {
     selectedAgent = String(data.agent || "")
     selectedModel = selectedAgent ? String(data.model || "") : ""
     selectedReasoningEffort = selectedAgent ? String(data.reasoningEffort || "") : ""
-    var hub = data.agentdHub && typeof data.agentdHub === "object"
-      && !Array.isArray(data.agentdHub) ? data.agentdHub : ({})
-    var hasHubHost = Object.prototype.hasOwnProperty.call(hub, "host")
-    var hasHubPort = Object.prototype.hasOwnProperty.call(hub, "port")
-    var rawHubHost = hasHubHost ? hub.host : (data.agentdHubHost || "")
-    agentdHubHost = rawHubHost === null || rawHubHost === undefined
-      ? "" : String(rawHubHost).trim()
-    var hubPort = Number(hasHubPort ? hub.port : data.agentdHubPort)
-    agentdHubPort = isFinite(hubPort) && hubPort > 0
-      ? Math.round(Math.max(1, Math.min(65535, hubPort))) : 0
-    agentdHubTransport = typeof hub.transport === "string" ? hub.transport : "auto"
     settingsLoaded = true
   }
 
@@ -174,29 +128,8 @@ Item {
     output.agent = selectedAgent
     output.model = selectedModel
     output.reasoningEffort = selectedReasoningEffort
-    output.agentdHubHost = agentdHubHost
-    output.agentdHubPort = agentdHubPort
-    var existingHub = output.agentdHub && typeof output.agentdHub === "object"
-      && !Array.isArray(output.agentdHub)
-      ? output.agentdHub : ({})
-    output.agentdHub = {}
-    var hubKeys = Object.keys(existingHub)
-    for (var h = 0; h < hubKeys.length; h++) output.agentdHub[hubKeys[h]] = existingHub[hubKeys[h]]
-    output.agentdHub.host = agentdHubHost
-    output.agentdHub.port = agentdHubPort
     persistedSettings = output
     settingsFile.setText(JSON.stringify(output, null, 2) + "\n")
-  }
-
-  function setAgentdHub(host, port) {
-    var nextHost = String(host || "").trim()
-    var nextPort = Number(port)
-    if (!isFinite(nextPort) || nextPort <= 0) nextPort = 0
-    else nextPort = Math.round(Math.max(1, Math.min(65535, nextPort)))
-    if (nextHost === agentdHubHost && nextPort === agentdHubPort) return
-    agentdHubHost = nextHost
-    agentdHubPort = nextPort
-    if (settingsLoaded) settingsSaveTimer.restart()
   }
 
   FileView {
@@ -204,6 +137,7 @@ Item {
     path: root.settingsPath
     watchChanges: true
     atomicWrites: true
+    blockLoading: true
     printErrors: false
     onLoaded: root.loadSettings(text())
     // First run: the file does not exist yet. Without this the scale would
@@ -226,8 +160,6 @@ Item {
     reasoningEffort: root.selectedReasoningEffort
     impulse: root.keyboardLineImpulse
     deceleration: root.keyboardDeceleration
-    hubHost: root.agentdHubHost
-    hubPort: root.agentdHubPort
     onAgentApplied: function(nextAgent, nextModel, nextReasoningEffort) {
       root.selectedAgent = nextAgent
       root.selectedModel = nextModel
@@ -238,29 +170,20 @@ Item {
       root.setKeyboardMotion(nextImpulse, nextDeceleration)
     }
     onResetRequested: root.setKeyboardMotion(335, 608)
-    onHubChanged: function(host, port) { root.setAgentdHub(host, port) }
   }
-
-  AgentdHub {
-    id: agentdHub
-    host: root.agentdHubHost
-    port: root.agentdHubPort
-    transport: root.agentdHubTransport
-  }
-
 
   PanelWindow {
     id: copyToast
     visible: root.copyToastVisible
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "omarchy-ask-copied"
+    WlrLayershell.namespace: "gooarchy-ask-copied"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
     mask: Region { item: copyToastCard }
 
-    BorderSurface {
+    Rectangle {
       id: copyToastCard
       width: copyToastText.implicitWidth + Style.space(42)
       height: Style.space(58)
@@ -268,8 +191,8 @@ Item {
       y: Math.round(parent.height * 0.22)
       color: Color.menu.background
       radius: Style.cornerRadius
-      borderSpec: Border.surfaceSpec("menu", "border", Color.accent,
-        Math.max(1, Style.space(2)))
+      border.color: Color.accent
+      border.width: 2
 
       Text {
         id: copyToastText
@@ -320,21 +243,20 @@ Item {
     var conversation = conversationComponent.createObject(root)
     if (!conversation) return null
     conversationSequence++
-    conversation.windowTitle = "Omarchy Ask #" + conversationSequence
+    conversation.windowTitle = "Gooarchy Ask #" + conversationSequence
     conversations = conversations.concat([conversation])
     activeOverlay = conversation
     conversation.fontScale = Qt.binding(function() { return root.fontScale })
-    conversation.shell = Qt.binding(function() { return root.shell })
     conversation.searchDebounceMs = Qt.binding(function() { return root.searchDebounceMs })
     conversation.keyboardLineImpulse = Qt.binding(function() { return root.keyboardLineImpulse })
     conversation.keyboardPageImpulse = Qt.binding(function() { return root.keyboardPageImpulse })
     conversation.keyboardDeceleration = Qt.binding(function() { return root.keyboardDeceleration })
     conversation.fileOpenCommand = Qt.binding(function() { return root.fileOpenCommand })
     conversation.fileEditCommand = Qt.binding(function() { return root.fileEditCommand })
-    conversation.agentRows = Qt.binding(function() { return agentdHub.agents })
     conversation.agentName = root.selectedAgent
     conversation.modelName = root.selectedModel
     conversation.reasoningEffort = root.selectedReasoningEffort
+    conversation.permissionMode = root.persistedPermissionMode
     conversation.settingsOpen = Qt.binding(function() { return settings.visible })
     conversation.fontScaleStepRequested.connect(function(step) { root.adjustFontScale(step) })
     conversation.fontScaleResetRequested.connect(function() { root.setFontScale(1) })
@@ -342,7 +264,6 @@ Item {
       if (settings.visible) settings.finish()
       else settings.open()
     })
-    conversation.agentRequested.connect(function(id) { agentdHub.activate(id) })
     conversation.sessionRestartRequested.connect(function() {
       conversation.agentName = root.selectedAgent
       conversation.modelName = root.selectedModel
@@ -351,6 +272,7 @@ Item {
     conversation.copyConfirmed.connect(function() { root.showCopyToast() })
     conversation.permissionModeConfirmed.connect(function(mode) {
       root.persistedPermissionMode = mode === "yolo" ? "yolo" : "permission"
+      settingsSaveTimer.restart()
     })
     conversation.closed.connect(function() { root.removeConversation(conversation) })
     conversation.pinnedChanged.connect(function() {
@@ -362,20 +284,12 @@ Item {
   }
 
   function open(payloadJson) {
-    if (opening) return
     if (activeOverlay && activeOverlay.opened && !activeOverlay.pinned) return
-    shortcutRuntime.ensure()
-    if (shortcutRuntime.pending) {
-      opening = true
-      pendingOpenPayload = String(payloadJson || "{}")
-      return
-    }
+    if (!settingsLoaded) settingsFile.text()
     createConversation(payloadJson)
   }
 
   function close() {
-    opening = false
-    pendingOpenPayload = ""
     if (activeOverlay && activeOverlay.opened && !activeOverlay.pinned)
       activeOverlay.close()
   }
@@ -386,15 +300,13 @@ Item {
   }
 
   function closeAll() {
-    opening = false
-    pendingOpenPayload = ""
     if (settings.visible) settings.finish()
     var snapshot = conversations.slice()
     for (var i = 0; i < snapshot.length; i++) snapshot[i].close()
   }
 
   function toggle(payloadJson) {
-    if (opened) close()
+    if (activeOverlay && activeOverlay.opened) close()
     else open(payloadJson)
   }
 }

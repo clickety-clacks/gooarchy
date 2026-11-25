@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Gooarchy Ask
+Comment=Launch apps or ask a local coding agent
+Exec=gooarchy-ask
+Icon=system-search
+Categories=Utility;

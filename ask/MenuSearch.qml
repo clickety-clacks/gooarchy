@@ -1,43 +1,11 @@
-// Omarchy menu rows, searchable from the Ask composer.
-//
-// This deliberately owns no model of its own. The menu's rows, merge rules,
-// guard evaluation, ranking and ✓ marks all come from the shell's own
-// MenuModel.js, so anything that reconfigures the Omarchy menu -- an edit to
-// either JSONC file, a plugin, an agent, an Omarchy update -- reconfigures
-// this at the same moment and with identical semantics. Reimplementing any of
-// it here would be a second definition of the same thing, free to drift.
-//
-// Search is flat on purpose. The composer is a search box, not a place to
-// walk a tree, so all leaf rows compete at once and each carries its own
-// path as context.
-
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import qs.Commons
-import "file:///usr/share/omarchy/shell/plugins/menu/MenuModel.js" as MenuModel
 
 Item {
   id: root
 
-  readonly property string omarchyPath: Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy"
-  readonly property string defaultMenuPath: omarchyPath + "/default/omarchy/omarchy-menu.jsonc"
-  readonly property string userMenuPath: Quickshell.env("HOME") + "/.config/omarchy/extensions/omarchy-menu.jsonc"
-
-  property var defaultMenuItems: []
-  property var userMenuItems: []
-  property var items: ({})
-  property var itemOrder: []
-  property var whenResults: ({})
-  property var checkedResults: ({})
-
-  // What the composer is asking about, and what it gets back.
-  // Supplied by the conversation, which gets it from the shell. Omarchy
-  // 4.0.4 can decline this capability for an otherwise valid menu plugin, so
-  // DesktopEntries is the compatible read-only fallback.
-  property var appLibrary: null
   property var desktopEntries: DesktopEntries.applications
-  property var agentRows: []
   property string query: ""
   // Rows are intentionally not capped here.  The result viewport is already
   // bounded and scrollable; capping before bucket balancing hid valid matches
@@ -60,19 +28,13 @@ Item {
   property int repoMatchCount: 0
   property bool repoMatchCapped: false
   property bool repoMatchComplete: true
-  property var windowRows: []
-  property int windowMatchCount: 0
-  property bool windowMatchCapped: false
-  property bool windowMatchComplete: true
   property int fileRequestId: 0
-  property int windowRequestId: 0
   property bool fileMode: false
   property bool repoMode: false
   property string fileQueryOverride: ""
   property string focusedBucket: ""
   property bool lastRunKeepsOpen: false
 
-  onAgentRowsChanged: root.refreshRows()
   onFocusedBucketChanged: root.refreshRows()
   onDesktopEntriesChanged: root.refreshRows()
 
@@ -84,75 +46,6 @@ Item {
   signal actionRan(string label)
   signal browseRequested(string mode, string query)
   signal pathActionRequested(string path, bool repository, string verb)
-  signal agentRequested(string id)
-
-  function statusText(agent) {
-    if (agent && agent.hubSourceState && agent.hubSourceState !== "reporting")
-      return "unreachable"
-    if (agent && agent.presence && agent.presence.state === "unknown")
-      return "presence unknown"
-    if (agent && agent.hubScanState && agent.hubScanState !== "complete")
-      return "scan degraded"
-    var state = String(agent && agent.activity && agent.activity.state || "unknown")
-    if (state === "needs_attention") return "needs attention"
-    if (state === "active") return "active"
-    if (state === "idle") return "idle"
-    return "unknown"
-  }
-
-  function agentIdentity(agent) {
-    // Keep activation IDs structurally identical to bridge/agentd-hub.js. A
-    // delimiter-joined ID can collide when Hub metadata contains delimiters.
-    return JSON.stringify([
-      String(agent && agent.machine || ""), String(agent && agent.instanceId || ""),
-      agent && agent.id ? agent.id.pid : undefined,
-      agent && agent.id ? agent.id.startTimeTicks : undefined
-    ])
-  }
-
-  function matchingAgents(text) {
-    var raw = String(text || "").trim()
-    var value = raw.replace(/^[@^%&]/, "").trim().toLowerCase()
-    if (value === "" && raw !== "&") return []
-    var terms = value.split(/\s+/).filter(function(term) { return term !== "" })
-    var found = []
-    for (var i = 0; i < root.agentRows.length; i++) {
-      var agent = root.agentRows[i]
-      if (!agent || typeof agent !== "object") continue
-      var location = agent.tmux && typeof agent.tmux === "object" ? agent.tmux : ({})
-      // Agentd names are the primary identity. The harness/session fallback is
-      // useful for unlabelled agents, while status is deliberately excluded
-      // from matching so idle/active/unknown rows behave identically.
-      var explicitName = String(agent.name || "").trim()
-      var name = explicitName || String(location.session || agent.harness || "").trim()
-      var haystack = name.toLowerCase()
-      if (!name || !terms.every(function(term) { return haystack.indexOf(term) >= 0 })) continue
-      var machine = String(agent.machine || "")
-      var status = root.statusText(agent)
-      var id = root.agentIdentity(agent)
-      found.push({
-        id: "agent:" + id,
-        agentId: id,
-        label: name,
-        path: machine + (status ? " · " + status : ""),
-        icon: "󰚩",
-        iconFont: "JetBrainsMono Nerd Font",
-        isAgent: true,
-        agent: agent,
-        machine: machine,
-        agentStatus: status,
-        bucketKey: "agents",
-        appIcon: "", appId: "", action: "", route: "",
-        score: name.toLowerCase() === value ? 0
-          : (haystack.indexOf(value) === 0 ? 1 : 2)
-      })
-    }
-    return found.sort(function(a, b) {
-      return a.score - b.score || a.label.localeCompare(b.label)
-        || a.machine.localeCompare(b.machine)
-    })
-  }
-
   function fallbackAppScore(entry, name, query) {
     var words = name.toLowerCase().split(/[^a-z0-9]+/).filter(function(word) { return word !== "" })
     var genericName = String(entry && (entry.genericName || entry.subtext) || "").toLowerCase()
@@ -178,49 +71,19 @@ Item {
   }
 
   function matchingApps(text) {
-    var value = String(text || "").replace(/^%|^@|^\^/, "").trim()
+    var value = String(text || "").trim()
     var found = []
-    if (root.appLibrary) {
-      var appRows = root.appLibrary.sortedEntries(value)
-      for (var a = 0; a < appRows.length; a++) {
-        var app = appRows[a].entry
-        // PluginAppLibraryApi exposes entries that are already filtered by
-        // the shell's hidden-entry policy.
-        if (!app) continue
-        var name = root.appLibrary.entryName(app)
-        if (!name) continue
-        var subtext = root.appLibrary.entrySubtext(app) || ""
-        var aliases = [subtext]
-        try {
-          if (app.keywords && typeof app.keywords.join === "function")
-            aliases = aliases.concat(app.keywords)
-        } catch (error) { }
-        var appEntry = {
-          id: "app:" + app.id, parent: "apps", kind: "app", label: name,
-          aliases: aliases, description: subtext, order: a
-        }
-        var appItems = ({})
-        appItems[appEntry.id] = appEntry
-        found.push({
-          id: appEntry.id, label: name, path: subtext || "Apps", icon: "",
-          iconFont: "", isApp: true, appIcon: app.icon || "",
-          appId: String(app.id || ""), action: "", route: "",
-          score: MenuModel.searchScore(appItems, appEntry, value), bucketKey: "apps"
-        })
-      }
-      return found
-    }
     var entries = root.desktopEntries && root.desktopEntries.values
     if (!entries || typeof entries.length !== "number") return found
     for (var i = 0; i < entries.length; i++) {
       var entry = entries[i]
       var entryName = String(entry && (entry.name || entry.id) || "")
       var score = root.fallbackAppScore(entry, entryName, value)
-      if (!entryName || score < 0) continue
+      if (!entryName || entry.noDisplay || score < 0) continue
       found.push({
         id: "app:" + String(entry.id || entryName), label: entryName,
         path: String(entry.genericName || entry.subtext || "Apps"), icon: "󰀻",
-        iconFont: "JetBrainsMono Nerd Font", isApp: true,
+        iconFont: "Symbols Nerd Font Mono", isApp: true,
         appIcon: String(entry.icon || ""), appId: String(entry.id || ""),
         action: "", route: "", score: score, bucketKey: "apps", fallbackApp: true
       })
@@ -230,65 +93,22 @@ Item {
     })
   }
 
-  function rebuild() {
-    var merged = MenuModel.mergeMenuSources(root.defaultMenuItems, root.userMenuItems)
-    root.items = merged.items
-    root.itemOrder = merged.itemOrder
-    evaluateGuards()
-    refreshRows()
-  }
-
-  // A row only competes if the menu itself would show it: a `when:` that
-  // evaluated false hides it here exactly as it does there. Ordinary search
-  // is assembled in product order: aggregate headers, Go-menu matches, two
-  // representatives from every matching bucket, then a balanced fill to 20.
   function refreshRows() {
     var text = String(root.query || "").trim()
     if (text === "") { root.rows = []; return }
-    var windowOnly = text.indexOf("%") === 0
     var fileOnly = text.indexOf("@") === 0
     var repoOnly = text.indexOf("^") === 0
-    var agentOnly = text.indexOf("&") === 0
-    if (agentOnly || root.focusedBucket === "agents") {
-      var focusedAgents = root.matchingAgents(text)
-      if (focusedAgents.length === 0) { root.rows = []; return }
-      root.rows = focusedAgents.length === 1 ? focusedAgents : [{
-        id: "agents-results", label: focusedAgents.length + " agents", path: "Agents",
-        icon: "󰚩", iconFont: "JetBrainsMono Nerd Font", isAggregate: true,
-        aggregateBucket: "agents", appIcon: "", appId: "", action: "", route: ""
-      }].concat(focusedAgents)
-      return
-    }
     if (root.focusedBucket === "apps") {
       var focusedApps = root.matchingApps(text)
       if (focusedApps.length === 0) { root.rows = []; return }
       root.rows = focusedApps.length === 1 ? focusedApps : [{
         id: "apps-results", label: focusedApps.length + " apps", path: "Apps",
-        icon: "󰀻", iconFont: "JetBrainsMono Nerd Font", isAggregate: true,
+        icon: "󰀻", iconFont: "Symbols Nerd Font Mono", isAggregate: true,
         aggregateBucket: "apps", appIcon: "", appId: "", action: "", route: ""
       }].concat(focusedApps)
       return
     }
     var bucketRows = []
-    var windowMatches = []
-    for (var w = 0; w < root.windowRows.length && w < 100; w++) {
-      var window = root.windowRows[w]
-      windowMatches.push({
-        id: "window:" + window.stableId,
-        label: window.title,
-        path: (windowOnly ? "" : "Workspace " + window.workspace + " · ")
-          + (window.detail ? window.detail + " · " : "") + window.class,
-        workspace: String(window.workspace || ""),
-        icon: "󰖯",
-        iconFont: "JetBrainsMono Nerd Font",
-        isApp: false,
-        isMath: false,
-        isWindow: true,
-        stableId: window.stableId,
-        appIcon: "", appId: "", action: "", route: "",
-        score: Number(window.score || 0), bucketKey: "windows"
-      })
-    }
     if (fileOnly || repoOnly) {
       var matches = repoOnly ? root.repoRows : root.fileRows
       var focusedRows = []
@@ -299,7 +119,7 @@ Item {
           label: match.name || match.path || "",
           path: match.relativePath || match.path || "",
           icon: repoOnly ? "󰊢" : "󰈞",
-          iconFont: "JetBrainsMono Nerd Font",
+          iconFont: "Symbols Nerd Font Mono",
           isApp: false,
           isMath: false,
           isPath: true,
@@ -321,7 +141,7 @@ Item {
         id: repoOnly ? "repo-results" : "file-results",
         label: focusedLabel,
         path: repoOnly ? "Repositories" : "Files",
-        icon: repoOnly ? "󰊢" : "󰈞", iconFont: "JetBrainsMono Nerd Font",
+        icon: repoOnly ? "󰊢" : "󰈞", iconFont: "Symbols Nerd Font Mono",
         isAggregate: true, aggregateBucket: repoOnly ? "repos" : "files",
         appIcon: "", appId: "", action: "", route: ""
       }
@@ -329,36 +149,9 @@ Item {
         focusedCapped, focusedComplete) ? focusedRows : [focusedAggregate].concat(focusedRows)
       return
     }
-    if (windowOnly) {
-      windowMatches.sort(function(a, b) {
-        var aNumber = Number(a.workspace)
-        var bNumber = Number(b.workspace)
-        var bothNumeric = isFinite(aNumber) && isFinite(bNumber)
-        var workspaceOrder = bothNumeric ? aNumber - bNumber
-          : String(a.workspace).localeCompare(String(b.workspace))
-        return workspaceOrder || a.score - b.score || a.label.localeCompare(b.label)
-      })
-      var grouped = windowMatches
-      var priorWorkspace = ""
-      for (var g = 0; g < grouped.length; g++) {
-        grouped[g].workspaceHeader = grouped[g].workspace !== priorWorkspace
-          ? "Workspace " + grouped[g].workspace : ""
-        priorWorkspace = grouped[g].workspace
-      }
-      if (windowMatches.length === 0) { root.rows = []; return }
-      root.rows = root.isSingleMatch(grouped, root.windowMatchCount || grouped.length,
-        root.windowMatchCapped, root.windowMatchComplete) ? grouped : [{
-        id: "window-results", label: root.matchSummaryLabel(root.windowMatchCount
-          || windowMatches.length, root.windowMatchCapped, "windows"), path: "Windows",
-        icon: "󰖯", iconFont: "JetBrainsMono Nerd Font", isAggregate: true,
-        aggregateBucket: "windows", appIcon: "", appId: "", action: "", route: ""
-      }].concat(grouped)
-      return
-    }
     var scored = []
     var goRows = []
-    // Math is a Go-menu suggestion. It remains an individual result after the
-    // bucket headers, rather than silently outranking the aggregate counts.
+    // Math remains an individual result after the bucket headers.
     if (root.mathRow && root.mathRow.query === root.query) goRows.push({
       id: "math:" + root.mathRequestId,
       label: root.mathRow.expression + " = " + root.mathRow.answer,
@@ -367,43 +160,12 @@ Item {
       appIcon: "", appId: "", action: "", route: "", score: -2,
       bucketKey: "go"
     })
-    for (var i = 0; i < root.itemOrder.length; i++) {
-      var id = root.itemOrder[i]
-      var entry = root.items[id]
-      if (!entry) continue
-      // Submenus compete too. "install" should find Install, and choosing it
-      // opens that menu rather than pretending a submenu is an action.
-      if (!entry.action && !entry.target && entry.kind !== "menu") continue
-      if (id === "root") continue
-      var visible = MenuModel.isVisible(root.items, root.itemOrder, root.whenResults, entry)
-      if (!visible) continue
-      if (!MenuModel.matchesQuery(entry, text, visible)) continue
-      goRows.push({
-        id: id,
-        label: MenuModel.labelFor(entry, root.checkedResults),
-        path: MenuModel.parentPathFor(root.items, id),
-        icon: entry.icon || "",
-        iconFont: entry.iconFont || "",
-        isApp: false,
-        appIcon: "",
-        appId: "",
-        action: entry.action || "",
-        route: entry.action ? "" : id,
-        score: MenuModel.searchScore(root.items, entry, text), bucketKey: "go"
-      })
-    }
-
-    // Applications come from the shell's own AppLibrary -- the same engine the
-    // launcher and the menu's `apps` provider use -- so ATC, Element X and the
-    // rest rank here exactly as they do there, icons included.
     var appMatches = root.matchingApps(text)
-    if (appMatches.length > 0)
-      bucketRows.push({ key: "apps", label: "apps", icon: "󰀻", rows: appMatches })
     if (root.fileRows.length > 0) bucketRows.unshift({
       key: "files", label: "files", icon: "󰈞", rows: root.fileRows.map(function(match, index) {
         return {
           id: "file:" + String(match.path || index), label: match.name || match.path || "",
-          path: match.relativePath || match.path || "", icon: "󰈞", iconFont: "JetBrainsMono Nerd Font",
+          path: match.relativePath || match.path || "", icon: "󰈞", iconFont: "Symbols Nerd Font Mono",
           isPath: true, isRepository: false, absolutePath: String(match.path || ""),
           actionHint: "↵ view  ·  Ctrl+↵ reveal  ·  Alt+↵ edit  ·  Shift+↵ copy",
           appIcon: "", appId: "", action: "", route: "", score: index, bucketKey: "files"
@@ -414,22 +176,15 @@ Item {
       key: "repos", label: "repositories", icon: "󰊢", rows: root.repoRows.map(function(match, index) {
         return {
           id: "repo:" + String(match.path || index), label: match.name || match.path || "",
-          path: match.relativePath || match.path || "", icon: "󰊢", iconFont: "JetBrainsMono Nerd Font",
+          path: match.relativePath || match.path || "", icon: "󰊢", iconFont: "Symbols Nerd Font Mono",
           isPath: true, isRepository: true, absolutePath: String(match.path || ""),
           actionHint: "↵ terminal  ·  Ctrl+↵ reveal  ·  Shift+↵ copy path",
           appIcon: "", appId: "", action: "", route: "", score: index, bucketKey: "repos"
         }
       })
     })
-    if (windowMatches.length > 0) bucketRows.push({ key: "windows", label: "windows", icon: "󰖯", rows: windowMatches })
-    var agents = root.matchingAgents(text)
-    if (agents.length > 0) bucketRows.push({ key: "agents", label: "agents", icon: "󰚩", rows: agents })
-    // An app is directly actionable and should never be obscured by files,
-    // menu entries, windows, or agents. Keep matching apps at the head of
-    // ordinary search, then preserve the existing order for every other
-    // source.
-    var bucketOrder = { apps: 0, files: 1, repos: 2, windows: 3, agents: 4 }
-    bucketRows.sort(function(a, b) { return bucketOrder[a.key] - bucketOrder[b.key] })
+    if (appMatches.length > 0)
+      bucketRows.unshift({ key: "apps", label: "apps", icon: "󰀻", rows: appMatches })
 
     var appPrefix = []
     var appPreviewCount = 0
@@ -438,14 +193,11 @@ Item {
     for (var b = 0; b < bucketRows.length; b++) {
       var bucket = bucketRows[b]
       var count = bucket.key === "files" ? root.fileMatchCount || bucket.rows.length
-        : (bucket.key === "repos" ? root.repoMatchCount || bucket.rows.length
-        : (bucket.key === "windows" ? root.windowMatchCount || bucket.rows.length : bucket.rows.length))
+        : (bucket.key === "repos" ? root.repoMatchCount || bucket.rows.length : bucket.rows.length)
       var capped = bucket.key === "files" ? root.fileMatchCapped
-        : (bucket.key === "repos" ? root.repoMatchCapped
-        : (bucket.key === "windows" ? root.windowMatchCapped : false))
+        : (bucket.key === "repos" && root.repoMatchCapped)
       var complete = bucket.key === "files" ? root.fileMatchComplete
-        : (bucket.key === "repos" ? root.repoMatchComplete
-        : (bucket.key === "windows" ? root.windowMatchComplete : true))
+        : (bucket.key !== "repos" || root.repoMatchComplete)
       if (root.isSingleMatch(bucket.rows, count, capped, complete)) {
         if (bucket.key === "apps") appPrefix.push(bucket.rows[0])
         else scored.push(bucket.rows[0])
@@ -457,7 +209,7 @@ Item {
         id: bucket.key + "-results", label: root.matchSummaryLabel(count, capped,
           bucket.label),
         path: bucket.label.charAt(0).toUpperCase() + bucket.label.slice(1),
-        icon: bucket.icon, iconFont: "JetBrainsMono Nerd Font", isAggregate: true,
+        icon: bucket.icon, iconFont: "Symbols Nerd Font Mono", isAggregate: true,
         aggregateBucket: bucket.key, appIcon: "", appId: "", action: "", route: ""
       }
       if (bucket.key !== "apps") {
@@ -530,7 +282,6 @@ Item {
     } else if (row.isAggregate) {
       root.lastRunKeepsOpen = true
       if (row.aggregateBucket === "files" || row.aggregateBucket === "repos"
-          || row.aggregateBucket === "windows" || row.aggregateBucket === "agents"
           || row.aggregateBucket === "apps")
         root.browseRequested(row.aggregateBucket, root.query)
       return true
@@ -541,26 +292,9 @@ Item {
         : ((flags & Qt.AltModifier) !== 0 ? "edit" : "open"))
       root.pathActionRequested(row.absolutePath, Boolean(row.isRepository), verb)
     } else if (row.isApp) {
-      if (root.appLibrary) root.appLibrary.launch(row.appId, row.label)
-      else {
-        var desktopId = String(row.appId || "").replace(/\.desktop$/i, "")
-        if (!desktopId) return false
-        Quickshell.execDetached(["gtk-launch", desktopId])
-      }
-    } else if (row.isWindow) {
-      Quickshell.execDetached([
-        "node",
-        Quickshell.env("HOME") + "/.config/omarchy/plugins/clickety-clacks.ask/bridge/windows.js",
-        "--focus", String(row.stableId || "")
-      ])
-    } else if (row.isAgent) {
-      root.agentRequested(row.agentId)
-    } else if (row.route) {
-      // A submenu opens in the real menu. Reimplementing drill-down here
-      // would be a second navigation model over the same rows.
-      Util.execDetached("omarchy menu summon " + row.route)
-    } else {
-      Util.execDetached(String(row.action))
+      var desktopId = String(row.appId || "").replace(/\.desktop$/i, "")
+      if (!desktopId) return false
+      Quickshell.execDetached(["gtk-launch", "--", desktopId])
     }
     root.actionRan(row.label)
     return true
@@ -575,7 +309,6 @@ Item {
     // until typing has paused, so late results cannot jitter the current rows.
     root.mathRequestId++
     root.fileRequestId++
-    root.windowRequestId++
     root.mathRow = null
     root.fileRows = []
     root.fileMatchCount = 0
@@ -585,10 +318,6 @@ Item {
     root.repoMatchCount = 0
     root.repoMatchCapped = false
     root.repoMatchComplete = true
-    root.windowRows = []
-    root.windowMatchCount = 0
-    root.windowMatchCapped = false
-    root.windowMatchComplete = true
     root.rows = []
     if (String(root.query || "").trim() === "") {
       return
@@ -598,17 +327,12 @@ Item {
 
   function runSettledSearch() {
     if (String(root.query || "").trim() === "") return
-    if (/^&/.test(String(root.query || "").trim()) || root.focusedBucket === "agents") {
-      root.refreshRows()
-      return
-    }
     root.mathRequestId++
     if (mathProc.running) mathProc.write(JSON.stringify({
       id: root.mathRequestId,
       query: root.query
     }) + "\n")
     root.requestFiles()
-    root.requestWindows()
     root.refreshRows()
   }
 
@@ -662,30 +386,6 @@ Item {
     } catch (error) { }
   }
 
-  function requestWindows() {
-    var wanted = String(root.query || "").trim().replace(/^%/, "").trim()
-    root.windowRequestId++
-    root.windowRows = []
-    root.windowMatchCount = 0
-    root.windowMatchCapped = false
-    root.windowMatchComplete = true
-    if (windowProc.running) windowProc.write(JSON.stringify({
-      id: root.windowRequestId, query: wanted
-    }) + "\n")
-  }
-
-  function acceptWindows(line) {
-    try {
-      var message = JSON.parse(String(line || ""))
-      if (Number(message.id) !== root.windowRequestId) return
-      root.windowRows = message.rows || []
-      root.windowMatchCount = Number(message.totalMatched) || root.windowRows.length
-      root.windowMatchCapped = message.capped === true
-      root.windowMatchComplete = message.complete !== false
-      root.refreshRows()
-    } catch (error) { }
-  }
-
   function acceptMath(line) {
     try {
       var message = JSON.parse(String(line || ""))
@@ -703,7 +403,7 @@ Item {
     id: mathProc
     command: [
       "node",
-      Quickshell.env("HOME") + "/.config/omarchy/plugins/clickety-clacks.ask/bridge/math.js"
+      Paths.bridge("math.js")
     ]
     running: true
     stdinEnabled: true
@@ -714,22 +414,11 @@ Item {
     id: fileProc
     command: [
       "node",
-      Quickshell.env("HOME") + "/.config/omarchy/plugins/clickety-clacks.ask/bridge/files.js"
+      Paths.bridge("files.js")
     ]
     running: true
     stdinEnabled: true
     stdout: SplitParser { onRead: function(line) { root.acceptFiles(line) } }
-  }
-
-  Process {
-    id: windowProc
-    command: [
-      "node",
-      Quickshell.env("HOME") + "/.config/omarchy/plugins/clickety-clacks.ask/bridge/windows.js"
-    ]
-    running: true
-    stdinEnabled: true
-    stdout: SplitParser { onRead: function(line) { root.acceptWindows(line) } }
   }
 
   Timer {
@@ -739,77 +428,4 @@ Item {
     onTriggered: root.runSettledSearch()
   }
 
-  // ------------------------------------------------------------ definitions
-  // Watched, so an edit to either file lands here without a restart -- the
-  // same thing Menu.qml does with the same two files.
-  FileView {
-    id: defaultMenuFile
-    path: root.defaultMenuPath
-    watchChanges: true
-    printErrors: false
-    onLoaded: { root.defaultMenuItems = MenuModel.parseMenuJsonc(text()); root.rebuild() }
-    onFileChanged: reload()
-  }
-
-  FileView {
-    id: userMenuFile
-    path: root.userMenuPath
-    watchChanges: true
-    printErrors: false
-    onLoaded: { root.userMenuItems = MenuModel.parseMenuJsonc(text()); root.rebuild() }
-    onLoadFailed: { root.userMenuItems = []; root.rebuild() }
-    onFileChanged: reload()
-  }
-
-  // ----------------------------------------------------------------- guards
-  // `when:` and `checked:` are bash. Batched into one subprocess per reload,
-  // as the menu does, because evaluating them per keystroke would cost about
-  // a second and this runs while you type.
-  property bool guardsPending: false
-
-  function evaluateGuards() {
-    if (guardProc.running) { root.guardsPending = true; return }
-    root.guardsPending = false
-
-    var script = MenuModel.guardScript(root.items)
-    if (!script) { root.whenResults = ({}); root.checkedResults = ({}); return }
-    guardProc.collected = ""
-    guardProc.command = ["bash", "-lc", script]
-    guardProc.running = true
-  }
-
-  Process {
-    id: guardProc
-    property string collected: ""
-    stdout: SplitParser { onRead: function(data) { guardProc.collected += data + "\n" } }
-    onExited: function(exitCode, exitStatus) {
-      // A killed batch only reported the rows it reached, and an unanswered
-      // `when:` shows. Keep the last complete set rather than a partial one.
-      if (exitCode !== 0 || exitStatus !== 0) {
-        if (root.guardsPending) Qt.callLater(function() { root.evaluateGuards() })
-        return
-      }
-      var nextWhen = ({})
-      var nextChecked = ({})
-      var lines = guardProc.collected.split("\n")
-      for (var i = 0; i < lines.length; i++) {
-        var line = lines[i].trim()
-        if (!line) continue
-        var colon = line.lastIndexOf(":")
-        if (colon < 0) continue
-        var value = line.substring(colon + 1) === "1"
-        var rest = line.substring(0, colon)
-        var tagAt = rest.lastIndexOf(":")
-        if (tagAt < 0) continue
-        var id = rest.substring(0, tagAt)
-        var tag = rest.substring(tagAt + 1)
-        if (tag === "w") nextWhen[id] = value
-        else if (tag === "c") nextChecked[id] = value
-      }
-      root.whenResults = nextWhen
-      root.checkedResults = nextChecked
-      root.refreshRows()
-      if (root.guardsPending) Qt.callLater(function() { root.evaluateGuards() })
-    }
-  }
 }

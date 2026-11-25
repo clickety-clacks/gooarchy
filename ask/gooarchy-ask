@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+app=/usr/share/gooarchy/ask
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/gooarchy"
+
+# Serialize hotkey presses through the first start so they share an overlay.
+exec 9>"${XDG_RUNTIME_DIR:?}/gooarchy-ask.lock"
+flock 9
+if qs -p "$app" ipc call gooarchy-ask toggle >/dev/null 2>&1; then
+  exit 0
+fi
+qs -p "$app" --daemonize 9>&-
