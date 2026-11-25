@@ -202,11 +202,11 @@ Item {
     ? Math.max(0, surface.height - Math.max(0, stack.height - anchorY))
     : 0
 
-  readonly property color background: Color.menu.background
-  readonly property color foreground: Color.menu.text
-  readonly property color border: Color.menu.border
-  readonly property color accent: Color.accent
-  readonly property color scrim: Color.menu.scrim
+  readonly property color background: AskPalette.menu.background
+  readonly property color foreground: AskPalette.menu.text
+  readonly property color border: AskPalette.menu.border
+  readonly property color accent: AskPalette.accent
+  readonly property color scrim: AskPalette.menu.scrim
   readonly property string conversationFont: "Noto Serif"
   readonly property int agentSize: Math.round(Style.font.body * 1.15 * root.fontScale)
   readonly property int humanSize: Math.round(Style.font.body * 2.36 * root.fontScale)
@@ -1690,7 +1690,6 @@ Item {
       // rounding and clipping; only the layer-shell overlay draws a frame.
       border.color: root.border
       border.width: root.pinned ? 0 : 2
-      padding: Style.spacing.panelPadding
       opacity: 0
       Behavior on height {
         enabled: root.layoutReady
@@ -2140,6 +2139,7 @@ Item {
               padding: 0
               color: root.accent
               placeholderText: messages.count === 0 ? "Search apps or ask a question" : ""
+              placeholderTextColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.7)
               font.family: root.conversationFont
               font.pixelSize: responsiveFontSize
               font.italic: true

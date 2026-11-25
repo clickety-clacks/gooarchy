@@ -189,16 +189,16 @@ Item {
       height: Style.space(58)
       anchors.horizontalCenter: parent.horizontalCenter
       y: Math.round(parent.height * 0.22)
-      color: Color.menu.background
+      color: AskPalette.menu.background
       radius: Style.cornerRadius
-      border.color: Color.accent
+      border.color: AskPalette.accent
       border.width: 2
 
       Text {
         id: copyToastText
         anchors.centerIn: parent
         text: "✓  Copied!"
-        color: Color.accent
+        color: AskPalette.accent
         font.family: Style.font.family
         font.pixelSize: Math.round(Style.font.body * (4 / 3))
         font.bold: true

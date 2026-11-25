@@ -1,3 +1,8 @@
-singleton Color 1.0 Color.qml
+singleton AskPalette 1.0 AskPalette.qml
 singleton Paths 1.0 Paths.qml
 singleton Style 1.0 Style.qml
+Ask 1.0 Ask.qml
+Conversation 1.0 Conversation.qml
+MenuSearch 1.0 MenuSearch.qml
+Settings 1.0 Settings.qml
+ShortcutFocus 1.0 ShortcutFocus.qml

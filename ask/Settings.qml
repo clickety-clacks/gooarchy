@@ -6,7 +6,7 @@ FloatingWindow {
   id: root
   visible: false
   title: "Gooarchy Ask Settings"
-  color: Color.menu.background
+  color: AskPalette.menu.background
   implicitWidth: 600
   implicitHeight: 860
   minimumSize: Qt.size(480, 520)
@@ -79,20 +79,20 @@ FloatingWindow {
   Shortcut { sequence: "Ctrl+,"; onActivated: root.finish() }
 
   component Heading: Text {
-    color: Color.menu.text
+    color: AskPalette.menu.text
     font.family: Style.font.family
     font.pixelSize: Style.font.title
     font.bold: true
   }
   component Caption: Text {
     width: parent.width
-    color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.58)
+    color: Qt.rgba(AskPalette.menu.text.r, AskPalette.menu.text.g, AskPalette.menu.text.b, 0.58)
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
     wrapMode: Text.Wrap
   }
   component Label: Text {
-    color: Color.menu.text
+    color: AskPalette.menu.text
     font.family: Style.font.family
     font.pixelSize: Style.font.body
   }
@@ -103,13 +103,13 @@ FloatingWindow {
     width: choiceLabel.implicitWidth + Style.space(22)
     height: Style.space(34)
     radius: Style.cornerRadius
-    color: selected ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.18) : "transparent"
-    border.color: selected ? Color.accent : Color.menu.border
+    color: selected ? Qt.rgba(AskPalette.accent.r, AskPalette.accent.g, AskPalette.accent.b, 0.18) : "transparent"
+    border.color: selected ? AskPalette.accent : AskPalette.menu.border
     Text {
       id: choiceLabel
       anchors.centerIn: parent
       text: parent.label
-      color: Color.menu.text
+      color: AskPalette.menu.text
       font.family: Style.font.family
       font.pixelSize: Style.font.body
     }
@@ -184,8 +184,8 @@ FloatingWindow {
         id: graph
         width: parent.width
         height: Style.space(300)
-        color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.035)
-        border.color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.14)
+        color: Qt.rgba(AskPalette.menu.text.r, AskPalette.menu.text.g, AskPalette.menu.text.b, 0.035)
+        border.color: Qt.rgba(AskPalette.menu.text.r, AskPalette.menu.text.g, AskPalette.menu.text.b, 0.14)
         border.width: 1
         radius: Style.cornerRadius
 
@@ -216,7 +216,7 @@ FloatingWindow {
             var right = width - rightPad
 
             ctx.lineWidth = 1
-            ctx.strokeStyle = Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.18)
+            ctx.strokeStyle = Qt.rgba(AskPalette.menu.text.r, AskPalette.menu.text.g, AskPalette.menu.text.b, 0.18)
             ctx.beginPath()
             ctx.moveTo(leftPad, topPad)
             ctx.lineTo(leftPad, bottom)
@@ -224,7 +224,7 @@ FloatingWindow {
             ctx.stroke()
 
             ctx.lineWidth = Math.max(2, Style.space(2))
-            ctx.strokeStyle = Color.accent
+            ctx.strokeStyle = AskPalette.accent
             ctx.beginPath()
             for (var index = 0; index <= 48; index++) {
               var u = index / 48
@@ -238,7 +238,7 @@ FloatingWindow {
             }
             ctx.stroke()
 
-            ctx.fillStyle = Color.accent
+            ctx.fillStyle = AskPalette.accent
             ctx.beginPath()
             ctx.arc(endX, endY, Style.space(7), 0, Math.PI * 2)
             ctx.fill()
@@ -264,7 +264,7 @@ FloatingWindow {
           anchors.leftMargin: Style.space(10)
           anchors.bottomMargin: Style.space(10)
           text: "distance"
-          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.42)
+          color: Qt.rgba(AskPalette.menu.text.r, AskPalette.menu.text.g, AskPalette.menu.text.b, 0.42)
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
         }
@@ -274,7 +274,7 @@ FloatingWindow {
           anchors.rightMargin: Style.space(12)
           anchors.bottomMargin: Style.space(10)
           text: "time →"
-          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.42)
+          color: Qt.rgba(AskPalette.menu.text.r, AskPalette.menu.text.g, AskPalette.menu.text.b, 0.42)
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
         }
@@ -284,7 +284,7 @@ FloatingWindow {
         spacing: Style.space(22)
         Label { text: "impulse  " + Math.round(root.impulse) + " px/s" }
         Label { text: "friction  " + Math.round(root.deceleration) + " px/s²" }
-        Label { text: root.distance.toFixed(0) + " px · " + root.duration.toFixed(2) + " s"; color: Color.accent }
+        Label { text: root.distance.toFixed(0) + " px · " + root.duration.toFixed(2) + " s"; color: AskPalette.accent }
       }
       Choice { label: "Reset"; selected: false; onChosen: root.resetRequested() }
     }
