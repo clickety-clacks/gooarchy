@@ -6,21 +6,19 @@ import re
 import sys
 from pathlib import Path
 
-ASK_BINDINGS = {
-    ("command", "binding_gooarchy_ask"),
-    ("command", "repeatable_binding_gooarchy_ask"),
-    ("command", "always_binding_gooarchy_ask"),
-    ("command", "release_binding_gooarchy_ask"),
-}
+COMMAND_BINDING_PREFIXES = ("binding_", "repeatable_binding_", "always_binding_", "release_binding_")
+ASK_BINDINGS = {("command", prefix + "gooarchy_ask") for prefix in COMMAND_BINDING_PREFIXES}
 COMMAND = ("command", "command_gooarchy_ask")
+SUPER_SPACE = re.compile(r"<\s*super\s*>\s*KEY_SPACE")
 
 
 def logical_lines(path):
-    # Match wf-config's order: strip comments and trailing space, then join
-    # continued lines. A literal escaped # or backslash is part of the value.
+    # wf-config removes unescaped hashes and trailing space before joining
+    # continuations. Semicolons are still literal at this stage.
     pending = ""
     for physical in path.read_text().splitlines():
-        line = pending + re.split(r"(?<!\\)#", physical, maxsplit=1)[0].replace(r"\#", "#").rstrip()
+        uncommented = re.split(r"(?<!\\)#", physical, maxsplit=1)[0]
+        line = pending + uncommented.replace(r"\#", "#").rstrip()
         if line.endswith("\\"):
             line = line[:-1]
             if not line.endswith("\\"):
@@ -35,23 +33,30 @@ def logical_lines(path):
 def read_options(path):
     section = ""
     for line in logical_lines(path):
+        # Like Scottland's shortcut scanner, ignore whole-line semicolon
+        # comments. Wayfire treats them as inert option names, not bindings.
+        if not line or line.startswith(";"):
+            continue
         if line.startswith("[") and line.endswith("]"):
-            section = line[1:-1].strip()
-        elif "=" in line:
+            section = line[1:-1]
+        elif section and section == section.strip() and "=" in line:
             name, value = line.split("=", 1)
-            yield (section, name.strip()), value.strip()
+            if name.strip():
+                yield (section, name.strip()), value.strip()
 
 
 def owns_super_space(option, value):
-    if option[0] == "scottland" and option[1].startswith("remap_from_"):
+    section, name = option
+    if section == "command" and not name.startswith(COMMAND_BINDING_PREFIXES):
+        return False
+    if name == "modifier":
+        return False
+    if section == "scottland" and name.startswith("remap_from_"):
         # Scottland remap sources use XKB names in place of Wayfire's evdev names.
         return set(re.split(r"[+\s]+", value.lower())) == {"super", "space"}
-    for alternative in value.split("|"):
-        modifiers = {modifier.lower() for modifier in re.findall(r"<([^>]+)>", alternative)}
-        key = re.sub(r"<[^>]+>", "", alternative).strip().upper()
-        if modifiers == {"super"} and key == "KEY_SPACE":
-            return True
-    return False
+    # Plugin activators may have ordinary option names outside [command].
+    # Like wf-config, match the case-sensitive key in each alternative.
+    return any(SUPER_SPACE.fullmatch(alternative.strip()) for alternative in value.split("|"))
 
 
 def main():

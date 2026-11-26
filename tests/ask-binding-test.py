@@ -8,6 +8,7 @@ from pathlib import Path
 
 GENERATOR = Path(__file__).resolve().parents[1] / "session/45-gooarchy-ask"
 DEFAULT = "[command]\nbinding_gooarchy_ask = <super> KEY_SPACE\ncommand_gooarchy_ask = gooarchy-ask\n"
+ASK_COMMAND = "[command]\ncommand_gooarchy_ask = gooarchy-ask\n"
 
 
 class AskBindingTest(unittest.TestCase):
@@ -38,14 +39,14 @@ class AskBindingTest(unittest.TestCase):
                 with self.subTest(value=value, file=file):
                     self.assertEqual(
                         self.generate(**{file: f"[command]\nbinding_gooarchy_ask = {value}\n"}),
-                        "[command]\ncommand_gooarchy_ask = gooarchy-ask\n",
+                        ASK_COMMAND,
                     )
         self.assertEqual(self.generate(
             "[command]\nrepeatable_binding_gooarchy_ask = <super> KEY_A\ncommand_gooarchy_ask = custom\n"
         ), "")
 
     def test_existing_owners_and_override_precedence(self):
-        other = "[command]\nbinding_custom = <shift> KEY_F | <Super> KEY_SPACE\n"
+        other = "[command]\nbinding_custom = <shift> KEY_F | <super> KEY_SPACE\n"
         self.assertEqual(self.generate(base=other), "")
         self.assertEqual(self.generate(overrides=other), "")
         self.assertEqual(self.generate(base=other, overrides="[command]\nbinding_custom = none\n"),
@@ -56,7 +57,7 @@ class AskBindingTest(unittest.TestCase):
         binding = (
             "[command] # existing launcher\n"
             "binding_custom = <shift> KEY_F | \\\n"
-            "    <Super> KEY_SPACE # my launcher\n"
+            "    <super> KEY_SPACE # my launcher\n"
             "command_custom = my-launcher \\#literal # comment\n"
         )
         for file in ("base", "overrides"):
@@ -66,13 +67,33 @@ class AskBindingTest(unittest.TestCase):
             overrides="[command] # user section\nbinding_custom = none # disabled\n"),
             DEFAULT)
 
+    def test_effective_options_follow_wayfire_ini(self):
+        cases = (
+            ("hash comment", "[command]\n# binding_old = <super> KEY_SPACE\n", DEFAULT),
+            ("semicolon comment", "[command]\n \t; binding_old = <super> KEY_SPACE\n", DEFAULT),
+            ("commented Ask override", "[command]\n; binding_gooarchy_ask = none\n", DEFAULT),
+            ("inline hash", "[command] # shortcuts\nbinding_other = <super> KEY_SPACE # app\n", ""),
+            ("literal inline semicolon", "[command]\nbinding_other = <super> KEY_SPACE ; app\n", DEFAULT),
+            ("whitespace", " \t[command]\t\n binding_other\t=\t< super >\tKEY_SPACE \t\n", ""),
+            ("section name is literal", "[ command ]\nbinding_other = <super> KEY_SPACE\n", DEFAULT),
+            ("explicit none", "[command]\nbinding_gooarchy_ask = none # disabled\n", ASK_COMMAND),
+            ("plugin option", "[grid]\nrestore = <super> KEY_SPACE\n", ""),
+            ("command text", "[command]\ncommand_other = <super> KEY_SPACE\n", DEFAULT),
+            ("other modifier", "[command]\nbinding_other = <ctrl> <super> KEY_SPACE\n", DEFAULT),
+            ("case is literal", "[command]\nbinding_other = <Super> KEY_SPACE\n", DEFAULT),
+        )
+        for label, config, expected in cases:
+            for file in ("base", "overrides"):
+                with self.subTest(label=label, file=file):
+                    self.assertEqual(self.generate(**{file: config}), expected)
+
     def test_alternate_command_binding_variants_are_explicit(self):
         for variant in ("always_binding", "release_binding"):
             for value in ("<super> KEY_A", "none"):
                 with self.subTest(variant=variant, value=value):
                     self.assertEqual(self.generate(
                         overrides=f"[command]\n{variant}_gooarchy_ask = {value} # user choice\n"),
-                        "[command]\ncommand_gooarchy_ask = gooarchy-ask\n")
+                        ASK_COMMAND)
 
 
 if __name__ == "__main__":
