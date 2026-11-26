@@ -10,6 +10,7 @@ ASK_BINDINGS = {
     ("command", "binding_gooarchy_ask"),
     ("command", "repeatable_binding_gooarchy_ask"),
     ("command", "always_binding_gooarchy_ask"),
+    ("command", "release_binding_gooarchy_ask"),
 }
 COMMAND = ("command", "command_gooarchy_ask")
 

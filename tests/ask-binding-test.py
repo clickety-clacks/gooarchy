@@ -66,12 +66,13 @@ class AskBindingTest(unittest.TestCase):
             overrides="[command] # user section\nbinding_custom = none # disabled\n"),
             DEFAULT)
 
-    def test_always_binding_for_ask_is_explicit(self):
-        for value in ("<super> KEY_A", "none"):
-            with self.subTest(value=value):
-                self.assertEqual(self.generate(
-                    overrides=f"[command]\nalways_binding_gooarchy_ask = {value} # user choice\n"),
-                    "[command]\ncommand_gooarchy_ask = gooarchy-ask\n")
+    def test_alternate_command_binding_variants_are_explicit(self):
+        for variant in ("always_binding", "release_binding"):
+            for value in ("<super> KEY_A", "none"):
+                with self.subTest(variant=variant, value=value):
+                    self.assertEqual(self.generate(
+                        overrides=f"[command]\n{variant}_gooarchy_ask = {value} # user choice\n"),
+                        "[command]\ncommand_gooarchy_ask = gooarchy-ask\n")
 
 
 if __name__ == "__main__":
