@@ -6,17 +6,34 @@ import re
 import sys
 from pathlib import Path
 
-BINDING = ("command", "binding_gooarchy_ask")
-REPEATABLE_BINDING = ("command", "repeatable_binding_gooarchy_ask")
+ASK_BINDINGS = {
+    ("command", "binding_gooarchy_ask"),
+    ("command", "repeatable_binding_gooarchy_ask"),
+    ("command", "always_binding_gooarchy_ask"),
+}
 COMMAND = ("command", "command_gooarchy_ask")
+
+
+def logical_lines(path):
+    # Match wf-config's order: strip comments and trailing space, then join
+    # continued lines. A literal escaped # or backslash is part of the value.
+    pending = ""
+    for physical in path.read_text().splitlines():
+        line = pending + re.split(r"(?<!\\)#", physical, maxsplit=1)[0].replace(r"\#", "#").rstrip()
+        if line.endswith("\\"):
+            line = line[:-1]
+            if not line.endswith("\\"):
+                pending = line
+                continue
+        yield line.strip()
+        pending = ""
+    if pending:
+        yield pending.strip()
 
 
 def read_options(path):
     section = ""
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if line.startswith(("#", ";")):
-            continue
+    for line in logical_lines(path):
         if line.startswith("[") and line.endswith("]"):
             section = line[1:-1].strip()
         elif "=" in line:
@@ -54,7 +71,7 @@ def main():
         options.update(read_options(overrides))
 
     lines = []
-    if BINDING not in options and REPEATABLE_BINDING not in options:
+    if ASK_BINDINGS.isdisjoint(options):
         if any(owns_super_space(option, value) for option, value in options.items()):
             return
         lines.append("binding_gooarchy_ask = <super> KEY_SPACE")

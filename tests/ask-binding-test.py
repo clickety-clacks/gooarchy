@@ -52,6 +52,27 @@ class AskBindingTest(unittest.TestCase):
                          DEFAULT)
         self.assertEqual(self.generate(overrides="[scottland]\nremap_from_launcher = Super+space\n"), "")
 
+    def test_commented_and_continued_bindings_keep_their_action(self):
+        binding = (
+            "[command] # existing launcher\n"
+            "binding_custom = <shift> KEY_F | \\\n"
+            "    <Super> KEY_SPACE # my launcher\n"
+            "command_custom = my-launcher \\#literal # comment\n"
+        )
+        for file in ("base", "overrides"):
+            with self.subTest(file=file):
+                self.assertEqual(self.generate(**{file: binding}), "")
+        self.assertEqual(self.generate(base=binding,
+            overrides="[command] # user section\nbinding_custom = none # disabled\n"),
+            DEFAULT)
+
+    def test_always_binding_for_ask_is_explicit(self):
+        for value in ("<super> KEY_A", "none"):
+            with self.subTest(value=value):
+                self.assertEqual(self.generate(
+                    overrides=f"[command]\nalways_binding_gooarchy_ask = {value} # user choice\n"),
+                    "[command]\ncommand_gooarchy_ask = gooarchy-ask\n")
+
 
 if __name__ == "__main__":
     unittest.main()

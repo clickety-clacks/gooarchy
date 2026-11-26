@@ -11,3 +11,7 @@ MIT license covers the FFF modules. The
 [Codex 0.153.4](https://github.com/openai/codex/tree/rust-v0.153.4)
 Apache-2.0 license and notice accompany its transitive JavaScript wrapper.
 The Pacman recipe includes these and the notices included in npm tarballs.
+
+The Math.js dependency `javascript-natural-sort@0.7.1` uses
+[Jim Palmer’s MIT notice](https://github.com/overset/javascript-natural-sort/blob/737133249531169aeb94c701e536d405fa077b25/LICENSE).
+The Pacman recipe installs a copy because the npm tarball omits it.
