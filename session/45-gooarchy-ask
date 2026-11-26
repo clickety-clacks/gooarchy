@@ -45,10 +45,13 @@ def read_options(path):
                 yield (section, name.strip()), value.strip()
 
 
-def owns_super_space(option, value):
+def owns_super_space(option, value, options):
     section, name = option
-    if section == "command" and not name.startswith(COMMAND_BINDING_PREFIXES):
-        return False
+    if section == "command":
+        # Wayfire registers a compound entry only when both fields are present.
+        prefix = next((prefix for prefix in COMMAND_BINDING_PREFIXES if name.startswith(prefix)), None)
+        if prefix is None or (section, "command_" + name[len(prefix):]) not in options:
+            return False
     if name == "modifier":
         return False
     if section == "scottland" and name.startswith("remap_from_"):
@@ -78,7 +81,7 @@ def main():
 
     lines = []
     if ASK_BINDINGS.isdisjoint(options):
-        if any(owns_super_space(option, value) for option, value in options.items()):
+        if any(owns_super_space(option, value, options) for option, value in options.items()):
             return
         lines.append("binding_gooarchy_ask = <super> KEY_SPACE")
     if COMMAND not in options:

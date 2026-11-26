@@ -46,7 +46,7 @@ class AskBindingTest(unittest.TestCase):
         ), "")
 
     def test_existing_owners_and_override_precedence(self):
-        other = "[command]\nbinding_custom = <shift> KEY_F | <super> KEY_SPACE\n"
+        other = "[command]\nbinding_custom = <shift> KEY_F | <super> KEY_SPACE\ncommand_custom = foot\n"
         self.assertEqual(self.generate(base=other), "")
         self.assertEqual(self.generate(overrides=other), "")
         self.assertEqual(self.generate(base=other, overrides="[command]\nbinding_custom = none\n"),
@@ -72,20 +72,39 @@ class AskBindingTest(unittest.TestCase):
             ("hash comment", "[command]\n# binding_old = <super> KEY_SPACE\n", DEFAULT),
             ("semicolon comment", "[command]\n \t; binding_old = <super> KEY_SPACE\n", DEFAULT),
             ("commented Ask override", "[command]\n; binding_gooarchy_ask = none\n", DEFAULT),
-            ("inline hash", "[command] # shortcuts\nbinding_other = <super> KEY_SPACE # app\n", ""),
-            ("literal inline semicolon", "[command]\nbinding_other = <super> KEY_SPACE ; app\n", DEFAULT),
-            ("whitespace", " \t[command]\t\n binding_other\t=\t< super >\tKEY_SPACE \t\n", ""),
+            ("inline hash", "[command] # shortcuts\nbinding_other = <super> KEY_SPACE # app\ncommand_other = foot\n", ""),
+            ("literal inline semicolon", "[command]\nbinding_other = <super> KEY_SPACE ; app\ncommand_other = foot\n", DEFAULT),
+            ("whitespace", " \t[command]\t\n binding_other\t=\t< super >\tKEY_SPACE \t\ncommand_other = foot\n", ""),
             ("section name is literal", "[ command ]\nbinding_other = <super> KEY_SPACE\n", DEFAULT),
             ("explicit none", "[command]\nbinding_gooarchy_ask = none # disabled\n", ASK_COMMAND),
             ("plugin option", "[grid]\nrestore = <super> KEY_SPACE\n", ""),
             ("command text", "[command]\ncommand_other = <super> KEY_SPACE\n", DEFAULT),
-            ("other modifier", "[command]\nbinding_other = <ctrl> <super> KEY_SPACE\n", DEFAULT),
-            ("case is literal", "[command]\nbinding_other = <Super> KEY_SPACE\n", DEFAULT),
+            ("other modifier", "[command]\nbinding_other = <ctrl> <super> KEY_SPACE\ncommand_other = foot\n", DEFAULT),
+            ("case is literal", "[command]\nbinding_other = <Super> KEY_SPACE\ncommand_other = foot\n", DEFAULT),
         )
         for label, config, expected in cases:
             for file in ("base", "overrides"):
                 with self.subTest(label=label, file=file):
                     self.assertEqual(self.generate(**{file: config}), expected)
+
+    def test_command_variants_require_a_matching_companion(self):
+        command = "[command]\ncommand_other = foot\n"
+        for variant in ("binding", "repeatable_binding", "always_binding", "release_binding"):
+            binding = f"[command]\n{variant}_other = <super> KEY_SPACE\n"
+            cases = (
+                ("missing", binding, "", DEFAULT),
+                ("hash comment", binding + "# command_other = foot\n", "", DEFAULT),
+                ("semicolon comment", "", binding + "; command_other = foot\n", DEFAULT),
+                ("different suffix", binding + "command_another = foot\n", "", DEFAULT),
+                ("paired in base", binding + "command_other = foot\n", "", ""),
+                ("late command", binding, command, ""),
+                ("late binding", command, binding, ""),
+                ("comment does not clear base", binding + "command_other = foot\n",
+                 "[command]\n# command_other = foot\n", ""),
+            )
+            for label, base, overrides, expected in cases:
+                with self.subTest(variant=variant, label=label):
+                    self.assertEqual(self.generate(base=base, overrides=overrides), expected)
 
     def test_alternate_command_binding_variants_are_explicit(self):
         for variant in ("always_binding", "release_binding"):
