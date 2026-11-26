@@ -1,0 +1,119 @@
+"""Exercise the packaged config hook with Scottland's base/override inputs."""
+
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+GENERATOR = Path(__file__).resolve().parents[1] / "session/45-gooarchy-ask"
+DEFAULT = "[command]\nbinding_gooarchy_ask = <super> KEY_SPACE\ncommand_gooarchy_ask = gooarchy-ask\n"
+ASK_COMMAND = "[command]\ncommand_gooarchy_ask = gooarchy-ask\n"
+
+
+class AskBindingTest(unittest.TestCase):
+    def generate(self, base="", overrides="", adapter=False):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "scottland").mkdir()
+            (root / "scottland/overrides.ini").write_text(overrides)
+            (root / "base.ini").write_text(base)
+            hooks = root / "hooks"
+            if adapter:
+                importer = hooks / "config.d/50-omarchy-shortcuts"
+                importer.parent.mkdir(parents=True)
+                importer.touch(mode=0o755)
+            return subprocess.check_output(
+                [GENERATOR, root / "base.ini"],
+                env={**os.environ, "SCOTTLAND_HOOKS": str(hooks), "XDG_CONFIG_HOME": temp},
+                text=True,
+            )
+
+    def test_default_and_adapter(self):
+        self.assertEqual(self.generate(), DEFAULT)
+        self.assertEqual(self.generate(adapter=True), "")
+
+    def test_explicit_ask_binding(self):
+        for value in ("none", "<super> KEY_A", "<super> KEY_SPACE"):
+            for file in ("base", "overrides"):
+                with self.subTest(value=value, file=file):
+                    self.assertEqual(
+                        self.generate(**{file: f"[command]\nbinding_gooarchy_ask = {value}\n"}),
+                        ASK_COMMAND,
+                    )
+        self.assertEqual(self.generate(
+            "[command]\nrepeatable_binding_gooarchy_ask = <super> KEY_A\ncommand_gooarchy_ask = custom\n"
+        ), "")
+
+    def test_existing_owners_and_override_precedence(self):
+        other = "[command]\nbinding_custom = <shift> KEY_F | <super> KEY_SPACE\ncommand_custom = foot\n"
+        self.assertEqual(self.generate(base=other), "")
+        self.assertEqual(self.generate(overrides=other), "")
+        self.assertEqual(self.generate(base=other, overrides="[command]\nbinding_custom = none\n"),
+                         DEFAULT)
+        self.assertEqual(self.generate(overrides="[scottland]\nremap_from_launcher = Super+space\n"), "")
+
+    def test_commented_and_continued_bindings_keep_their_action(self):
+        binding = (
+            "[command] # existing launcher\n"
+            "binding_custom = <shift> KEY_F | \\\n"
+            "    <super> KEY_SPACE # my launcher\n"
+            "command_custom = my-launcher \\#literal # comment\n"
+        )
+        for file in ("base", "overrides"):
+            with self.subTest(file=file):
+                self.assertEqual(self.generate(**{file: binding}), "")
+        self.assertEqual(self.generate(base=binding,
+            overrides="[command] # user section\nbinding_custom = none # disabled\n"),
+            DEFAULT)
+
+    def test_effective_options_follow_wayfire_ini(self):
+        cases = (
+            ("hash comment", "[command]\n# binding_old = <super> KEY_SPACE\n", DEFAULT),
+            ("semicolon comment", "[command]\n \t; binding_old = <super> KEY_SPACE\n", DEFAULT),
+            ("commented Ask override", "[command]\n; binding_gooarchy_ask = none\n", DEFAULT),
+            ("inline hash", "[command] # shortcuts\nbinding_other = <super> KEY_SPACE # app\ncommand_other = foot\n", ""),
+            ("literal inline semicolon", "[command]\nbinding_other = <super> KEY_SPACE ; app\ncommand_other = foot\n", DEFAULT),
+            ("whitespace", " \t[command]\t\n binding_other\t=\t< super >\tKEY_SPACE \t\ncommand_other = foot\n", ""),
+            ("section name is literal", "[ command ]\nbinding_other = <super> KEY_SPACE\n", DEFAULT),
+            ("explicit none", "[command]\nbinding_gooarchy_ask = none # disabled\n", ASK_COMMAND),
+            ("plugin option", "[grid]\nrestore = <super> KEY_SPACE\n", ""),
+            ("command text", "[command]\ncommand_other = <super> KEY_SPACE\n", DEFAULT),
+            ("other modifier", "[command]\nbinding_other = <ctrl> <super> KEY_SPACE\ncommand_other = foot\n", DEFAULT),
+            ("case is literal", "[command]\nbinding_other = <Super> KEY_SPACE\ncommand_other = foot\n", DEFAULT),
+        )
+        for label, config, expected in cases:
+            for file in ("base", "overrides"):
+                with self.subTest(label=label, file=file):
+                    self.assertEqual(self.generate(**{file: config}), expected)
+
+    def test_command_variants_require_a_matching_companion(self):
+        command = "[command]\ncommand_other = foot\n"
+        for variant in ("binding", "repeatable_binding", "always_binding", "release_binding"):
+            binding = f"[command]\n{variant}_other = <super> KEY_SPACE\n"
+            cases = (
+                ("missing", binding, "", DEFAULT),
+                ("hash comment", binding + "# command_other = foot\n", "", DEFAULT),
+                ("semicolon comment", "", binding + "; command_other = foot\n", DEFAULT),
+                ("different suffix", binding + "command_another = foot\n", "", DEFAULT),
+                ("paired in base", binding + "command_other = foot\n", "", ""),
+                ("late command", binding, command, ""),
+                ("late binding", command, binding, ""),
+                ("comment does not clear base", binding + "command_other = foot\n",
+                 "[command]\n# command_other = foot\n", ""),
+            )
+            for label, base, overrides, expected in cases:
+                with self.subTest(variant=variant, label=label):
+                    self.assertEqual(self.generate(base=base, overrides=overrides), expected)
+
+    def test_alternate_command_binding_variants_are_explicit(self):
+        for variant in ("always_binding", "release_binding"):
+            for value in ("<super> KEY_A", "none"):
+                with self.subTest(variant=variant, value=value):
+                    self.assertEqual(self.generate(
+                        overrides=f"[command]\n{variant}_gooarchy_ask = {value} # user choice\n"),
+                        ASK_COMMAND)
+
+
+if __name__ == "__main__":
+    unittest.main()

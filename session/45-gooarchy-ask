@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Generate the launcher default after checking the effective user bindings."""
+
+import os
+import re
+import sys
+from pathlib import Path
+
+COMMAND_BINDING_PREFIXES = ("binding_", "repeatable_binding_", "always_binding_", "release_binding_")
+ASK_BINDINGS = {("command", prefix + "gooarchy_ask") for prefix in COMMAND_BINDING_PREFIXES}
+COMMAND = ("command", "command_gooarchy_ask")
+SUPER_SPACE = re.compile(r"<\s*super\s*>\s*KEY_SPACE")
+
+
+def logical_lines(path):
+    # wf-config removes unescaped hashes and trailing space before joining
+    # continuations. Semicolons are still literal at this stage.
+    pending = ""
+    for physical in path.read_text().splitlines():
+        uncommented = re.split(r"(?<!\\)#", physical, maxsplit=1)[0]
+        line = pending + uncommented.replace(r"\#", "#").rstrip()
+        if line.endswith("\\"):
+            line = line[:-1]
+            if not line.endswith("\\"):
+                pending = line
+                continue
+        yield line.strip()
+        pending = ""
+    if pending:
+        yield pending.strip()
+
+
+def read_options(path):
+    section = ""
+    for line in logical_lines(path):
+        # Like Scottland's shortcut scanner, ignore whole-line semicolon
+        # comments. Wayfire treats them as inert option names, not bindings.
+        if not line or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+        elif section and section == section.strip() and "=" in line:
+            name, value = line.split("=", 1)
+            if name.strip():
+                yield (section, name.strip()), value.strip()
+
+
+def owns_super_space(option, value, options):
+    section, name = option
+    if section == "command":
+        # Wayfire registers a compound entry only when both fields are present.
+        prefix = next((prefix for prefix in COMMAND_BINDING_PREFIXES if name.startswith(prefix)), None)
+        if prefix is None or (section, "command_" + name[len(prefix):]) not in options:
+            return False
+    if name == "modifier":
+        return False
+    if section == "scottland" and name.startswith("remap_from_"):
+        # Scottland remap sources use XKB names in place of Wayfire's evdev names.
+        return set(re.split(r"[+\s]+", value.lower())) == {"super", "space"}
+    # Plugin activators may have ordinary option names outside [command].
+    # Like wf-config, match the case-sensitive key in each alternative.
+    return any(SUPER_SPACE.fullmatch(alternative.strip()) for alternative in value.split("|"))
+
+
+def main():
+    # These hooks are scoped to the active Scottland startup, including checkout sessions.
+    hooks = Path(os.environ.get("SCOTTLAND_HOOKS") or "/usr/lib/scottland")
+    importer = hooks / "config.d" / "50-omarchy-shortcuts"
+    if importer.is_file() and os.access(importer, os.X_OK):
+        return
+
+    # Scottland already watches both of these inputs, including creation of overrides.ini.
+    if sys.argv[1] == "--watch-paths":
+        return
+
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    overrides = config / "scottland" / "overrides.ini"
+    options = dict(read_options(Path(sys.argv[1])))
+    if overrides.is_file():
+        options.update(read_options(overrides))
+
+    lines = []
+    if ASK_BINDINGS.isdisjoint(options):
+        if any(owns_super_space(option, value, options) for option, value in options.items()):
+            return
+        lines.append("binding_gooarchy_ask = <super> KEY_SPACE")
+    if COMMAND not in options:
+        lines.append("command_gooarchy_ask = gooarchy-ask")
+    if lines:
+        print("[command]", *lines, sep="\n")
+
+
+if __name__ == "__main__":
+    main()
